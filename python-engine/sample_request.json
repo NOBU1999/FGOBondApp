@@ -1,0 +1,19 @@
+{
+  "box": [
+    {"id": 100100, "stage": "fourth", "maxBond": true, "bondSwitch1": true, "bondSwitch2": true, "personalBonus": 0.0},
+    {"id": 100200, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0},
+    {"id": 100300, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0},
+    {"id": 603700, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.3},
+    {"id": 500400, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0},
+    {"id": 703700, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0},
+    {"id": 304800, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0},
+    {"id": 2300500, "stage": "fourth", "maxBond": false, "bondSwitch1": true, "bondSwitch2": false, "personalBonus": 0.0}
+  ],
+  "fixedServants": [],
+  "fixedCrafts": [],
+  "support": {},
+  "costLimit": 114,
+  "strategy": "total_max",
+  "activityBonus": 0,
+  "teaBonus": 1
+}

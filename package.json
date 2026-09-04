@@ -1,0 +1,58 @@
+{
+  "name": "fgo-bond-recommender",
+  "productName": "FGO牵绊推荐器",
+  "version": "0.1.0",
+  "description": "FGO 牵绊收益推荐系统（Electron + Python 引擎）",
+  "main": "main/index.js",
+  "author": "FGOBond",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
+    "dist": "npm run build:engine && electron-builder --win dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest",
+    "vue": "^3.5.42"
+  },
+  "build": {
+    "appId": "com.fgobond.recommender",
+    "productName": "FGO牵绊推荐器",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**/*",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "extraFiles": [
+      {
+        "from": "python-engine/engine.exe",
+        "to": "python-engine/engine.exe"
+      },
+      {
+        "from": "db/fgo_data.db",
+        "to": "db/fgo_data.db"
+      },
+      {
+        "from": "使用说明.txt",
+        "to": "使用说明.txt"
+      }
+    ]
+  }
+}

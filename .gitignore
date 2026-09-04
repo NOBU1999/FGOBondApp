@@ -1,0 +1,76 @@
+# ---------- Node ----------
+node_modules/
+.npm-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+python-engine/.cache/
+python-engine/.pytest_cache/
+
+# ---------- 构建/打包产物 ----------
+release/
+dist/
+build/
+*.exe
+*.tgz
+python-engine/build/
+python-engine/dist/
+python-engine/engine.exe
+python-engine/err_*.txt
+python-engine/out_*.json
+python-engine/update*_err.txt
+python-engine/update*_out.txt
+python-engine/*.log
+
+# ---------- 本地数据库 ----------
+db/*.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+*.sqlite
+*.sqlite3
+release/MyFGOApp/db/
+
+# ---------- 生成/下载的资源 ----------
+renderer/assets/servantface/
+renderer/assets/craftface/
+release/app-staging/renderer/assets/servantface/
+release/app-staging/renderer/assets/craftface/
+
+# ---------- 日志 / 冒烟产物 ----------
+*.log
+smoke_out.json
+smoke_stdout*.log
+smoke_stderr*.log
+smoke_out*.json
+out_engine.json
+
+# ---------- 本地内部文件 ----------
+# 包含本机绝对路径，不适合提交到公开仓库
+CONTEXT_HANDOFF.md
+
+# ---------- 临时/沙箱 ----------
+.pyinstaller-tmp/
+.smoke-user-data/
+.temp/
+tmp/
+*.tmp
+*.part
+
+# ---------- 操作系统/编辑器 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

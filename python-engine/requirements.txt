@@ -1,0 +1,9 @@
+# Python 引擎依赖
+# 注意：numpy 不锁上限，保留后续升级/重新安装 numpy 后重新构建 engine.exe 的余地。
+numpy>=1.26
+scipy>=1.11
+# flask 仅调试用（可选）
+flask>=3.0
+
+# 打包工具（开发机已安装，这里保留声明以便新环境复现）
+pyinstaller>=6.0
