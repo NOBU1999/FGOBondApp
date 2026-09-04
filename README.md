@@ -1,131 +1,114 @@
 # FGO 牵绊推荐器
 
-一个面向《Fate/Grand Order》的 **牵绊收益推荐系统**。
+面向《Fate/Grand Order》的本地牵绊收益推荐工具。程序会根据你的从者持有情况、灵基状态、Cost 上限与可用礼装，自动搜索并推荐高牵绊收益的队伍配置。
 
-根据你拥有的从者、灵基阶段、满绊标记、Cost 上限、可用牵绊礼装，以及活动/个人加成，自动搜索并推荐高牵绊收益的 6 人队伍配置。
+> 当前面向 JP 日服数据，界面为中文。
 
-> 当前数据方向：**JP 日服**；界面为中文。
+## 功能特性
 
-## 功能特点
+- **从者管理**：维护个人 Box、灵基阶段/灵衣、满绊状态与个人加成
+- **队伍配置**：6 人队伍板（5 玩家 + 1 助战），支持固定从者与礼装
+- **牵绊礼装**：支持通用、特性条件与助战位礼装
+- **活动加成**：支持按活动导入从者加成，并处理全队光环类效果
+- **推荐策略**：总牵绊最大化、指定从者最大化、均衡模式
+- **搜索档位**：快速 / 平衡 / 高，可按需平衡耗时与覆盖范围
+- **本地数据**：数据保存在本地 SQLite，无需联网即可计算
 
-- 从者 Box 管理：勾选拥有从者、设置灵基阶段/灵衣、满绊标记
-- 队伍板：6 个位置（5 玩家 + 1 助战），支持固定从者/礼装
-- 牵绊礼装：支持通用 5%、特性礼装、助战午茶类礼装
-- 活动加成导入：
-  - 从活动列表导入对应从者的个人加成（如 20%/50%）
-  - 玛修等“全队光环”加成会单独写入光环字段，并在引擎中影响全队倍率
-- 推荐策略：
-  - 总牵绊最大化
-  - 指定从者最大化
-  - 均衡模式
-- 搜索质量档位：快速 / 平衡 / 高
-- 数据源：Atlas Academy JP 导出 + 本地中文翻译表
+## 技术架构
 
-## 技术栈
-
-- **Electron**：桌面壳、SQLite、主进程 IPC
-- **Vue 3（全局版，无打包器）**：前端 UI
-- **Python 3**：数据构建与牵绊收益计算引擎
-- **SQLite**：本地数据库
-
-## 目录结构
+| 层 | 技术 |
+|---|---|
+| 桌面壳 / IPC / SQLite | Electron |
+| 前端 UI | Vue 3（全局构建，无打包器） |
+| 数据构建 / 收益计算 | Python 3 |
+| 本地存储 | SQLite |
 
 ```text
 .
 ├─ main/                 # Electron 主进程
-│  ├─ index.js
-│  ├─ ipc-handlers.js
-│  ├─ database.js
-│  └─ python-process.js
-├─ preload.js            # preload 桥接
-├─ renderer/             # 前端
-│  ├─ index.html
-│  ├─ app.js
-│  ├─ style.css
-│  └─ data/              # 前端用 trait 中文映射等
+├─ preload.js            # 渲染进程桥接
+├─ renderer/             # 前端 UI
 ├─ python-engine/
-│  └─ engine/
-│     ├─ data_fetcher.py # Atlas 数据下载/DB 构建
-│     ├─ event_bonus.py  # 活动加成解析（extraPassive）
-│     ├─ calculator.py   # 倍率计算
-│     ├─ search.py       # 队伍搜索
-│     └─ main.py         # Python 引擎入口
-├─ scripts/              # 翻译表/头像等辅助脚本
-├─ docs/                 # 开发说明文档
+│   └─ engine/           # Python 数据与计算引擎
+├─ scripts/              # 数据/翻译/资源辅助脚本
+├─ docs/                 # 开发与集成文档
 └─ package.json
 ```
 
 ## 环境要求
 
 - Windows
-- Node.js（建议 18+，实际使用 Electron 最新版）
-- Python 3.10+（开发环境使用 3.14）
-- 首次运行/构建数据需要网络；也可使用已有本地缓存
+- Node.js（建议 18+）
+- Python 3.10+
+- 首次构建本地数据时需要网络连接
 
-## 本地运行（源码方式）
+## 快速开始
 
-1. 安装依赖：
+### 1. 安装依赖
 
-   ```powershell
-   npm install
-   ```
+```powershell
+npm install
+```
 
-2. 准备数据库与活动加成表（首次需要下载 Atlas 导出，文件较大）：
+### 2. 准备本地数据
 
-   ```powershell
-   cd python-engine
+首次运行需要从 Atlas Academy 下载 JP 数据并生成数据库：
 
-   # 构建 JP 从者/礼装 SQLite 数据库
-   python -m engine.data_fetcher --region JP
+```powershell
+cd python-engine
 
-   # 生成活动加成表 event_bond_bonus.json（放在项目根 db/ 旁边）
-   python -c "from engine.event_bonus import update_event_bond_bonus; update_event_bond_bonus('JP', r'..\db\fgo_data.db', use_cache=True)"
-   ```
+# 构建从者/礼装 SQLite 数据库
+python -m engine.data_fetcher --region JP
 
-   如果 Atlas 大文件已缓存在 `python-engine/.cache/raw/`，后续会很快。
+# 生成活动加成表
+python -c "from engine.event_bonus import update_event_bond_bonus; update_event_bond_bonus('JP', r'..\db\fgo_data.db', use_cache=True)"
+```
 
-3. 启动应用：
+Atlas 大文件会缓存到 `python-engine/.cache/raw/`，后续更新会更快。
 
-   ```powershell
-   npm start
-   ```
+### 3. 启动应用
 
-   > 开发模式下 Electron 会优先调用 `python-engine/engine_launcher.py`，不需要先打包 `engine.exe`。
+```powershell
+npm start
+```
 
-4. （可选）补齐 JP 从者头像：
+开发模式会直接调用 Python 源码引擎，无需预先打包 `engine.exe`。
 
-   ```powershell
-   python scripts/fetch_missing_avatars.py --region JP --db db/fgo_data.db
-   ```
+### 4. 可选：补齐从者头像
 
-## 打包便携版
+```powershell
+python scripts/fetch_missing_avatars.py --region JP --db db/fgo_data.db
+```
 
-仓库默认**不提交** `release/`、`node_modules/`、数据库等大文件。
+## 打包发布
+
+`release/`、`node_modules/`、数据库等运行产物不会进入源码仓库。
 
 本地打包参考：
 
 ```powershell
-# 1. 先按上面方式准备好 db/fgo_data.db 和 python-engine/engine.exe
-# 2. 构建 Python 引擎 exe
+# 构建 Python 引擎
 cd python-engine
 python -m PyInstaller --clean --noconfirm pyinstaller.spec
 Copy-Item .\dist\engine.exe .\engine.exe
 
-# 3. 使用 electron-builder 生成便携目录（输出到 release/）
+# 构建 Electron 便携目录
 cd ..
 npm run dist
 ```
 
-详细打包说明见 `docs/Task5-打包集成说明.md`。
+详细打包说明见 [`docs/Task5-打包集成说明.md`](docs/Task5-打包集成说明.md)。
 
-## 数据更新说明
+## 数据来源与致谢
 
-- 从者/礼装数据来自 Atlas Academy JP `nice_servant.json` / `nice_equip.json`
-- 活动 50%/20%/5% 从者加成来自 `nice_servant.json` 的 `extraPassive`，**不依赖本地 Chaldea 页面**
-- 中文名翻译表由 Chaldea 本地数据生成，位于：
-  - `python-engine/engine/data/name_translations.json`
-  - `renderer/data/trait_names.js`
+- 游戏数据来自 **Atlas Academy**：[fgo-game-data-api](https://github.com/atlasacademy/fgo-game-data-api)
+- 中文名称与部分翻译映射生成时参考 **Chaldea**：[chaldea-center/chaldea](https://github.com/chaldea-center/chaldea)
+- 两者均以 AGPL-3.0 许可发布，本项目同样使用 AGPL-3.0
+- 游戏素材、文本与角色数据版权归 TYPE-MOON / FGO Project 等相关权利方所有
+- 本项目仅用于非商业学习与工具用途
+
+更多数据归属说明见 [`NOTICE`](NOTICE)。
 
 ## 许可证
 
-[GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html)（见 `LICENSE`）。
+[GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html)，详见 [`LICENSE`](LICENSE)。

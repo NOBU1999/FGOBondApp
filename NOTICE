@@ -1,0 +1,26 @@
+FGO 牵绊推荐器 - NOTICE
+========================
+
+This project is licensed under the GNU Affero General Public License v3.0.
+See LICENSE for the full license text.
+
+Data Sources & Attribution
+--------------------------
+
+- Game data is provided by Atlas Academy.
+  Project: https://github.com/atlasacademy/fgo-game-data-api
+  License: GNU Affero General Public License v3.0
+
+- Some Chinese name/translation mapping files are generated with reference to
+  local Chaldea data.
+  Project: https://github.com/chaldea-center/chaldea
+  License: GNU Affero General Public License v3.0
+
+The generated translation files in this repository may include data derived
+from the projects above. They are redistributed under the same AGPL-3.0 terms
+with attribution.
+
+Fate/Grand Order game assets, texts, character data and related trademarks
+belong to TYPE-MOON / FGO Project and their respective rights holders.
+This project is an unofficial, non-commercial fan tool and is not affiliated
+with or endorsed by the game developers or publishers.
