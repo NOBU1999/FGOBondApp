@@ -47,6 +47,6 @@ node_modules\.bin\electron-builder.cmd --win dir
 
 ## 注意
 
-- 当前使用 Electron 默认图标；后续替换 `assets/icon.ico` 后可重新打包。
+- 当前使用 Electron 默认图标，未设置自定义应用图标。
 - `db/fgo_data.db` 已预置在包内；首次启动或菜单“工具 → 更新数据”可更新。
 - 本工程未使用原生 Node 依赖，`node:sqlite` 已满足 SQLite 读写，避免 better-sqlite3 原生模块打包问题。
