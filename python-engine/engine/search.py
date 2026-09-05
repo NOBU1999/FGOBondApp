@@ -883,30 +883,42 @@ def search_top_teams(
         reduced.append(req.target_servant_id)
 
     # 启发式截断可能丢掉低Cost从者，导致“满礼装组合”因 Cost 不足而整体无解。
-    # 按 Cost 从低到高补回必要候选，至少让一套满自由礼装组合在 Cost 内可行。
+    # 按 Cost 从低到高补回必要候选，但只补到“至少有一套满自由礼装组合在 Cost 内可行”
+    # 即停。原实现会把所有低Cost从者都追加进来，使候选组合数远超预算；
+    # 枚举顺序又总是先枚举含最高启发式从者的组合，导致时间预算内全是不含替代组合的
+    # 同核心队伍（用户简易排除后无其他队伍）。
     if choose_count > 0 and craft_pool and bp.free_bond_positions:
         max_free_bond_cost = max(
             (ctx.crafts[cid].cost for cid in craft_pool),
             default=0,
         ) * len(bp.free_bond_positions)
-        for sid in sorted(
-            player_candidates,
-            key=lambda x: (ctx.servants[x].cost if x in ctx.servants else 99, x),
-        ):
-            if sid in reduced:
-                continue
-            if len(reduced) >= len(player_candidates):
-                break
-            trial = set(reduced)
-            trial.add(sid)
-            lowest = sorted(
-                (ctx.servants[x].cost for x in trial if x in ctx.servants)
+
+        def has_feasible_full_combo(pool: Sequence[int]) -> bool:
+            costs = sorted(
+                (ctx.servants[x].cost for x in pool if x in ctx.servants)
             )[:choose_count]
-            if (
-                len(lowest) == choose_count
-                and sum(lowest) + fixed_craft_cost + max_free_bond_cost <= req.cost_limit
+            return (
+                len(costs) == choose_count
+                and sum(costs) + fixed_craft_cost + max_free_bond_cost <= req.cost_limit
+            )
+
+        # 如果现有启发式候选已经可行，就不需要追加任何低Cost从者。
+        if not has_feasible_full_combo(reduced):
+            for sid in sorted(
+                player_candidates,
+                key=lambda x: (ctx.servants[x].cost if x in ctx.servants else 99, x),
             ):
-                reduced.append(sid)
+                if sid in reduced:
+                    continue
+                if len(reduced) >= len(player_candidates):
+                    break
+                trial = set(reduced)
+                trial.add(sid)
+                if has_feasible_full_combo(list(trial)):
+                    reduced.append(sid)
+                    # 一旦池内已经存在可行组合，立即停止，避免候选池无限膨胀。
+                    if has_feasible_full_combo(reduced):
+                        break
 
     report("正在搜索组合...")
     free_slots_count = len(bp.free_bond_positions)

@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld("fgo", {
   saveExclusions: (exclusions) => ipcRenderer.invoke("exclusion:save", toPlain(exclusions)),
   listUserTeams: () => ipcRenderer.invoke("user:list-teams"),
   saveUserTeam: (team) => ipcRenderer.invoke("user:save-team", toPlain(team)),
+  deleteUserTeam: (id) => ipcRenderer.invoke("user:delete-team", toPlain(id)),
   getEventBondBonuses: () => ipcRenderer.invoke("event:list"),
 
   // Python 引擎

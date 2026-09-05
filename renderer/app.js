@@ -163,6 +163,8 @@ const App = {
       servantDetailEventId: "",
       presets: [],
       presetModalVisible: false,
+      presetSaveVisible: false,
+      presetName: "",
       calculating: false,
       progress: "",
       results: [],
@@ -1103,68 +1105,114 @@ const App = {
         }
       }
     },
-    async saveTeam() {
-      const name = prompt("预设名称", `队伍 ${new Date().toLocaleString()}`);
-      if (!name) return;
+
+    // ---------- 队伍预设 ----------
+    saveTeam() {
+      this.presetName = `队伍 ${new Date().toLocaleString()}`;
+      this.presetSaveVisible = true;
+    },
+    async confirmSavePreset() {
+      const name = (this.presetName || "").trim();
+      if (!name) {
+        alert("请输入预设名称");
+        return;
+      }
+      this.presetSaveVisible = false;
       const fixedServants = [];
       const fixedCrafts = [];
+      let supportPosition = null;
+      let support = { servantId: null, craftId: null };
       this.slots.forEach((slot, i) => {
-        if (slot.isSupport) return;
+        const pos = this.slotPosition(i);
+        if (slot.isSupport) {
+          supportPosition = pos;
+          support = {
+            servantId: slot.servantId !== null ? slot.servantId : null,
+            craftId: slot.craftId !== null && slot.craftId !== undefined ? slot.craftId : null,
+          };
+          return;
+        }
         if (slot.servantId !== null) {
-          const fixed = { position: this.slotPosition(i), servantId: slot.servantId };
+          const fixed = { position: pos, servantId: slot.servantId };
           if (slot.stage) fixed.stage = slot.stage;
           fixedServants.push(fixed);
         }
         if (slot.craftId !== null) {
           const craft = this.craftById(slot.craftId);
-          fixedCrafts.push({ position: this.slotPosition(i), craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other" });
+          fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other" });
         }
       });
-      const supportSlot = this.slots.find((s) => s.isSupport);
       const team = {
         name,
         fixedServants,
         fixedCrafts,
-        supportId: supportSlot && supportSlot.servantId !== null ? supportSlot.servantId : null,
-        supportCraftId: supportSlot && supportSlot.craftId !== null ? supportSlot.craftId : null,
+        supportId: support.servantId,
+        supportCraftId: support.craftId,
+        supportPosition,
         costLimit: this.costLimit,
         strategy: this.strategy,
         qualityMode: this.qualityMode,
       };
-      await window.fgo.saveUserTeam(plainClone(team));
-      this.presets = await window.fgo.listUserTeams();
-      alert("队伍已保存");
+      try {
+        await window.fgo.saveUserTeam(plainClone(team));
+        this.presets = await window.fgo.listUserTeams();
+        alert("队伍已保存");
+      } catch (err) {
+        alert("保存失败：" + (err && err.message ? err.message : String(err)));
+        this.presetSaveVisible = true;
+      }
     },
     async loadPreset(preset) {
       const fixedServants = preset.fixedServants || [];
       const fixedCrafts = preset.fixedCrafts || [];
       const support = { servantId: preset.supportId, craftId: preset.supportCraftId };
+      const supportPosition = preset.supportPosition || null;
       const fresh = makeSlots();
+      // 清空默认助战标记，待下面按预设精确重建助战位
+      fresh.forEach((s) => { s.isSupport = false; });
       fixedServants.forEach((f) => {
         const idx = POSITION_KEYS.indexOf(f.position);
         if (idx >= 0) {
           fresh[idx].servantId = f.servantId;
           fresh[idx].stage = f.stage || null;
+          fresh[idx].isSupport = false;
         }
       });
       fixedCrafts.forEach((f) => {
         const idx = POSITION_KEYS.indexOf(f.position);
         if (idx >= 0) fresh[idx].craftId = f.craftId;
       });
-      if (support.servantId || (support.craftId !== null && support.craftId !== undefined)) {
-        // 放到空闲位；如果已有相同从者占用则移动
-        const used = support.servantId ? fresh.findIndex((s) => s.servantId === support.servantId) : -1;
-        let idx = used >= 0 ? used : fresh.findIndex((s) => s.servantId === null);
-        if (idx < 0) idx = 0;
-        if (support.servantId) fresh[idx].servantId = support.servantId;
-        if (support.craftId !== null && support.craftId !== undefined) fresh[idx].craftId = support.craftId;
-        fresh[idx].isSupport = true;
+      // 旧预设没有 supportPosition 时采用兼容策略：尽量放回默认助战位，
+      // 若默认位已被固定占用则放到第一个空闲位。
+      let idx = -1;
+      if (supportPosition && POSITION_KEYS.includes(supportPosition)) {
+        idx = POSITION_KEYS.indexOf(supportPosition);
+      } else if (support.servantId) {
+        const used = fresh.findIndex((s) => s.servantId === support.servantId);
+        idx = used >= 0 ? used : fresh.findIndex((s) => s.servantId === null && !s.isSupport);
+      } else {
+        idx = fresh.findIndex((s) => s.servantId === null && !s.isSupport);
       }
+      if (idx < 0) idx = fresh.findIndex((s) => !s.isSupport);
+      if (idx < 0) idx = 0;
+      if (support.servantId) fresh[idx].servantId = support.servantId;
+      if (support.craftId !== null && support.craftId !== undefined) fresh[idx].craftId = support.craftId;
+      fresh[idx].isSupport = true;
       this.slots = fresh;
       this.costLimit = preset.costLimit || 116;
       this.strategy = preset.strategy || "total_max";
       this.qualityMode = preset.qualityMode || "balanced";
       this.presetModalVisible = false;
+    },
+    async deletePreset(preset) {
+      if (!preset || !preset.id) return;
+      if (!confirm(`确定删除预设「${preset.name || "未命名"}」吗？`)) return;
+      try {
+        await window.fgo.deleteUserTeam(preset.id);
+        this.presets = (this.presets || []).filter((p) => Number(p.id) !== Number(preset.id));
+      } catch (err) {
+        alert("删除失败：" + (err && err.message ? err.message : String(err)));
+      }
     },
 
     // ---------- 计算 ----------
@@ -1212,7 +1260,7 @@ const App = {
         costLimit: Number(this.costLimit),
         strategy: this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
-        excludedServantIds: this.excludedServants,
+        excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
         excludedCraftIds: this.excludedCrafts,
         activityBonus: 0,
         teaBonus: 1,
@@ -1518,6 +1566,7 @@ const App = {
         <div class="results-head">
           <h2>推荐结果（共 {{ totalCandidates }} 个，当前显示 {{ filteredResults.length }} 个）</h2>
           <div v-if="simpleExcludedServants.length" class="simple-exclusions">
+            <button class="secondary" :disabled="calculating" @click="calculate">🔁 重新计算</button>
             <span class="text-muted">简易排除：</span>
             <span
               v-for="sid in simpleExcludedServants"
@@ -1532,7 +1581,7 @@ const App = {
           </div>
         </div>
         <div v-if="!results.length" class="empty">点击“开始计算”后结果会显示在这里</div>
-        <div v-else-if="!filteredResults.length" class="empty">当前简易排除后没有符合条件的队伍</div>
+        <div v-else-if="!filteredResults.length" class="empty">当前 Top 结果都包含被简易排除的从者，请点击上方“🔁 重新计算”搜索替代队伍</div>
         <div v-for="r in pagedResults" :key="r.rank" class="result-card">
           <div class="head">
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
@@ -1805,7 +1854,24 @@ const App = {
       </div>
     </div>
 
-    <!-- 预设弹窗 -->
+
+
+    <!-- 保存预设弹窗 -->
+    <div v-if="presetSaveVisible" class="modal-mask" @click.self="presetSaveVisible = false">
+      <div class="modal-panel small">
+        <div class="overlay-head"><h2>保存队伍</h2><button class="secondary" @click="presetSaveVisible = false">✕</button></div>
+        <div class="field" style="margin:10px 0">
+          <label>预设名称</label>
+          <input v-model="presetName" placeholder="输入预设名称" @keyup.enter="confirmSavePreset" />
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="secondary" @click="presetSaveVisible = false">取消</button>
+          <button class="primary" @click="confirmSavePreset">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 加载预设弹窗 -->
     <div v-if="presetModalVisible" class="modal-mask" @click.self="presetModalVisible = false">
       <div class="modal-panel small">
         <div class="overlay-head"><h2>加载预设</h2><button class="secondary" @click="presetModalVisible = false">✕</button></div>
@@ -1814,6 +1880,7 @@ const App = {
           <span>{{ p.name }}</span>
           <span class="text-muted">{{ p.costLimit }}Cost / {{ p.strategy }}</span>
           <button class="secondary" @click="loadPreset(p)">加载</button>
+          <button class="secondary" style="color:var(--danger);border-color:var(--danger)" @click="deletePreset(p)">删除</button>
         </div>
       </div>
     </div>

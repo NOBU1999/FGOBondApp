@@ -174,6 +174,16 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle("user:delete-team", (_e, id) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.deleteUserTeam(db, id);
+    } finally {
+      db.close();
+    }
+  });
+
   // 活动牵绊加成表（由 Python 更新生成 db/event_bond_bonus.json）
   ipcMain.handle("event:list", () => {
     return database.getEventBondBonuses();

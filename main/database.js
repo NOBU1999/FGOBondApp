@@ -75,6 +75,7 @@ function ensureSchema(db) {
       fixed_crafts TEXT,
       support_id INTEGER,
       support_craft_id INTEGER,
+      support_position TEXT DEFAULT 'front_right',
       cost_limit INTEGER DEFAULT 114,
       strategy TEXT DEFAULT 'total_max',
       quality_mode TEXT DEFAULT 'balanced',
@@ -83,6 +84,11 @@ function ensureSchema(db) {
   `);
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN quality_mode TEXT DEFAULT 'balanced'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN support_position TEXT DEFAULT 'front_right'");
   } catch (_) {
     // 列已存在
   }
@@ -292,14 +298,15 @@ function saveUserTeam(db, team) {
   const supportCraftId = team.supportCraftId !== undefined && team.supportCraftId !== null ? team.supportCraftId : null;
   const info = run(
     db,
-    `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, cost_limit, strategy, quality_mode)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, support_position, cost_limit, strategy, quality_mode)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       team.name || "",
       JSON.stringify(team.fixedServants || []),
       JSON.stringify(team.fixedCrafts || []),
       team.supportId || null,
       supportCraftId,
+      team.supportPosition || "front_right",
       team.costLimit || 116,
       team.strategy || "total_max",
       team.qualityMode || "balanced",
@@ -311,7 +318,7 @@ function saveUserTeam(db, team) {
 function listUserTeams(db) {
   const rows = all(
     db,
-    "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, created_at AS createdAt FROM user_teams ORDER BY id DESC"
+    "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, support_position AS supportPosition, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, created_at AS createdAt FROM user_teams ORDER BY id DESC"
   );
   for (const r of rows) {
     try {
@@ -326,6 +333,11 @@ function listUserTeams(db) {
     }
   }
   return rows;
+}
+
+function deleteUserTeam(db, id) {
+  const info = run(db, "DELETE FROM user_teams WHERE id = ?", [Number(id)]);
+  return { ok: info.changes > 0, changes: info.changes };
 }
 
 function getEventBondBonuses(dbPath) {
@@ -357,6 +369,7 @@ module.exports = {
   importCaptureContent,
   saveUserTeam,
   listUserTeams,
+  deleteUserTeam,
   getExclusions,
   saveExclusions,
   getEventBondBonuses,
