@@ -453,8 +453,12 @@ def _time_budget_seconds(req: CalculationRequest) -> float:
 
 
 def _default_servant_combo_limit(req: CalculationRequest) -> int:
-    """按等待时间动态决定从者候选组合上限，等待越久搜索越广。"""
-    return max(80, min(2000, int(_time_budget_seconds(req) * 12)))
+    """按等待时间动态决定从者候选组合上限，等待越久搜索越广。
+
+    时间预算已经提高（fast≈20s / balanced≈45s / high≈120s），
+    这里也相应放宽到最多 4000 个从者组合。
+    """
+    return max(200, min(4000, int(_time_budget_seconds(req) * 200)))
 
 
 def _default_craft_combo_limit(req: CalculationRequest) -> int:
@@ -771,6 +775,139 @@ def _solution_dict(result: Dict[str, Any], rank: int) -> Dict[str, Any]:
     }
 
 
+def _matches_any_trait_craft(ctx: DataContext, servant_id: int, craft_ids: Sequence[int]) -> bool:
+    for cid in craft_ids:
+        craft = ctx.crafts.get(cid)
+        if craft is None:
+            continue
+        if _servant_can_match_craft_any_stage(ctx, servant_id, craft):
+            return True
+    return False
+
+
+def _multi_trait_count(ctx: DataContext, servant_id: int, trait_ids: Sequence[int]) -> int:
+    return sum(
+        1
+        for cid in trait_ids
+        if _servant_can_match_craft_any_stage(ctx, servant_id, ctx.crafts[cid])
+    )
+
+
+def _collect_used_trait_craft_ids(
+    ctx: DataContext,
+    best_by_set: Dict[Tuple[int, ...], Dict[str, Any]],
+) -> Set[int]:
+    """从第一轮已找到的队伍中，收集实际产生收益的特性礼装。"""
+    used: Set[int] = set()
+    for entry in best_by_set.values():
+        team = entry.get("team")
+        if team is None:
+            continue
+        for p in getattr(team, "players", []):
+            if p.craft_id is not None:
+                craft = ctx.crafts.get(p.craft_id)
+                if craft is not None and craft.bonus_type == "trait":
+                    used.add(p.craft_id)
+        if getattr(team, "support_craft_id", None) is not None:
+            craft = ctx.crafts.get(team.support_craft_id)
+            if craft is not None and craft.bonus_type == "trait":
+                used.add(team.support_craft_id)
+    return used
+
+
+def _expand_reduced_for_trait_synergy(
+    ctx: DataContext,
+    req: CalculationRequest,
+    bp: Blueprint,
+    box: Dict[int, BoxServant],
+    reduced: Sequence[int],
+    player_candidates: Sequence[int],
+    trait_ids: Sequence[int],
+    used_trait_craft_ids: Set[int],
+) -> List[int]:
+    """第二轮补池：补入“多触发/特性协同”但从静态启发式看不够靠前的从者。
+
+    - 多触发：能同时匹配多张特性礼装的从者，容易在真实组队里形成高价值协同。
+    - 固定队协同：固定从者已经能触发某张特性礼装时，补入同类从者往往能放大收益。
+    - 首轮线索：第一轮实际用到的特性礼装，第二轮优先补能触发它们的从者。
+    """
+    if len(player_candidates) <= len(reduced):
+        return list(reduced)
+
+    reduced_set = set(reduced)
+    additions: List[int] = []
+
+    # 固定玩家能触发的特性礼装
+    fixed_matching_cids: Set[int] = set()
+    for cid in trait_ids:
+        craft = ctx.crafts.get(cid)
+        if craft is None:
+            continue
+        for pm in bp.fixed_player_members:
+            if _servant_can_match_craft_any_stage(ctx, pm.servant_id, craft):
+                fixed_matching_cids.add(cid)
+                break
+
+    priority_cids = set(used_trait_craft_ids) | fixed_matching_cids
+
+    max_add = 20 if len(bp.free_servant_positions) <= 2 else 10
+
+    # 1) 多触发候选：即使单从者分不高，也可能因同时命中多张礼装而价值高。
+    multi_sorted = sorted(
+        player_candidates,
+        key=lambda sid: (
+            -_multi_trait_count(ctx, sid, trait_ids),
+            -_servant_heuristic(ctx, box[sid], trait_ids),
+            sid,
+        ),
+    )
+    for sid in multi_sorted:
+        if len(additions) >= max_add:
+            break
+        if sid in reduced_set:
+            continue
+        # 只补至少能命中一个“优先特性”或“多触发”的候选
+        if priority_cids:
+            if not _matches_any_trait_craft(ctx, sid, list(priority_cids)):
+                continue
+        else:
+            if _multi_trait_count(ctx, sid, trait_ids) <= 0:
+                continue
+        additions.append(sid)
+        reduced_set.add(sid)
+
+    # 2) 特性组保底/固定队协同补人：每个高优先级特性礼装至少保证池内有可触发者。
+    heuristic_sorted = sorted(
+        player_candidates,
+        key=lambda sid: (_servant_heuristic(ctx, box[sid], trait_ids), sid),
+        reverse=True,
+    )
+    for cid in trait_ids:
+        if len(additions) >= max_add:
+            break
+        craft = ctx.crafts.get(cid)
+        if craft is None:
+            continue
+        represented = any(
+            _servant_can_match_craft_any_stage(ctx, sid, craft)
+            for sid in reduced_set
+        )
+        if represented and cid not in priority_cids:
+            continue
+        for sid in heuristic_sorted:
+            if len(additions) >= max_add:
+                break
+            if sid in reduced_set:
+                continue
+            if _servant_can_match_craft_any_stage(ctx, sid, craft):
+                additions.append(sid)
+                reduced_set.add(sid)
+                break
+
+    # 第二轮把补入候选放到前面，优先探索这些“新面孔”，避免时间被旧高分前缀耗尽。
+    return list(additions) + [sid for sid in reduced if sid not in additions]
+
+
 def search_top_teams(
     ctx: DataContext,
     req: CalculationRequest,
@@ -932,20 +1069,19 @@ def search_top_teams(
     # 按队伍实际收益决定；用户显式选“没有（无礼装）”传 0 时不填。
     support_craft_options = _support_craft_options(ctx, req)
 
-    solutions: List[Dict[str, Any]] = []
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
     seen: Set[Tuple[Any, ...]] = set()
     processed_total = 0
     evaluated_total = 0
     timeout_seconds = req.timeout_ms / 1000.0
 
-    def run_with_craft_combos() -> None:
-        nonlocal solutions, seen, processed_total, evaluated_total
+    def run_with_craft_combos(candidate_ids: Sequence[int], deadline: float) -> None:
+        nonlocal seen, processed_total, evaluated_total
         processed = 0
-        for extras_tuple in _generate_servant_combinations(reduced, choose_count):
-            # 时间预算
-            if time.time() - start > req.timeout_ms / 1000:
-                report("达到时间预算，提前结束搜索")
+        for extras_tuple in _generate_servant_combinations(candidate_ids, choose_count):
+            # 时间预算：第一轮/第二轮各自使用分配的截止时间
+            if time.time() >= deadline:
+                report("达到时间预算，提前结束当前轮搜索")
                 break
 
             used_players = set(bp.fixed_servant_ids) | set(extras_tuple)
@@ -954,6 +1090,13 @@ def search_top_teams(
                 and req.target_servant_id is not None
                 and req.target_servant_id not in used_players
             ):
+                continue
+
+            # 同一组玩家从者如果在第一轮已经完整评估过，第二轮不必重复精算礼装。
+            servant_set = tuple(sorted(used_players))
+            if servant_set in best_by_set:
+                processed += 1
+                processed_total += 1
                 continue
 
             support_id = support_servant_id
@@ -1026,7 +1169,6 @@ def search_top_teams(
                         score = total
 
                     # 同一组玩家从者只保留最优礼装/位置组合，避免 Top20 全是同阵容换礼装
-                    servant_set = tuple(sorted(p.servant_id for p in team.players))
                     old = best_by_set.get(servant_set)
                     if old is None or score > old["score"]:
                         best_by_set[servant_set] = {
@@ -1043,7 +1185,28 @@ def search_top_teams(
                     f"（时间预算 {timeout_seconds:.0f}s，当前 {elapsed:.1f}s）"
                 )
 
-    run_with_craft_combos()
+    # 第一轮：用静态分候选池快速建立 Top 基线
+    first_deadline = start + min(timeout_seconds, max(5.0, timeout_seconds * 0.55))
+    run_with_craft_combos(reduced, first_deadline)
+
+    # 第二轮：根据第一轮实际用到的特性礼装 + 固定队协同补人后再搜。
+    # 补入的新候选放在列表前部，优先探索，避免时间又被旧高分前缀耗尽。
+    if time.time() < start + timeout_seconds - 3 and best_by_set:
+        used_trait_craft_ids = _collect_used_trait_craft_ids(ctx, best_by_set)
+        expanded = _expand_reduced_for_trait_synergy(
+            ctx,
+            req,
+            bp,
+            box,
+            reduced,
+            player_candidates,
+            trait_ids,
+            used_trait_craft_ids,
+        )
+        if len(expanded) > len(reduced):
+            added = len(expanded) - len(reduced)
+            report(f"第二轮补入 {added} 名协同候选，继续搜索...")
+            run_with_craft_combos(expanded, start + timeout_seconds)
 
     report("排序输出...")
     best_items = sorted(

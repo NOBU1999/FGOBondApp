@@ -1265,7 +1265,7 @@ const App = {
         activityBonus: 0,
         teaBonus: 1,
         topN: 1000,
-        timeoutMs: { fast: 10000, balanced: 25000, high: 60000 }[this.qualityMode] || 10000,
+        timeoutMs: { fast: 20000, balanced: 45000, high: 120000 }[this.qualityMode] || 20000,
       };
     },
     async calculate() {
@@ -1519,9 +1519,9 @@ const App = {
           <div class="field">
             <label>计算质量 / 等待时间</label>
             <select v-model="qualityMode">
-              <option value="fast">快速（约 3~10 秒）</option>
-              <option value="balanced">平衡（约 10~25 秒）</option>
-              <option value="high">高质量（约 30~60 秒）</option>
+              <option value="fast">快速（约 10~20 秒）</option>
+              <option value="balanced">平衡（约 20~45 秒）</option>
+              <option value="high">高质量（约 1~2 分钟）</option>
             </select>
           </div>
           <div v-if="strategy === 'target_max'" class="field target-field">
@@ -1827,9 +1827,9 @@ const App = {
         <div class="field">
           <label>计算质量 / 等待时间</label>
           <select v-model="qualityMode">
-            <option value="fast">快速（约 3~10 秒）</option>
-            <option value="balanced">平衡（约 10~25 秒）</option>
-            <option value="high">高质量（约 30~60 秒）</option>
+            <option value="fast">快速（约 10~20 秒）</option>
+            <option value="balanced">平衡（约 20~45 秒）</option>
+            <option value="high">高质量（约 1~2 分钟）</option>
           </select>
         </div>
         <div v-if="strategy === 'target_max'" class="field">

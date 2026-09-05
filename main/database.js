@@ -240,6 +240,11 @@ function importCaptureContent(db, content) {
   const replaced = ((data || {}).cache || {}).replaced || {};
   const collection = replaced.userSvtCollection || [];
   const userSvt = replaced.userSvt || [];
+  // Chaldea 会同时读取 userSvt 与 userSvtStorage（第二保管室），
+  // iOS/Android 的抓包结构一致；只读 userSvt 会漏掉放在保管室中的从者。
+  const userSvtStorage = replaced.userSvtStorage || [];
+  // userSvtCollection 是图鉴/收集记录，只用来读取已持有从者的羁绊/满绊信息，
+  // 绝不作为“是否持有”的依据；否则会把图鉴里有但已不在仓库的从者错误加入。
   const collectionMap = {};
   for (const rec of collection) {
     const sid = Number(rec && rec.svtId);
@@ -247,7 +252,7 @@ function importCaptureContent(db, content) {
   }
   const servantIds = new Set(all(db, "SELECT id FROM servants").map((r) => r.id));
   const ownedIds = new Set();
-  for (const rec of userSvt) {
+  for (const rec of [...userSvt, ...userSvtStorage]) {
     const sid = Number(rec && rec.svtId);
     if (Number.isFinite(sid) && servantIds.has(sid)) ownedIds.add(sid);
   }

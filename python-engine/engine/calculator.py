@@ -305,10 +305,24 @@ def _effect_crafts(
     return player_crafts
 
 
-def frontline_bonus(position: str, support_count: int) -> float:
-    # 设计决策：UI 不区分前排/后排位置，忽略位置加成；
-    # 仅保留“助战/NPC 数量”带来的全队 +4%/个 加成。
-    return support_count * 0.04
+def frontline_bonus(position: str, support_in_front: bool) -> float:
+    """前排加成：只作用于前排从者。
+
+    规则（8周年先发加成）：
+    - 前排从者自身先发加成：+20%
+    - 助战/NPC 位于前排时，额外 +4%，与 20% 加算
+    - 助战在后排时不提供该 4%
+    - 后排从者不享受前排加成
+
+    返回的是 (20% + 4%) 这类“前排加成内容”，后续由调用方放入
+    (1 + 前排加成) × (1 + 其他加成) 结构。
+    """
+    # 助战在前排时，前后排非助战成员都获得 +4%
+    bonus = 0.04 if support_in_front else 0.0
+    # 前排从者额外获得自身先发 +20%
+    if position in FRONT_POSITIONS:
+        bonus += 0.20
+    return bonus
 
 
 def calculate_member_multiplier(
@@ -320,16 +334,18 @@ def calculate_member_multiplier(
     activity_bonus: float,
     aura_bonus: float = 0.0,
     support_craft: Optional[CraftInfo] = None,
-    support_count: int = 1,
+    support_in_front: bool = False,
 ) -> float:
     """计算单个非助战从者的最终倍率。
 
-    公式（任务书 5.1 + 光环扩展）：
+    公式（任务书 5.1 + 光环扩展 + 个人加成修正）：
     total = (1 + frontline_bonus)
-            * (1 + universal + support_craft + trait + max_bond + activity + aura)
-            * (1 + personal_bonus)
+            * (1 + universal + support_craft + trait + max_bond + activity + aura
+               + personal_bonus)
+
+    说明：个人加成是加算，不单独作为乘区。
     """
-    front = frontline_bonus(position, support_count)
+    front = frontline_bonus(position, support_in_front)
     effect_crafts = _effect_crafts(player_crafts, support_craft)
     uni = universal_bonus(effect_crafts)
     sc = support_craft_bonus(support_craft)
@@ -337,8 +353,8 @@ def calculate_member_multiplier(
     max_bond_bonus = max_bond_count * 0.25
     return (
         (1.0 + front)
-        * (1.0 + uni + sc + tr + max_bond_bonus + activity_bonus + aura_bonus)
-        * (1.0 + personal_bonus)
+        * (1.0 + uni + sc + tr + max_bond_bonus + activity_bonus + aura_bonus
+           + personal_bonus)
     )
 
 
@@ -398,7 +414,9 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
         if team.support_craft_id is not None
         else None
     )
-    support_count = 1 if team.support_position is not None else 0
+    support_in_front = bool(
+        team.support_position is not None and team.support_position in FRONT_POSITIONS
+    )
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
@@ -419,7 +437,7 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
                 activity_bonus=activity_bonus,
                 aura_bonus=aura_bonus,
                 support_craft=support_craft,
-                support_count=support_count,
+                support_in_front=support_in_front,
             )
         )
 
@@ -450,7 +468,9 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
         ctx.crafts.get(team.support_craft_id) if team.support_craft_id is not None else None
     )
     effect_crafts = _effect_crafts(player_crafts, support_craft)
-    support_count = 1 if team.support_position is not None else 0
+    support_in_front = bool(
+        team.support_position is not None and team.support_position in FRONT_POSITIONS
+    )
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
@@ -480,7 +500,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 activity_bonus=activity_bonus,
                 aura_bonus=aura_bonus,
                 support_craft=support_craft,
-                support_count=support_count,
+                support_in_front=support_in_front,
             )
             personal_bonus_used = p.personal_bonus
             for craft_item in effect_crafts:
@@ -507,10 +527,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 "craftName": craft.name if craft else "",
                 "craftType": "bond" if (craft and craft.is_bond_ce) else "other",
                 "bonusDetail": {
-                    "frontlineBonus": (
-                        frontline_bonus(p.position, support_count) - (support_count * 0.04)
-                        if False else frontline_bonus(p.position, support_count)
-                    ),
+                    "frontlineBonus": frontline_bonus(p.position, support_in_front),
                     "universalCraftBonus": universal_bonus(effect_crafts),
                     "supportCraftBonus": support_craft_bonus(support_craft),
                     "traitCraftBonus": trait_bonus_for_servant(traits, effect_crafts),
