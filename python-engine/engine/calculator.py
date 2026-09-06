@@ -42,6 +42,9 @@ class CraftInfo:
     is_bond_ce: bool
     detail: str = ""
     is_event_limited: bool = False
+    flat_bonus: float = 0.0
+    repeatable: bool = False
+    is_custom: bool = False
 
 
 @dataclass
@@ -110,6 +113,29 @@ def _clean_trigger_groups(groups: Any) -> List[List[str]]:
     return cleaned
 
 
+def _custom_craft_detail_text(
+    name: str,
+    is_bond: bool,
+    percent: float,
+    flat: float,
+    trigger: List[List[str]],
+) -> str:
+    """为自定义礼装生成展示文本（引擎/UI 通用）。"""
+    if not is_bond:
+        return f"自定义其他礼装：{name}"
+    parts = []
+    if percent > 0:
+        parts.append(f"牵绊加成 {percent * 100:g}%")
+    if flat > 0:
+        parts.append(f"最终牵绊固定 +{flat:g}")
+    if not parts:
+        return f"自定义牵绊礼装：{name}"
+    cond = ""
+    if trigger:
+        cond = "（" + " 或 ".join("且".join(g) for g in trigger) + "）"
+    return "关卡通关时" + "、".join(parts) + cond
+
+
 def _load_all_crafts(conn: sqlite3.Connection) -> Dict[int, CraftInfo]:
     rows = conn.execute("SELECT * FROM crafts").fetchall()
     result = {}
@@ -127,6 +153,46 @@ def _load_all_crafts(conn: sqlite3.Connection) -> Dict[int, CraftInfo]:
             is_bond_ce=bool(r["is_bond_ce"]),
             detail=r["detail"] or "",
             is_event_limited=bool(r["is_event_limited"]),
+            flat_bonus=0.0,
+            repeatable=False,
+            is_custom=False,
+        )
+    # 自定义礼装（用户数据，Python 重建数据表时不会清除）
+    try:
+        custom_rows = conn.execute(
+            "SELECT id, name, craft_type, cost, rarity, percent_bonus, flat_bonus, "
+            "condition_groups_json, repeatable, enabled FROM custom_crafts WHERE enabled = 1"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        custom_rows = []
+    for r in custom_rows:
+        cid = int(r["id"])
+        is_bond = r["craft_type"] == "bond"
+        trigger = _clean_trigger_groups(json.loads(r["condition_groups_json"] or "[]"))
+        percent = float(r["percent_bonus"] or 0) / 100.0
+        flat = float(r["flat_bonus"] or 0)
+        bonus_type = None
+        if is_bond:
+            if trigger:
+                bonus_type = "trait"
+            elif percent > 0 or flat > 0:
+                bonus_type = "universal"
+        detail = _custom_craft_detail_text(r["name"], is_bond, percent, flat, trigger)
+        result[cid] = CraftInfo(
+            id=cid,
+            name=r["name"],
+            cost=int(r["cost"] or 0),
+            rarity=int(r["rarity"] or 0),
+            bonus_type=bonus_type,
+            bonus_value=percent,
+            support_bonus=0.0,
+            trigger_traits=trigger,
+            is_bond_ce=is_bond,
+            detail=detail,
+            is_event_limited=False,
+            flat_bonus=flat,
+            repeatable=bool(r["repeatable"]),
+            is_custom=True,
         )
     return result
 
@@ -184,6 +250,56 @@ def load_context(db_path: Optional[str] = None) -> DataContext:
         is_event_limited=False,
     )
 
+    # 通用英灵肖像 / 英灵逢魔 / 英灵极点（用户可手动放置，也可右键开启参与自动搜索）
+    crafts[-20] = CraftInfo(
+        id=-20,
+        name="通用英灵肖像",
+        cost=5,
+        rarity=4,
+        bonus_type="universal",
+        bonus_value=0.0,
+        support_bonus=0.0,
+        trigger_traits=[],
+        is_bond_ce=True,
+        detail="关卡通关时获得的牵绊值固定 +50（无条件）",
+        is_event_limited=False,
+        flat_bonus=50.0,
+        repeatable=False,
+        is_custom=False,
+    )
+    crafts[-21] = CraftInfo(
+        id=-21,
+        name="通用英灵逢魔",
+        cost=9,
+        rarity=4,
+        bonus_type="trait",
+        bonus_value=0.10,
+        support_bonus=0.0,
+        trigger_traits=[["FSNServant"]],
+        is_bond_ce=True,
+        detail="关卡通关时获得的〔Fate/stay night从者〕牵绊值提升10%",
+        is_event_limited=False,
+        flat_bonus=0.0,
+        repeatable=False,
+        is_custom=False,
+    )
+    crafts[-22] = CraftInfo(
+        id=-22,
+        name="通用英灵极点",
+        cost=9,
+        rarity=4,
+        bonus_type="universal",
+        bonus_value=0.02,
+        support_bonus=0.0,
+        trigger_traits=[],
+        is_bond_ce=True,
+        detail="关卡通关时获得的牵绊值提升2%（英灵极点系列通用）",
+        is_event_limited=False,
+        flat_bonus=0.0,
+        repeatable=False,
+        is_custom=False,
+    )
+
     return DataContext(servants=servants, crafts=crafts)
 
 
@@ -205,6 +321,30 @@ def trait_bonus_for_servant(
         # 每组条件都表示 AND；当前数据通常只有一组。若多组存在，按“满足任意一组”处理。
         if any(match_trait_group(servant_traits, g) for g in craft.trigger_traits):
             total += craft.bonus_value
+    return total
+
+
+def flat_bonus_for_servant(
+    servant_traits: Set[str], crafts: Iterable[CraftInfo]
+) -> float:
+    """统计当前队伍中该从者能获得的“固定数值加成”总和。
+
+    只统计自定义牵绊礼装里设置了 flat_bonus 的礼装。
+    - 无条件礼装（bonus_type == universal）对所有非助战从者生效；
+    - 条件礼装（bonus_type == trait）按 trigger_traits 的 OR/AND 规则匹配。
+    """
+    total = 0.0
+    for craft in crafts:
+        if not craft.is_bond_ce or craft.flat_bonus <= 0:
+            continue
+        if craft.bonus_type == "trait":
+            if not any(match_trait_group(servant_traits, g) for g in craft.trigger_traits):
+                continue
+        elif craft.bonus_type == "universal":
+            pass
+        else:
+            continue
+        total += craft.flat_bonus
     return total
 
 
@@ -467,11 +607,14 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
+    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
 
     multipliers = []
+    flat_bonuses = []
     for p in team.players:
         if p.max_bond and not p.bond_switch2:
             multipliers.append(0.0)
+            flat_bonuses.append(0.0)
             continue
         traits = ctx.servant_traits(p.servant_id, p.stage)
         multipliers.append(
@@ -488,10 +631,14 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
                 support_in_front=support_in_front,
             )
         )
+        flat_bonuses.append(flat_bonus_for_servant(traits, effect_crafts))
 
+    total_flat = sum(flat_bonuses)
     return {
         "totalMultiplier": sum(multipliers),
         "multipliers": multipliers,
+        "totalFlatBonus": total_flat,
+        "flatBonuses": flat_bonuses,
         "maxBondCount": max_bond_count,
         "maxBondBonus": max_bond_bonus,
     }
@@ -534,6 +681,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
 
     members: List[Dict[str, Any]] = []
     total_multiplier = 0.0
+    total_flat_bonus = 0.0
     trait_coverage: Set[str] = set()
 
     for p in team.players:
@@ -549,6 +697,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
         # 满绊且关闭开关二：个人收益为 0，但仍占位
         if p.max_bond and not p.bond_switch2:
             multiplier = 0.0
+            flat_bonus = 0.0
             personal_bonus_used = p.personal_bonus
         else:
             multiplier = calculate_member_multiplier(
@@ -563,6 +712,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
             )
+            flat_bonus = flat_bonus_for_servant(traits, effect_crafts)
             personal_bonus_used = p.personal_bonus
             for craft_item in effect_crafts:
                 if craft_item.bonus_type != "trait":
@@ -575,6 +725,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                         trait_coverage.update(g)
 
         total_multiplier += multiplier
+        total_flat_bonus += flat_bonus
         members.append(
             {
                 "position": p.position,
@@ -596,12 +747,13 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                     "universalCraftBonus": universal_bonus(effect_crafts),
                     "supportCraftBonus": support_crafts_bonus(support_craft, support_second_craft),
                     "traitCraftBonus": trait_bonus_for_servant(traits, effect_crafts),
+                    "flatCraftBonus": round(flat_bonus, 2),
                     "maxBondBonus": max_bond_bonus,
                     "activityBonus": activity_bonus,
                     "auraBonus": round(aura_bonus, 4),
                     "personalBonus": personal_bonus_used,
                     "totalMultiplier": round(multiplier, 6),
-                    "bondPoints": round(multiplier * base_bond, 2) if base_bond else 0.0,
+                    "bondPoints": round(multiplier * base_bond + flat_bonus, 2) if (base_bond or flat_bonus) else 0.0,
                 },
             }
         )
@@ -640,6 +792,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 "universalCraftBonus": 0.0,
                 "supportCraftBonus": 0.0,
                 "traitCraftBonus": 0.0,
+                "flatCraftBonus": 0.0,
                 "maxBondBonus": 0.0,
                 "activityBonus": 0.0,
                 "auraBonus": 0.0,
@@ -656,9 +809,10 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
 
     return {
         "totalMultiplier": round(total_multiplier, 6),
+        "totalFlatBonus": round(total_flat_bonus, 2),
         "costUsed": team_cost(ctx, team),
         "baseBond": base_bond,
-        "totalBondPoints": round(total_multiplier * base_bond, 2) if base_bond else 0.0,
+        "totalBondPoints": round(total_multiplier * base_bond + total_flat_bonus, 2) if (base_bond or total_flat_bonus) else 0.0,
         "team": all_members,
         "maxBondStats": {
             "count": max_bond_count,

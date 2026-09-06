@@ -284,6 +284,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 6px;
 }
 .pick-card {
+  position: relative;
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -297,6 +298,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-align: center;
 }
 .pick-card:hover { border-color: var(--accent); }
+.pick-not-participate {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 10px;
+  color: #ff6b6b;
+  background: rgba(0,0,0,0.65);
+  border: 1px solid rgba(255,107,107,0.6);
+  border-radius: 4px;
+  padding: 1px 4px;
+  pointer-events: none;
+  z-index: 2;
+}
 .servant-pick {
   aspect-ratio: 1 / 1;
   min-height: 0;
@@ -618,6 +632,123 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ctx-item:hover { background: rgba(255,255,255,0.08); }
 .list-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 
+/* 自定义礼装管理 */
+.custom-modal {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.custom-manager-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 10px;
+}
+.custom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding-right: 4px;
+  max-height: 65vh;
+}
+.custom-list .custom-row {
+  align-items: flex-start;
+  padding: 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.custom-list .custom-row.disabled { opacity: 0.55; }
+.custom-row .tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(122,162,247,0.25);
+  color: #fff;
+  margin-left: 4px;
+}
+.custom-row .tag.off { background: rgba(255,255,255,0.15); }
+.custom-row .danger { border-color: var(--danger); color: var(--danger); }
+.custom-editor {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.15);
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 65vh;
+}
+.custom-editor .overlay-head { margin-bottom: 10px; }
+.custom-fields-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.custom-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.condition-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.condition-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--panel2);
+}
+.condition-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.trait-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.trait-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(122,162,247,0.2);
+  border: 1px solid rgba(122,162,247,0.5);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.chip-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+}
+.trait-add-row {
+  display: flex;
+  gap: 6px;
+}
+.trait-add-row input {
+  flex: 1;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
 /* 更新数据弹窗 */
 .update-modal .update-items {
   display: flex;
@@ -787,6 +918,29 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .mode-switch button.active {
   border-color: var(--accent);
   background: rgba(122, 162, 247, 0.22);
+  color: #fff;
+}
+
+/* 服务器选择（日服 / 简中服） */
+.server-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.server-switch .server-label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.server-switch button {
+  min-width: 72px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.server-switch button.active {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.25);
   color: #fff;
 }
 

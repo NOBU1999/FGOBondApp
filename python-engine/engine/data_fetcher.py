@@ -216,10 +216,13 @@ def load_nice_equips(
     return _load_json_cached(region, NICE_EQUIP_FILE, cache_dir, "nice_equip", use_cache)
 
 
-def get_remote_export_meta(region: Optional[str] = None) -> Dict[str, str]:
+def get_remote_export_meta(
+    region: Optional[str] = None,
+    filename: str = NICE_SERVANT_FILE,
+) -> Dict[str, str]:
     """通过 HEAD 获取 Atlas 导出文件的 ETag/Last-Modified，用于应用内更新检测。"""
     region = _region_or_default(region)
-    url = export_url(region, NICE_SERVANT_FILE)
+    url = export_url(region, filename)
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "FGOBondApp/0.1"})
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
         return {
@@ -497,6 +500,21 @@ def parse_craft(equip: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # 构建数据库
 # ---------------------------------------------------------------------------
+def _cn_unavailable_bond_ce_ids(
+    conn: sqlite3.Connection,
+    cn_equips: List[Dict[str, Any]],
+) -> List[int]:
+    """对比当前 DB（JP 全量）与简中服礼装，找出简中服尚未实装的可选牵绊礼装 ID。
+
+    只处理 is_bond_ce = 1 的礼装，不扩展到全部礼装/从者。
+    """
+    cn_ids = {int(e.get("id")) for e in cn_equips}
+    rows = conn.execute(
+        "SELECT id FROM crafts WHERE is_bond_ce = 1"
+    ).fetchall()
+    return sorted(int(r["id"]) for r in rows if int(r["id"]) not in cn_ids)
+
+
 def build_database(
     region: Optional[str] = None,
     db_path: Optional[Path | str] = None,
@@ -557,6 +575,36 @@ def build_database(
         if parsed["is_bond_ce"]:
             bond_ce_count += 1
 
+    # 记录简中服尚未实装的可选牵绊礼装 ID：
+    # JP 全量库与 CN nice_equip 对比，仅针对 is_bond_ce=1 的礼装。
+    cn_unavailable_ids: List[int] = []
+    old_cn_unavailable_raw = database.get_meta(conn, "cn_unavailable_bond_ce_ids")
+    try:
+        if region == "CN":
+            cn_unavailable_ids = []
+            database.set_meta(conn, "cn_equip_etag", "")
+        else:
+            cn_equips = load_nice_equips("CN", use_cache=use_cache)
+            cn_unavailable_ids = _cn_unavailable_bond_ce_ids(conn, cn_equips)
+            try:
+                cn_meta = get_remote_export_meta("CN", NICE_EQUIP_FILE)
+                database.set_meta(conn, "cn_equip_etag", cn_meta["etag"])
+            except Exception:
+                pass
+    except Exception as exc:
+        # CN 对比失败不应阻断主数据更新；尽量沿用上一次的可用列表。
+        try:
+            cn_unavailable_ids = json.loads(old_cn_unavailable_raw or "[]")
+        except Exception:
+            cn_unavailable_ids = []
+        if progress:
+            progress(f"警告：无法获取简中服礼装数据，暂用上次的国服未实装列表（{exc}）")
+    database.set_meta(
+        conn,
+        "cn_unavailable_bond_ce_ids",
+        json.dumps(cn_unavailable_ids, ensure_ascii=False),
+    )
+
     # 记录数据版本信息，供应用内“检查更新/更新数据”使用
     try:
         remote_meta = get_remote_export_meta(region)
@@ -580,6 +628,7 @@ def build_database(
         "stage_trait_rows": stage_trait_count,
         "crafts": craft_count,
         "bond_ces": bond_ce_count,
+        "cn_unavailable_bond_ces": len(cn_unavailable_ids),
     }
     return stats
 
@@ -666,11 +715,24 @@ def update_database(
     conn = database.connect(db_path)
     database.init_db(conn)
     local_etag = database.get_meta(conn, "servant_etag")
+    local_cn_equip_etag = database.get_meta(conn, "cn_equip_etag")
     conn.close()
 
     remote_meta = get_remote_export_meta(region)
+    cn_remote_meta: Dict[str, str] = {"etag": "", "last_modified": ""}
+    if region != "CN":
+        try:
+            cn_remote_meta = get_remote_export_meta("CN", NICE_EQUIP_FILE)
+        except Exception:
+            cn_remote_meta = {"etag": "", "last_modified": ""}
+    cn_changed = bool(
+        region != "CN"
+        and cn_remote_meta["etag"]
+        and local_cn_equip_etag != cn_remote_meta["etag"]
+    )
     if (
         not force
+        and not cn_changed
         and local_etag
         and remote_meta["etag"]
         and local_etag == remote_meta["etag"]

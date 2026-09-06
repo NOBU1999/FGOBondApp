@@ -12,6 +12,8 @@ function toPlain(value) {
 contextBridge.exposeInMainWorld("fgo", {
   // 基础信息
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
+  setServerRegion: (region) => ipcRenderer.invoke("app:set-server-region", toPlain(region)),
+  setGenericBondParticipation: (ids) => ipcRenderer.invoke("app:set-generic-participation", toPlain(ids)),
   getCostumeNames: () => ipcRenderer.invoke("app:costume-names"),
 
   // 数据查询
@@ -29,6 +31,8 @@ contextBridge.exposeInMainWorld("fgo", {
   importCapture: (content) => ipcRenderer.invoke("import:capture", toPlain(content)),
   getExclusions: () => ipcRenderer.invoke("exclusion:get"),
   saveExclusions: (exclusions) => ipcRenderer.invoke("exclusion:save", toPlain(exclusions)),
+  listCustomCrafts: () => ipcRenderer.invoke("custom:list"),
+  saveCustomCrafts: (items) => ipcRenderer.invoke("custom:save", toPlain(items)),
   listUserTeams: () => ipcRenderer.invoke("user:list-teams"),
   saveUserTeam: (team) => ipcRenderer.invoke("user:save-team", toPlain(team)),
   deleteUserTeam: (id) => ipcRenderer.invoke("user:delete-team", toPlain(id)),

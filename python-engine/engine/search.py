@@ -41,6 +41,17 @@ from . import models
 # 合成礼装 ID：-10 表示“通用5%”，允许在玩家位重复布置。
 GENERIC_UNIVERSAL5_ID = -10
 REPEATABLE_BOND_IDS = frozenset({GENERIC_UNIVERSAL5_ID})
+# 用户可手动选择、默认不参与自动搜索的通用礼装；开启参与后依赖 excluded 列表放行。
+GENERIC_BOND_CRAFT_IDS = frozenset({-20, -21, -22})
+
+
+def _repeatable_craft_ids(ctx: DataContext) -> Set[int]:
+    """返回引擎中允许重复布置的礼装 ID（内置通用5% + 用户标记可重复的礼装）。"""
+    ids = set(REPEATABLE_BOND_IDS)
+    for cid, craft in ctx.crafts.items():
+        if craft.repeatable:
+            ids.add(cid)
+    return ids
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +438,7 @@ def _is_merged_generic_universal5(ctx: DataContext, craft_id: int) -> bool:
     return (
         craft_id != GENERIC_UNIVERSAL5_ID
         and craft.is_bond_ce
+        and not craft.is_custom
         and craft.bonus_type == "universal"
         and abs(craft.bonus_value - 0.05) < 1e-9
         and craft.support_bonus <= 0
@@ -446,9 +458,14 @@ def _is_event_limited_craft(ctx: DataContext, craft_id: int) -> bool:
 
 
 def _is_ouma_craft(ctx: DataContext, craft_id: int) -> bool:
-    """英灵逢魔系列：用户明确要求不进入推荐/自动池，也不参与启发式评分。"""
+    """英灵逢魔系列：用户明确要求不进入推荐/自动池，也不参与启发式评分。
+
+    合成“通用英灵逢魔”（-21）不算被全局排除的个别英灵逢魔礼装。
+    """
     craft = ctx.crafts.get(craft_id)
     if craft is None:
+        return False
+    if craft_id in GENERIC_BOND_CRAFT_IDS:
         return False
     name = craft.name or ""
     return "英灵逢魔" in name
@@ -598,10 +615,11 @@ def _generate_craft_combinations_with_cost(
                 seen.add(entry)
 
     # 再按“礼装多优先”生成常规组合；种子已经保证了每个礼装在低数量组合里也有代表。
+    repeatable_ids = _repeatable_craft_ids(ctx)
     stopped_size: Optional[int] = None
     for size in range(max_size, -1, -1):
         for c in _generate_multiset_combinations(
-            candidate_ids, size, set(REPEATABLE_BOND_IDS)
+            candidate_ids, size, repeatable_ids
         ):
             cost = combo_cost(c)
             entry = (cost, tuple(c))
@@ -824,6 +842,14 @@ def _filter_support_options_for_team(
         if craft.support_bonus > 0:
             result.append(cid)  # 午茶：助战专属高加成
             continue
+        if craft.flat_bonus > 0:
+            # 自定义固定数值加成必须参与助战候选
+            result.append(cid)
+            continue
+        if cid in GENERIC_BOND_CRAFT_IDS:
+            # 通用礼装：用户右键开启后进入自动搜索
+            result.append(cid)
+            continue
         if craft.bonus_type == "universal" and craft.bonus_value >= 0.1:
             result.append(cid)  # 午餐 10%：高于 5% 通用，自动时保留即可
             continue
@@ -854,13 +880,15 @@ def _auto_support_craft_options(ctx: DataContext, req: CalculationRequest) -> Li
     for cid, craft in ctx.crafts.items():
         if not craft.is_bond_ce:
             continue
+        if cid in req.excluded_craft_ids:
+            continue
         if _is_event_limited_craft(ctx, cid):
             continue
         if _is_ouma_craft(ctx, cid):
             continue
         if _is_merged_generic_universal5(ctx, cid):
             continue
-        if not (craft.bonus_value > 0.025 or craft.support_bonus > 0.025):
+        if not (craft.bonus_value > 0.025 or craft.support_bonus > 0.025 or craft.flat_bonus > 0 or cid in GENERIC_BOND_CRAFT_IDS):
             continue
         options.append(cid)
     # 让高价值候选排在前面，便于后续截断/稳定
@@ -1093,11 +1121,12 @@ def search_top_teams(
         raise ValueError(f"当前配置下最小Cost为{min_total_cost}，请提高上限")
 
     trait_ids = _trait_craft_ids(ctx)
+    repeatable_ids = _repeatable_craft_ids(ctx)
     # 固定礼装已占用的牵绊礼装不再进入可挑选池（不重复使用同一张）。
-    # 例外：可重复的“通用5%”即使已固定，仍允许继续放入自由位。
+    # 例外：可重复礼装即使已固定，仍允许继续放入自由位。
     used_craft_ids = {
         cid for cid in bp.fixed_bond_craft_ids
-        if cid not in REPEATABLE_BOND_IDS
+        if cid not in repeatable_ids
     }
     bond_candidates = [
         cid for cid, craft in ctx.crafts.items()
@@ -1107,14 +1136,16 @@ def search_top_teams(
         and not _is_merged_generic_universal5(ctx, cid)
         and not _is_event_limited_craft(ctx, cid)
         and not _is_ouma_craft(ctx, cid)
-        # 需求过滤：满破 2.5% 及以下的低价值牵绊礼装不进入推荐池
-        and (craft.bonus_value > 0.025 or craft.support_bonus > 0.025)
+        # 需求过滤：满破 2.5% 及以下的低价值牵绊礼装不进入推荐池；
+        # 自定义礼装只要设置了固定数值加成也进入候选；通用礼装由前端参与开关控制。
+        and (craft.bonus_value > 0.025 or craft.support_bonus > 0.025 or craft.flat_bonus > 0 or cid in GENERIC_BOND_CRAFT_IDS)
         # 午茶等带“助战加成”的礼装只能放助战位，不能进玩家自由位
         and craft.support_bonus <= 0
     ]
     bond_candidates.sort(key=lambda cid: (
         ctx.crafts[cid].bonus_type != "universal",
         -ctx.crafts[cid].bonus_value,
+        -ctx.crafts[cid].flat_bonus,
         -ctx.crafts[cid].support_bonus,
     ))
 
@@ -1280,7 +1311,7 @@ def search_top_teams(
                             support_second_craft_id is not None
                             and support_craft_id is not None
                             and support_second_craft_id == support_craft_id
-                            and support_second_craft_id not in REPEATABLE_BOND_IDS
+                            and support_second_craft_id not in repeatable_ids
                             and support_second_craft_id > 0
                         ):
                             continue
@@ -1310,26 +1341,40 @@ def search_top_teams(
 
                         metrics = calculator.calculate_team_metrics(ctx, team)
                         evaluated_total += 1
-                        total = metrics["totalMultiplier"]
+                        multipliers = metrics["multipliers"]
+                        flat_bonuses = metrics.get("flatBonuses", [0.0] * len(multipliers))
+                        total_flat = metrics.get("totalFlatBonus", 0.0)
+                        total_mult = metrics["totalMultiplier"]
+                        base_bond = float(team.base_bond or 0.0)
+                        # 有基础牵绊或固定数值加成时，按“最终牵绊点”排序；
+                        # 否则保持原来的总倍率排序。
+                        use_points = bool(base_bond or total_flat)
+                        total_score = (total_mult * base_bond + total_flat) if use_points else total_mult
 
                         if req.strategy == STRATEGY_TARGET_MAX:
                             target_id = req.target_servant_id
-                            target_mult = next(
-                                (
-                                    m
-                                    for p, m in zip(team.players, metrics["multipliers"])
-                                    if p.servant_id == target_id
-                                ),
-                                0.0,
+                            target_idx = next(
+                                (i for i, p in enumerate(team.players) if p.servant_id == target_id),
+                                None,
                             )
-                            score = target_mult * 10000 + total
+                            if target_idx is None:
+                                target_value = 0.0
+                            elif use_points:
+                                target_value = multipliers[target_idx] * base_bond + flat_bonuses[target_idx]
+                            else:
+                                target_value = multipliers[target_idx]
+                            score = target_value * 10000 + total_score
                         elif req.strategy == STRATEGY_BALANCED:
-                            vals = metrics["multipliers"]
+                            vals = (
+                                [m * base_bond + f for m, f in zip(multipliers, flat_bonuses)]
+                                if use_points
+                                else multipliers
+                            )
                             avg = (sum(vals) / len(vals)) if vals else 0
                             variance = sum((v - avg) ** 2 for v in vals) / len(vals) if vals else 0
-                            score = total * 0.85 - variance * 2.0
+                            score = total_score * 0.85 - variance * 2.0
                         else:
-                            score = total
+                            score = total_score
 
                         # 同一组玩家从者只保留最优礼装/位置组合，避免 Top20 全是同阵容换礼装
                         old = best_by_set.get(servant_set)

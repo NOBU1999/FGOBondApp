@@ -23,12 +23,47 @@ function sendProgress(event, text) {
 
 function registerIpcHandlers() {
   // 应用基本信息
-  ipcMain.handle("app:get-info", () => ({
-    appRoot: getAppRoot(),
-    dbPath: getDbPath(),
-    version: require("../package.json").version,
-    platform: process.platform,
-  }));
+  ipcMain.handle("app:get-info", () => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return {
+        appRoot: getAppRoot(),
+        dbPath: getDbPath(),
+        version: require("../package.json").version,
+        platform: process.platform,
+        serverRegion: database.getServerRegion(db),
+        cnUnavailableBondCeIds: database.getCnUnavailableBondCeIds(db),
+        genericParticipatingCraftIds: database.getGenericBondParticipation(db),
+      };
+    } finally {
+      db.close();
+    }
+  });
+
+  // 服务器设置（日服/简中服）
+  ipcMain.handle("app:set-server-region", (_e, region) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      database.setServerRegion(db, region === "cn" ? "cn" : "jp");
+      return database.getServerRegion(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  // 通用礼装是否参与自动搜索
+  ipcMain.handle("app:set-generic-participation", (_e, ids) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      database.setGenericBondParticipation(db, ids || []);
+      return database.getGenericBondParticipation(db);
+    } finally {
+      db.close();
+    }
+  });
 
   // ---------------- DB 查询 ----------------
   ipcMain.handle("db:list-servants", () => {
@@ -91,6 +126,26 @@ function registerIpcHandlers() {
     try {
       database.saveExclusions(db, exclusions || {});
       return database.getExclusions(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("custom:list", () => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.listCustomCrafts(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("custom:save", (_e, items) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.saveCustomCrafts(db, items || []);
     } finally {
       db.close();
     }

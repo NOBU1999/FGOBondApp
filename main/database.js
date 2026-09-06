@@ -59,6 +59,19 @@ function ensureSchema(db) {
       target_id INTEGER NOT NULL,
       UNIQUE(target_type, target_id)
     );
+    CREATE TABLE IF NOT EXISTS custom_crafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      craft_type TEXT NOT NULL DEFAULT 'bond',
+      cost INTEGER NOT NULL DEFAULT 0,
+      rarity INTEGER NOT NULL DEFAULT 0,
+      percent_bonus REAL NOT NULL DEFAULT 0,
+      flat_bonus REAL NOT NULL DEFAULT 0,
+      condition_groups_json TEXT NOT NULL DEFAULT '[]',
+      repeatable INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS user_box (
       servant_id INTEGER PRIMARY KEY,
       stage TEXT DEFAULT 'fourth',
@@ -339,6 +352,118 @@ function saveExclusions(db, exclusions) {
   }
 }
 
+function getMetaValue(db, key) {
+  const row = db.prepare("SELECT value FROM app_meta WHERE key = ?").get(key);
+  return row ? row.value : null;
+}
+
+function setMetaValue(db, key, value) {
+  db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)").run(key, String(value));
+}
+
+function getCnUnavailableBondCeIds(db) {
+  try {
+    const raw = getMetaValue(db, "cn_unavailable_bond_ce_ids");
+    const list = JSON.parse(raw || "[]");
+    return Array.isArray(list) ? list.map(Number).filter((n) => Number.isFinite(n)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function getServerRegion(db) {
+  const raw = getMetaValue(db, "server_region");
+  return raw === "cn" ? "cn" : "jp";
+}
+
+function setServerRegion(db, region) {
+  setMetaValue(db, "server_region", region === "cn" ? "cn" : "jp");
+}
+
+function getGenericBondParticipation(db) {
+  try {
+    const raw = getMetaValue(db, "generic_bond_participation");
+    const list = JSON.parse(raw || "[]");
+    return Array.isArray(list) ? list.map(Number).filter((n) => Number.isFinite(n)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function setGenericBondParticipation(db, ids) {
+  const list = Array.from(new Set((ids || []).map(Number))).filter((n) => Number.isFinite(n));
+  setMetaValue(db, "generic_bond_participation", JSON.stringify(list));
+  return getGenericBondParticipation(db);
+}
+
+function listCustomCrafts(db) {
+  const rows = all(
+    db,
+    "SELECT id, name, craft_type AS craftType, cost, rarity, percent_bonus AS percentBonus, flat_bonus AS flatBonus, condition_groups_json AS conditionGroupsJson, repeatable, enabled FROM custom_crafts ORDER BY id"
+  );
+  for (const r of rows) {
+    try {
+      r.conditionGroups = JSON.parse(r.conditionGroupsJson || "[]");
+    } catch (_) {
+      r.conditionGroups = [];
+    }
+    delete r.conditionGroupsJson;
+    r.percentBonus = Number(r.percentBonus || 0);
+    r.flatBonus = Number(r.flatBonus || 0);
+    r.repeatable = !!r.repeatable;
+    r.enabled = !!r.enabled;
+  }
+  return rows;
+}
+
+function saveCustomCrafts(db, items) {
+  db.exec("BEGIN");
+  try {
+    db.exec("DELETE FROM custom_crafts");
+    const stmt = db.prepare(
+      `INSERT INTO custom_crafts
+        (id, name, craft_type, cost, rarity, percent_bonus, flat_bonus,
+         condition_groups_json, repeatable, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const item of items || []) {
+      const id = Number(item.id);
+      if (Number.isFinite(id) && id > 0) {
+        stmt.run(
+          id,
+          String(item.name || "").trim(),
+          item.craftType === "other" ? "other" : "bond",
+          Math.max(0, Math.round(Number(item.cost || 0))),
+          Math.max(0, Math.round(Number(item.rarity || 0))),
+          Number(item.percentBonus || 0),
+          Number(item.flatBonus || 0),
+          JSON.stringify(Array.isArray(item.conditionGroups) ? item.conditionGroups : []),
+          item.repeatable ? 1 : 0,
+          item.enabled === false ? 0 : 1
+        );
+      } else {
+        stmt.run(
+          null,
+          String(item.name || "").trim(),
+          item.craftType === "other" ? "other" : "bond",
+          Math.max(0, Math.round(Number(item.cost || 0))),
+          Math.max(0, Math.round(Number(item.rarity || 0))),
+          Number(item.percentBonus || 0),
+          Number(item.flatBonus || 0),
+          JSON.stringify(Array.isArray(item.conditionGroups) ? item.conditionGroups : []),
+          item.repeatable ? 1 : 0,
+          item.enabled === false ? 0 : 1
+        );
+      }
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return listCustomCrafts(db);
+}
+
 function saveUserTeam(db, team) {
   const supportCraftId = team.supportCraftId !== undefined && team.supportCraftId !== null ? team.supportCraftId : null;
   const supportSecondCraftId = team.supportSecondCraftId !== undefined && team.supportSecondCraftId !== null ? team.supportSecondCraftId : null;
@@ -428,5 +553,14 @@ module.exports = {
   deleteUserTeam,
   getExclusions,
   saveExclusions,
+  getMetaValue,
+  setMetaValue,
+  getCnUnavailableBondCeIds,
+  getServerRegion,
+  setServerRegion,
+  getGenericBondParticipation,
+  setGenericBondParticipation,
+  listCustomCrafts,
+  saveCustomCrafts,
   getEventBondBonuses,
 };

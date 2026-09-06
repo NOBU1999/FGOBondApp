@@ -85,6 +85,45 @@ const POSITION_LABELS = {
   back_right: "位6",
 };
 
+// 通用牵绊礼装：英灵肖像/英灵逢魔/英灵极点。
+// 默认不参与自动搜索；手动放置仍计算。可在礼装选择列表右键切换参与。
+const GENERIC_BOND_CRAFT_IDS = [-20, -21, -22];
+const GENERIC_BOND_CRAFT_DEFS = [
+  {
+    id: -20,
+    name: "通用英灵肖像",
+    rarity: 4,
+    cost: 5,
+    bonusType: "universal",
+    bonusValue: 0,
+    flatBonus: 50,
+    triggerTraits: [],
+    detail: "关卡通关时获得的牵绊值固定 +50（无条件）",
+  },
+  {
+    id: -21,
+    name: "通用英灵逢魔",
+    rarity: 4,
+    cost: 9,
+    bonusType: "trait",
+    bonusValue: 0.1,
+    flatBonus: 0,
+    triggerTraits: [["FSNServant"]],
+    detail: "关卡通关时获得的〔Fate/stay night从者〕牵绊值提升10%",
+  },
+  {
+    id: -22,
+    name: "通用英灵极点",
+    rarity: 4,
+    cost: 9,
+    bonusType: "universal",
+    bonusValue: 0.02,
+    flatBonus: 0,
+    triggerTraits: [],
+    detail: "关卡通关时获得的牵绊值提升2%（英灵极点系列通用）",
+  },
+];
+
 // 常用 trait key -> 中文显示（先用本地 Chaldea 生成的完整映射，再用常用项覆盖成更简短的名称）
 const TRAIT_LABELS = Object.assign({}, window.TRAIT_NAMES || {}, {
   alignmentGood: "善",
@@ -171,6 +210,14 @@ const App = {
       batchBonus: 0,
       slots: makeSlots(),
       mode: "normal",
+      serverRegion: "jp",
+      cnUnavailableCraftIds: [],
+      genericParticipatingCraftIds: [],
+      customCrafts: [],
+      customModalVisible: false,
+      customEditing: null,
+      customDraft: null,
+      customTraitInputs: [],
       crownClass: "all",
       baseBond: 0,
       costLimit: 116,
@@ -246,12 +293,17 @@ const App = {
           !c.isEventLimited &&
           (c.bonusValue || 0) > 0.025 &&
           !String(c.name || "").includes("英灵逢魔") &&
-          !this.isGenericUniversal5Actual(c)
+          !this.isGenericUniversal5Actual(c) &&
+          !this.isCnUnavailableCraft(c)
       );
-      return [this.universal5Craft, ...actual];
+      // 自定义牵绊礼装直接并入可选库，不再做 2.5% 门槛/合并通用5%处理
+      const custom = this.enabledCustomBondCrafts.filter(
+        (c) => c.id !== -10 && !this.isGenericUniversal5Actual(c)
+      );
+      return [this.universal5Craft, ...actual, ...custom, ...this.genericBondCrafts];
     },
     otherCraftOptions() {
-      return [
+      const synthetic = [
         { id: 0, name: "没有（无礼装）", rarity: 0, cost: 0, detail: "不装备礼装" },
         { id: -1, name: "其他礼装(1★)", rarity: 1, cost: 1, detail: "无牵绊加成，仅占 Cost 1" },
         { id: -2, name: "其他礼装(2★)", rarity: 2, cost: 3, detail: "无牵绊加成，仅占 Cost 3" },
@@ -259,6 +311,46 @@ const App = {
         { id: -4, name: "其他礼装(4★)", rarity: 4, cost: 9, detail: "无牵绊加成，仅占 Cost 9" },
         { id: -5, name: "其他礼装(5★)", rarity: 5, cost: 12, detail: "无牵绊加成，仅占 Cost 12" },
       ];
+      return [...synthetic, ...this.enabledCustomOtherCrafts];
+    },
+    enabledCustomBondCrafts() {
+      return (this.customCrafts || [])
+        .filter((c) => c.craftType === "bond" && c.enabled)
+        .map((c) => this.customToCraft(c));
+    },
+    enabledCustomOtherCrafts() {
+      return (this.customCrafts || [])
+        .filter((c) => c.craftType === "other" && c.enabled)
+        .map((c) => this.customToCraft(c));
+    },
+    genericBondCrafts() {
+      return GENERIC_BOND_CRAFT_DEFS.map((def) => ({
+        id: def.id,
+        name: def.name,
+        rarity: def.rarity,
+        cost: def.cost,
+        bonusType: def.bonusType,
+        bonusValue: def.bonusValue,
+        supportBonus: 0,
+        triggerTraitsJson: JSON.stringify(def.triggerTraits || []),
+        detail: def.detail,
+        isBondCe: true,
+        isEventLimited: false,
+        craftType: "bond",
+        flatBonus: def.flatBonus || 0,
+        repeatable: false,
+        isCustom: false,
+        isGenericCraft: true,
+        genericId: def.id,
+      }));
+    },
+    genericParticipatingSet() {
+      return new Set((this.genericParticipatingCraftIds || []).map(Number));
+    },
+    traitNameOptions() {
+      return Object.keys(TRAIT_LABELS)
+        .sort((a, b) => String(TRAIT_LABELS[a]).localeCompare(String(TRAIT_LABELS[b]), "zh"))
+        .map((key) => ({ key, label: TRAIT_LABELS[key] }));
     },
     avatarMissingSet() {
       return new Set([...this.missingAvatars, ...this.avatarBroken].map(String));
@@ -349,6 +441,9 @@ const App = {
     excludedCraftSet() {
       return new Set(this.excludedCrafts.map(Number));
     },
+    cnUnavailableCraftSet() {
+      return new Set((this.cnUnavailableCraftIds || []).map(Number));
+    },
     filteredExclusionServants() {
       const kw = this.exclusionKeyword.trim().toLowerCase();
       return this.ownedServants
@@ -386,23 +481,28 @@ const App = {
   },
   async created() {
     try {
-      const [info, servants, bondCrafts, allCrafts, userBox, presets, costumeNames, exclusions] = await Promise.all([
+      const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions] = await Promise.all([
         window.fgo.getAppInfo(),
         window.fgo.listServants(),
         window.fgo.listBondCrafts(),
         window.fgo.listAllCrafts(),
+        window.fgo.listCustomCrafts(),
         window.fgo.getUserBox(),
         window.fgo.listUserTeams(),
         window.fgo.getCostumeNames(),
         window.fgo.getExclusions(),
       ]);
       this.info = info;
+      this.serverRegion = (info && info.serverRegion) || "jp";
+      this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
+      this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || [];
       this.costumeNames = costumeNames || {};
       this.excludedServants = (exclusions && exclusions.servants) || [];
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
       this.servants = servants;
       this.bondCrafts = bondCrafts;
-      this.allCrafts = allCrafts;
+      this.customCrafts = customCrafts || [];
+      this.allCrafts = [...(allCrafts || []), ...(customCrafts || []).map((c) => this.customToCraft(c))];
       this.presets = presets || [];
       this.otherCrafts = (allCrafts || []).filter((c) => c.craftType === "other");
 
@@ -458,6 +558,8 @@ const App = {
       if (craftId === 0 || (craftId && craftId < 0)) {
         const syn = this.otherCraftOptions.find((o) => o.id === craftId);
         if (syn) return syn;
+        const generic = this.genericBondCrafts.find((o) => o.id === Number(craftId));
+        if (generic) return generic;
       }
       return this.craftMap[craftId] || null;
     },
@@ -497,6 +599,53 @@ const App = {
       if (!c) return "";
       return c.detail || c.name || "";
     },
+    customCraftDetail(c) {
+      if (!c) return "";
+      const isBond = c.craftType === "bond";
+      const parts = [];
+      const percent = Number(c.percentBonus || 0);
+      const flat = Number(c.flatBonus || 0);
+      if (percent > 0) parts.push(`牵绊加成 ${percent}%`);
+      if (flat > 0) parts.push(`最终牵绊固定 +${flat}`);
+      const groups = Array.isArray(c.conditionGroups) ? c.conditionGroups : [];
+      let suffix = "";
+      if (isBond && groups.length) {
+        suffix = "（" + groups
+          .map((g) => (Array.isArray(g) ? g.map((t) => this.traitLabel(t)).join(" 且 ") : ""))
+          .filter(Boolean)
+          .join(" 或 ") + "）";
+      }
+      return `自定义${isBond ? "牵绊" : "其他"}礼装${parts.length ? "：" + parts.join("、") + suffix : ""}`;
+    },
+    customToCraft(c) {
+      if (!c) return null;
+      const isBond = c.craftType === "bond";
+      const groups = Array.isArray(c.conditionGroups) ? c.conditionGroups : [];
+      const percent = Number(c.percentBonus || 0);
+      const flat = Number(c.flatBonus || 0);
+      const bonusType = isBond
+        ? (groups.length ? "trait" : ((percent > 0 || flat > 0) ? "universal" : null))
+        : null;
+      return {
+        id: Number(c.id),
+        name: String(c.name || "").trim() || "未命名礼装",
+        cost: Number(c.cost || 0),
+        rarity: Number(c.rarity || 0),
+        bonusType,
+        bonusValue: percent / 100,
+        supportBonus: 0,
+        triggerTraitsJson: JSON.stringify(groups),
+        detail: this.customCraftDetail(c),
+        isBondCe: isBond,
+        isEventLimited: false,
+        craftType: c.craftType,
+        flatBonus: flat,
+        repeatable: !!c.repeatable,
+        isCustom: true,
+        enabled: c.enabled === false ? false : true,
+        customRaw: c,
+      };
+    },
     hasCraftImageId(craftId) {
       return CRAFT_IMAGE_IDS.has(Number(craftId));
     },
@@ -513,10 +662,30 @@ const App = {
       // 把普通（无助战加成）的 5% 通用牵绊礼装合并成上面的“通用5%”
       return (
         c &&
+        !c.isCustom &&
         c.bonusType === "universal" &&
         Math.abs((c.bonusValue || 0) - 0.05) < 1e-9 &&
         !(Number(c.supportBonus || 0) > 0)
       );
+    },
+    isCnUnavailableCraft(c) {
+      // 简中服模式下，把本地识别出的“国服尚未实装”礼装从可选库/自动计算中排除
+      if (!c) return false;
+      return this.serverRegion === "cn" && this.cnUnavailableCraftSet.has(Number(c.id));
+    },
+    async setServerRegion(region) {
+      const next = region === "cn" ? "cn" : "jp";
+      const previous = this.serverRegion;
+      if (previous === next) return;
+      this.serverRegion = next;
+      this.results = [];
+      this.currentPage = 1;
+      try {
+        await window.fgo.setServerRegion(next);
+      } catch (e) {
+        this.serverRegion = previous;
+        this.error = "保存服务器设置失败：" + (e.message || String(e));
+      }
     },
     slotPosition(i) { return POSITION_KEYS[i]; },
     matchesClassFilter(servantClass, filterValue) {
@@ -840,17 +1009,24 @@ const App = {
       this.box = saved;
     },
     async reloadAllData() {
-      const [servants, bondCrafts, allCrafts, costumeNames, exclusions, eventBonuses] = await Promise.all([
+      const [info, servants, bondCrafts, allCrafts, customCrafts, costumeNames, exclusions, eventBonuses] = await Promise.all([
+        window.fgo.getAppInfo(),
         window.fgo.listServants(),
         window.fgo.listBondCrafts(),
         window.fgo.listAllCrafts(),
+        window.fgo.listCustomCrafts(),
         window.fgo.getCostumeNames(),
         window.fgo.getExclusions(),
         window.fgo.getEventBondBonuses(),
       ]);
+      this.info = info || this.info;
+      this.serverRegion = (info && info.serverRegion) || this.serverRegion || "jp";
+      this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
+      this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || this.genericParticipatingCraftIds || [];
       this.servants = servants || [];
       this.bondCrafts = bondCrafts || [];
-      this.allCrafts = allCrafts || [];
+      this.customCrafts = customCrafts || [];
+      this.allCrafts = [...(allCrafts || []), ...(customCrafts || []).map((c) => this.customToCraft(c))];
       this.otherCrafts = (allCrafts || []).filter((c) => c.craftType === "other");
       this.costumeNames = costumeNames || {};
       this.excludedServants = (exclusions && exclusions.servants) || [];
@@ -975,7 +1151,9 @@ const App = {
     },
     isRepeatableCraft(craftId) {
       // 合成礼装均可重复：通用5%（-10）、无礼装（0）、其他礼装（-1~-5）
-      return Number(craftId) <= 0;
+      if (Number(craftId) <= 0) return true;
+      const c = this.craftById(craftId);
+      return !!(c && c.repeatable);
     },
     isSupportOnlyCraft(craftId) {
       const c = this.craftById(craftId);
@@ -1238,6 +1416,7 @@ const App = {
           const availableCrafts = this.meaningfulBondCrafts.filter(
             (c) =>
               !this.isSupportOnlyCraft(c.id) &&
+              (!this.isGenericCraft(c) || this.isGenericParticipating(c)) &&
               (this.isRepeatableCraft(c.id) || !usedCraftIds.has(c.id))
           );
           const c = availableCrafts.length ? availableCrafts[Math.floor(Math.random() * availableCrafts.length)] : null;
@@ -1379,6 +1558,194 @@ const App = {
       }
     },
 
+    // ---------- 自定义礼装 ----------
+    openCustomManager() {
+      this.customModalVisible = true;
+    },
+    closeCustomManager() {
+      if (this.customDraft && !confirm("当前编辑尚未保存，确定关闭吗？")) return;
+      this.customDraft = null;
+      this.customTraitInputs = [];
+      this.customModalVisible = false;
+    },
+    blankCustomDraft() {
+      return {
+        id: 0,
+        name: "",
+        craftType: "bond",
+        cost: 12,
+        rarity: 5,
+        percentBonus: 0,
+        flatBonus: 0,
+        conditionGroups: [],
+        repeatable: false,
+        enabled: true,
+      };
+    },
+    newCustomCraft() {
+      this.customDraft = this.blankCustomDraft();
+      this.customEditing = null;
+      this.customTraitInputs = [];
+    },
+    editCustomCraft(item) {
+      const draft = JSON.parse(JSON.stringify(item || {}));
+      draft.conditionGroups = Array.isArray(draft.conditionGroups) ? draft.conditionGroups : [];
+      draft.cost = Number(draft.cost || 0);
+      draft.rarity = Number(draft.rarity || 0);
+      draft.percentBonus = Number(draft.percentBonus || 0);
+      draft.flatBonus = Number(draft.flatBonus || 0);
+      draft.repeatable = !!draft.repeatable;
+      draft.enabled = draft.enabled !== false;
+      this.customDraft = draft;
+      this.customEditing = item;
+      this.customTraitInputs = draft.conditionGroups.map(() => "");
+    },
+    async deleteCustomCraft(item) {
+      if (!item) return;
+      if (!confirm(`确定删除自定义礼装「${item.name || "未命名"}」吗？`)) return;
+      this.customCrafts = (this.customCrafts || []).filter((c) => Number(c.id) !== Number(item.id));
+      if (this.customEditing && Number(this.customEditing.id) === Number(item.id)) {
+        this.customEditing = null;
+        this.customDraft = null;
+        this.customTraitInputs = [];
+      }
+      await this.persistCustomCrafts();
+    },
+    async toggleCustomCraft(item) {
+      if (!item) return;
+      item.enabled = !item.enabled;
+      await this.persistCustomCrafts();
+    },
+    customAddGroup() {
+      if (!this.customDraft) return;
+      this.customDraft.conditionGroups = this.customDraft.conditionGroups || [];
+      this.customDraft.conditionGroups.push([]);
+      this.customTraitInputs.push("");
+    },
+    customSetUnconditional() {
+      if (!this.customDraft) return;
+      this.customDraft.conditionGroups = [];
+      this.customTraitInputs = [];
+    },
+    customSetConditional() {
+      if (!this.customDraft) return;
+      if (!this.customDraft.conditionGroups || !this.customDraft.conditionGroups.length) {
+        this.customDraft.conditionGroups = [[]];
+        this.customTraitInputs = [""];
+      }
+    },
+    customCancelEdit() {
+      this.customDraft = null;
+      this.customTraitInputs = [];
+    },
+    customRemoveGroup(index) {
+      if (!this.customDraft) return;
+      this.customDraft.conditionGroups.splice(index, 1);
+      this.customTraitInputs.splice(index, 1);
+    },
+    resolveCustomTrait(input) {
+      const kw = String(input || "").trim().toLowerCase();
+      if (!kw) return null;
+      const keys = Object.keys(TRAIT_LABELS);
+      let found = keys.find((k) => k.toLowerCase() === kw);
+      if (!found) found = keys.find((k) => String(TRAIT_LABELS[k]).toLowerCase() === kw);
+      if (!found) found = keys.find((k) => String(TRAIT_LABELS[k]).toLowerCase().includes(kw));
+      return found || null;
+    },
+    customAddTrait(groupIndex) {
+      if (!this.customDraft) return;
+      const input = (this.customTraitInputs[groupIndex] || "").trim();
+      const key = this.resolveCustomTrait(input);
+      if (!key) {
+        alert("找不到该条件，请输入或选择有效的特性名称/关键字");
+        return;
+      }
+      const groups = this.customDraft.conditionGroups || [];
+      if (!groups[groupIndex]) groups[groupIndex] = [];
+      if (!groups[groupIndex].includes(key)) groups[groupIndex].push(key);
+      this.customTraitInputs[groupIndex] = "";
+    },
+    customRemoveTrait(groupIndex, key) {
+      if (!this.customDraft) return;
+      const groups = this.customDraft.conditionGroups || [];
+      if (groups[groupIndex]) {
+        groups[groupIndex] = groups[groupIndex].filter((k) => k !== key);
+        if (!groups[groupIndex].length) this.customRemoveGroup(groupIndex);
+      }
+    },
+    async saveCustomCraft() {
+      if (!this.customDraft) return;
+      const name = String(this.customDraft.name || "").trim();
+      if (!name) {
+        alert("请输入礼装名称");
+        return;
+      }
+      const draft = this.customDraft;
+      const groups = (draft.conditionGroups || [])
+        .map((g) => (Array.isArray(g) ? g.filter(Boolean) : []))
+        .filter((g) => g.length);
+      const item = {
+        id: Number(draft.id || 0),
+        name,
+        craftType: draft.craftType === "other" ? "other" : "bond",
+        cost: Math.max(0, Number(draft.cost || 0)),
+        rarity: Math.max(0, Number(draft.rarity || 0)),
+        percentBonus: Math.max(0, Number(draft.percentBonus || 0)),
+        flatBonus: Math.max(0, Number(draft.flatBonus || 0)),
+        conditionGroups: groups,
+        repeatable: !!draft.repeatable,
+        enabled: draft.enabled !== false,
+      };
+      if (item.id > 0) {
+        const idx = this.customCrafts.findIndex((c) => Number(c.id) === Number(item.id));
+        if (idx >= 0) this.customCrafts.splice(idx, 1, item);
+        else this.customCrafts.push(item);
+      } else {
+        this.customCrafts.push(item);
+      }
+      await this.persistCustomCrafts();
+      this.customDraft = null;
+      this.customTraitInputs = [];
+      this.customModalVisible = false;
+    },
+    async persistCustomCrafts() {
+      try {
+        const [builtinAll, saved] = await Promise.all([
+          window.fgo.listAllCrafts(),
+          window.fgo.saveCustomCrafts(plainClone(this.customCrafts || [])),
+        ]);
+        this.customCrafts = saved || [];
+        this.allCrafts = [...(builtinAll || []), ...(saved || []).map((c) => this.customToCraft(c))];
+      } catch (err) {
+        alert("保存自定义礼装失败：" + (err && err.message ? err.message : String(err)));
+        throw err;
+      }
+    },
+
+    // ---------- 通用礼装参与开关 ----------
+    isGenericCraft(c) {
+      if (!c) return false;
+      return !!(c.isGenericCraft || GENERIC_BOND_CRAFT_IDS.includes(Number(c.id)));
+    },
+    isGenericParticipating(c) {
+      if (!c) return false;
+      return this.genericParticipatingSet.has(Number(c.id));
+    },
+    async toggleGenericCraftParticipation(c) {
+      if (!c || !this.isGenericCraft(c)) return;
+      const id = Number(c.id);
+      const set = new Set(this.genericParticipatingCraftIds.map(Number));
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      const next = Array.from(set);
+      this.genericParticipatingCraftIds = next;
+      try {
+        this.genericParticipatingCraftIds = await window.fgo.setGenericBondParticipation(plainClone(next));
+      } catch (err) {
+        alert("保存通用礼装参与设置失败：" + (err && err.message ? err.message : String(err)));
+      }
+    },
+
     // ---------- 计算 ----------
     buildPayload() {
       const box = this.ownedServants.map((s) => {
@@ -1436,7 +1803,11 @@ const App = {
         strategy: this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
         excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
-        excludedCraftIds: this.excludedCrafts,
+        excludedCraftIds: Array.from(new Set([
+          ...(Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number),
+          ...(this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number),
+          ...this.genericBondCrafts.filter((c) => !this.isGenericParticipating(c)).map((c) => Number(c.id)),
+        ])),
         activityBonus: 0,
         teaBonus: 1,
         topN: 1000,
@@ -1621,6 +1992,7 @@ const App = {
       <div>
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
+        <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
         <button class="secondary" @click.stop="openUpdateModal">更新数据</button>
       </div>
     </div>
@@ -1629,6 +2001,13 @@ const App = {
     <div class="mode-switch">
       <button :class="{ active: mode === 'normal' }" @click="switchMode('normal')">普通战斗</button>
       <button :class="{ active: mode === 'crown' }" @click="switchMode('crown')">戴冠战模式</button>
+    </div>
+
+    <!-- 服务器选择 -->
+    <div class="server-switch">
+      <span class="server-label">服务器</span>
+      <button :class="{ active: serverRegion === 'jp' }" @click="setServerRegion('jp')">日服</button>
+      <button :class="{ active: serverRegion === 'cn' }" @click="setServerRegion('cn')">简中服</button>
     </div>
 
     <!-- 戴冠战职阶筛选（一级界面） -->
@@ -1791,7 +2170,7 @@ const App = {
         <div v-for="r in pagedResults" :key="r.rank" class="result-card">
           <div class="head">
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
-            <span v-if="r.baseBond" class="text-muted">基础 {{ formatBondNumber(r.baseBond) }} → 预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
+            <span v-if="r.totalBondPoints" class="text-muted"><template v-if="r.baseBond">基础 {{ formatBondNumber(r.baseBond) }} → </template>预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
             <span class="text-muted">Cost {{ r.costUsed }}/{{ costLimit }}</span>
             <span style="flex:1"></span>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
@@ -1817,7 +2196,7 @@ const App = {
                 <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
                 <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
                 <span v-if="!m.isSupport" class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
-                <span v-if="r.baseBond && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
+                <span v-if="r.totalBondPoints && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
               </div>
             </div>
           </div>
@@ -1862,10 +2241,12 @@ const App = {
             class="pick-card"
             :class="overlay.target === 'servant' ? 'servant-pick' : ''"
             @click="overlay.target === 'servant' ? chooseServant(overlay.slotIndex, item.id) : chooseCraft(overlay.slotIndex, item.id, overlay.craftIndex || 0)"
+            @contextmenu.prevent="overlay.target === 'craft' ? toggleGenericCraftParticipation(item) : null"
             @mouseenter="overlay.target === 'servant' ? showHover($event, item) : null"
             @mousemove="overlay.target === 'servant' ? moveHover($event) : null"
             @mouseleave="hideHover"
           >
+            <div v-if="overlay.target === 'craft' && isGenericCraft(item) && !isGenericParticipating(item)" class="pick-not-participate">不参与自动</div>
             <img v-if="overlay.target === 'servant' && !avatarMissingSet.has(String(item.id))" :src="avatarPath(item.id)" class="pick-avatar" alt="" @error="markAvatarBroken(item.id)" />
             <div v-else-if="overlay.target === 'servant'" class="pick-name">{{ item.name.charAt(0) }}</div>
             <template v-if="overlay.target === 'craft'">
@@ -1964,6 +2345,98 @@ const App = {
           <button class="secondary" @click="batchSelectedServants = []">取消当前选择</button>
           <button class="primary" @click="applyBatchBonus">应用加成</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 自定义礼装管理弹窗 -->
+    <div v-if="customModalVisible" class="modal-mask" @click.self="closeCustomManager">
+      <div class="modal-panel box-modal custom-modal">
+        <div class="overlay-head">
+          <h2>自定义礼装</h2>
+          <button class="secondary" @click="closeCustomManager">✕</button>
+        </div>
+        <div class="custom-manager-layout">
+          <div class="custom-list">
+            <button class="primary" style="margin-bottom:8px;width:100%" @click="newCustomCraft">＋ 新建礼装</button>
+            <div v-if="!customCrafts.length" class="empty">暂无自定义礼装</div>
+            <div v-for="c in customCrafts" :key="c.id" class="list-row custom-row" :class="{ disabled: !c.enabled }">
+              <div style="flex:1;min-width:0">
+                <div>
+                  {{ c.name }}
+                  <span class="tag">{{ c.craftType === 'bond' ? '牵绊' : '其他' }}</span>
+                  <span v-if="!c.enabled" class="tag off">停用</span>
+                </div>
+                <div class="text-muted small" style="margin-top:2px">{{ customCraftDetail(c) }}</div>
+              </div>
+              <button class="secondary" @click="editCustomCraft(c)">编辑</button>
+              <button class="secondary" @click="toggleCustomCraft(c)">{{ c.enabled ? '停用' : '启用' }}</button>
+              <button class="secondary danger" @click="deleteCustomCraft(c)">删除</button>
+            </div>
+          </div>
+          <div v-if="customDraft" class="custom-editor">
+            <div class="overlay-head">
+              <h3>{{ customEditing ? '编辑礼装' : '新建礼装' }}</h3>
+            </div>
+            <div class="field"><label>名称</label><input v-model.trim="customDraft.name" placeholder="礼装名称" /></div>
+            <div class="field">
+              <label>类型</label>
+              <select v-model="customDraft.craftType">
+                <option value="bond">牵绊礼装（参与引擎搜索/加成）</option>
+                <option value="other">其他礼装（手动占位/Cost，不参与加成搜索）</option>
+              </select>
+            </div>
+            <div class="custom-fields-row">
+              <div class="field"><label>Cost</label><input type="number" min="0" max="99" v-model.number="customDraft.cost" /></div>
+              <div class="field"><label>星级</label><input type="number" min="0" max="5" v-model.number="customDraft.rarity" /></div>
+            </div>
+            <template v-if="customDraft.craftType === 'bond'">
+              <div class="custom-fields-row">
+                <div class="field"><label>百分比加成（%）</label><input type="number" min="0" step="0.1" v-model.number="customDraft.percentBonus" /></div>
+                <div class="field"><label>固定数值加成</label><input type="number" min="0" step="1" v-model.number="customDraft.flatBonus" /></div>
+              </div>
+              <div class="field">
+                <label>
+                  <input type="checkbox" v-model="customDraft.repeatable" style="width:auto;margin-right:6px" />
+                  可以重复布置（同一张自定义礼装可放多个格子）
+                </label>
+              </div>
+              <div class="field">
+                <label>加成条件</label>
+                <div style="display:flex;gap:6px;margin-bottom:6px">
+                  <button class="secondary" :class="{ active: !customDraft.conditionGroups.length }" @click="customSetUnconditional">无条件</button>
+                  <button class="secondary" :class="{ active: customDraft.conditionGroups.length }" @click="customSetConditional">按条件</button>
+                </div>
+                <div class="text-muted small">同一组内 = “且”，不同组之间 = “或”</div>
+              </div>
+              <div v-if="customDraft.conditionGroups.length" class="condition-groups">
+                <div v-for="(group, gi) in customDraft.conditionGroups" :key="gi" class="condition-group">
+                  <div class="condition-group-head">
+                    <span>条件组 {{ gi + 1 }}</span>
+                    <button class="secondary" @click="customRemoveGroup(gi)">删除组</button>
+                  </div>
+                  <div class="trait-chips">
+                    <span v-for="tk in group" :key="tk" class="trait-chip">
+                      {{ traitLabel(tk) }}
+                      <button type="button" class="chip-x" @click="customRemoveTrait(gi, tk)">×</button>
+                    </span>
+                  </div>
+                  <div class="trait-add-row">
+                    <input v-model="customTraitInputs[gi]" list="custom-trait-options" placeholder="输入/选择特性，如 杀阶" @keyup.enter="customAddTrait(gi)" />
+                    <button class="secondary" @click="customAddTrait(gi)">添加条件</button>
+                  </div>
+                </div>
+                <button class="secondary" @click="customAddGroup">＋ 添加“或”条件组</button>
+              </div>
+            </template>
+            <div class="custom-editor-actions">
+              <button class="secondary" @click="customCancelEdit">取消</button>
+              <button class="primary" @click="saveCustomCraft">保存礼装</button>
+            </div>
+          </div>
+        </div>
+        <datalist id="custom-trait-options">
+          <option v-for="t in traitNameOptions" :key="t.key" :value="t.label">{{ t.key }}</option>
+        </datalist>
       </div>
     </div>
 

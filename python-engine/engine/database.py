@@ -106,6 +106,20 @@ CREATE TABLE IF NOT EXISTS user_teams (
     strategy TEXT DEFAULT 'total_max',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS custom_crafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    craft_type TEXT NOT NULL DEFAULT 'bond',
+    cost INTEGER NOT NULL DEFAULT 0,
+    rarity INTEGER NOT NULL DEFAULT 0,
+    percent_bonus REAL NOT NULL DEFAULT 0,
+    flat_bonus REAL NOT NULL DEFAULT 0,
+    condition_groups_json TEXT NOT NULL DEFAULT '[]',
+    repeatable INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
