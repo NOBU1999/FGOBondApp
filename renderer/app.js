@@ -1790,6 +1790,14 @@ const App = {
           fixedCrafts.push({ position: pos, craftId: slot.secondCraftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 1 });
         }
       });
+      const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
+      const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
+      const genericNotParticipatingIds = this.genericBondCrafts
+        .filter((c) => !this.isGenericParticipating(c))
+        .map((c) => Number(c.id));
+      // 玩家自由礼装位：手动排除 + 服务器未实装 + 通用礼装未开启参与，全部排除。
+      // 助战是“借别人”的：手动排除不生效；只排除服务器未实装和未开启参与的通用礼装。
+      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds];
       return {
         box,
         mode: this.mode,
@@ -1803,11 +1811,8 @@ const App = {
         strategy: this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
         excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
-        excludedCraftIds: Array.from(new Set([
-          ...(Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number),
-          ...(this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number),
-          ...this.genericBondCrafts.filter((c) => !this.isGenericParticipating(c)).map((c) => Number(c.id)),
-        ])),
+        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds])),
+        supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
         topN: 1000,

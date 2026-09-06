@@ -1,7 +1,7 @@
 {
   "name": "fgo-bond-recommender",
   "productName": "FGO牵绊推荐器",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "FGO 牵绊收益推荐系统（Electron + Python 引擎）",
   "main": "main/index.js",
   "author": "FGOBond",

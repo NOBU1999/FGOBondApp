@@ -115,6 +115,7 @@ class CalculationRequest:
     strategy: str = STRATEGY_TOTAL_MAX
     excluded_servant_ids: Set[int] = field(default_factory=set)
     excluded_craft_ids: Set[int] = field(default_factory=set)
+    support_excluded_craft_ids: Set[int] = field(default_factory=set)
     activity_bonus: float = 0.0
     tea_bonus: float = 1.0  # 1 表示使用午茶/助战加成档位
     # 戴冠战/普通模式
@@ -256,6 +257,7 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         strategy=strategy,
         excluded_servant_ids={int(x) for x in (data.get("excludedServantIds") or [])},
         excluded_craft_ids={int(x) for x in (data.get("excludedCraftIds") or [])},
+        support_excluded_craft_ids={int(x) for x in (data.get("supportExcludedCraftIds") or [])},
         activity_bonus=float(data.get("activityBonus", 0) or 0),
         tea_bonus=float(data.get("teaBonus", 1) or 1),
         mode=str(data.get("mode", "normal") or "normal").lower(),

@@ -880,7 +880,9 @@ def _auto_support_craft_options(ctx: DataContext, req: CalculationRequest) -> Li
     for cid, craft in ctx.crafts.items():
         if not craft.is_bond_ce:
             continue
-        if cid in req.excluded_craft_ids:
+        # 助战是“借别人”的：手动排除不影响助战自动池；
+        # 只有服务器未实装/通用礼装未开启参与等“客观不可用”才过滤。
+        if cid in req.support_excluded_craft_ids:
             continue
         if _is_event_limited_craft(ctx, cid):
             continue
