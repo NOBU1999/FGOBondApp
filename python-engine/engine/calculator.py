@@ -73,8 +73,10 @@ def _load_all_servants(conn: sqlite3.Connection) -> Dict[int, ServantInfo]:
 
 
 def _load_all_traits(conn: sqlite3.Connection) -> Dict[int, Dict[str, Set[str]]]:
+    # 旧库/新库都可能有名为 unknown 的占位特性；多个不同 trait id 都叫 unknown，
+    # 不能作为同一条件参与匹配，因此加载时统一丢弃。
     rows = conn.execute(
-        "SELECT servant_id, stage, trait FROM servant_stage_traits"
+        "SELECT servant_id, stage, trait FROM servant_stage_traits WHERE trait <> 'unknown'"
     ).fetchall()
     result: Dict[int, Dict[str, Set[str]]] = {}
     for r in rows:
@@ -83,7 +85,7 @@ def _load_all_traits(conn: sqlite3.Connection) -> Dict[int, Dict[str, Set[str]]]
 
     # 灵衣状态使用独立表，加载时表示为 costume_<id>，不占用普通再临阶段键。
     costume_rows = conn.execute(
-        "SELECT servant_id, costume_id, trait FROM servant_costume_traits"
+        "SELECT servant_id, costume_id, trait FROM servant_costume_traits WHERE trait <> 'unknown'"
     ).fetchall()
     for r in costume_rows:
         sid = int(r["servant_id"])
@@ -92,11 +94,27 @@ def _load_all_traits(conn: sqlite3.Connection) -> Dict[int, Dict[str, Set[str]]]
     return result
 
 
+def _clean_trigger_groups(groups: Any) -> List[List[str]]:
+    """清理礼装触发条件里的 unknown 占位名。
+
+    Atlas 中多个不同 trait id 都显示为 unknown，不能作为可匹配条件；
+    如果一组被清空就丢弃该组。
+    """
+    cleaned: List[List[str]] = []
+    for group in groups or []:
+        if not isinstance(group, list):
+            continue
+        names = [str(x) for x in group if x and str(x) != "unknown"]
+        if names:
+            cleaned.append(names)
+    return cleaned
+
+
 def _load_all_crafts(conn: sqlite3.Connection) -> Dict[int, CraftInfo]:
     rows = conn.execute("SELECT * FROM crafts").fetchall()
     result = {}
     for r in rows:
-        trigger = json.loads(r["trigger_traits_json"] or "[]")
+        trigger = _clean_trigger_groups(json.loads(r["trigger_traits_json"] or "[]"))
         result[int(r["id"])] = CraftInfo(
             id=int(r["id"]),
             name=r["name"],
@@ -216,12 +234,18 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
     if not team.players:
         return team
     player_crafts = [
-        ctx.crafts[p.craft_id] for p in team.players if p.craft_id is not None
+        ctx.crafts[cid]
+        for p in team.players
+        for cid in (p.craft_id, p.second_craft_id)
+        if cid is not None
     ]
     support_craft = (
         ctx.crafts.get(team.support_craft_id) if team.support_craft_id is not None else None
     )
-    player_crafts = _effect_crafts(player_crafts, support_craft)
+    support_second_craft = (
+        ctx.crafts.get(team.support_second_craft_id) if team.support_second_craft_id is not None else None
+    )
+    player_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
     stage_order = {s: i for i, s in enumerate(STAGES)}
 
     for p in team.players:
@@ -276,11 +300,7 @@ def universal_bonus(crafts: Iterable[CraftInfo]) -> float:
 
 
 def support_craft_bonus(craft: Optional[CraftInfo]) -> float:
-    """助战礼装中“助战位专属”的全队加成。
-
-    普通通用/特性礼装放在助战位时，直接按普通礼装参与 universal/trait 计算，
-    不再在这里重复叠加；这里只处理带 support_bonus 的礼装（如午茶）。
-    """
+    """单张助战礼装的“助战位专属”加成（如午茶）。"""
     if craft is None:
         return 0.0
     if craft.support_bonus > 0:
@@ -291,18 +311,26 @@ def support_craft_bonus(craft: Optional[CraftInfo]) -> float:
     return 0.0
 
 
+def support_crafts_bonus(*crafts: Optional[CraftInfo]) -> float:
+    """助战位多张礼装时，累加所有“助战位专属”加成。"""
+    return sum(support_craft_bonus(c) for c in crafts if c is not None)
+
+
 def _effect_crafts(
     player_crafts: List[CraftInfo],
     support_craft: Optional[CraftInfo],
+    support_second_craft: Optional[CraftInfo] = None,
 ) -> List[CraftInfo]:
     """把“普通助战礼装”纳入全队效果礼装列表。
 
     规则：只有 support_bonus<=0 的普通牵绊礼装才按正常礼装参与 universal/trait；
     带独立助战加成的礼装（如午茶）不重复计入普通加成。
     """
-    if support_craft is not None and support_craft.is_bond_ce and support_craft.support_bonus <= 0:
-        return player_crafts + [support_craft]
-    return player_crafts
+    result = list(player_crafts)
+    for craft in (support_craft, support_second_craft):
+        if craft is not None and craft.is_bond_ce and craft.support_bonus <= 0:
+            result.append(craft)
+    return result
 
 
 def frontline_bonus(position: str, support_in_front: bool) -> float:
@@ -334,6 +362,7 @@ def calculate_member_multiplier(
     activity_bonus: float,
     aura_bonus: float = 0.0,
     support_craft: Optional[CraftInfo] = None,
+    support_second_craft: Optional[CraftInfo] = None,
     support_in_front: bool = False,
 ) -> float:
     """计算单个非助战从者的最终倍率。
@@ -346,9 +375,9 @@ def calculate_member_multiplier(
     说明：个人加成是加算，不单独作为乘区。
     """
     front = frontline_bonus(position, support_in_front)
-    effect_crafts = _effect_crafts(player_crafts, support_craft)
+    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
     uni = universal_bonus(effect_crafts)
-    sc = support_craft_bonus(support_craft)
+    sc = support_crafts_bonus(support_craft, support_second_craft)
     tr = trait_bonus_for_servant(servant_traits, effect_crafts)
     max_bond_bonus = max_bond_count * 0.25
     return (
@@ -372,6 +401,8 @@ class PlacedMember:
     bond_switch2: bool
     aura_bonus: float = 0.0
     craft_id: Optional[int] = None
+    second_craft_id: Optional[int] = None
+    is_crown: bool = False
     fixed: bool = False
     stage_locked: bool = False  # True = 用户固定了阶段/灵衣，引擎不再自动改
 
@@ -383,10 +414,17 @@ class TeamConfig:
     support_position: Optional[str] = None
     support_servant_id: Optional[int] = None
     support_craft_id: Optional[int] = None
+    support_second_craft_id: Optional[int] = None
+    crown_positions: Set[str] = field(default_factory=set)
+    base_bond: float = 0.0
     activity_bonus: float = 0.0
 
 
 def team_cost(ctx: DataContext, team: TeamConfig) -> int:
+    """队伍 Cost：从者 Cost + 每个玩家位“主礼装位”的 Cost。
+
+    戴冠第二礼装位在计算时视为 0 Cost，不参与统计。
+    """
     total = 0
     for p in team.players:
         servant = ctx.servants.get(p.servant_id)
@@ -394,6 +432,7 @@ def team_cost(ctx: DataContext, team: TeamConfig) -> int:
         if p.craft_id is not None:
             craft = ctx.crafts.get(p.craft_id)
             total += craft.cost if craft else 0
+        # 不把 p.second_craft_id 的 Cost 计入
     return total
 
 
@@ -401,7 +440,10 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
     """轻量计算队伍核心指标（不生成完整 UI 明细，用于搜索阶段提速）。"""
     if team.players:
         player_crafts = [
-            ctx.crafts[p.craft_id] for p in team.players if p.craft_id is not None
+            ctx.crafts[cid]
+            for p in team.players
+            for cid in (p.craft_id, p.second_craft_id)
+            if cid is not None
         ]
     else:
         player_crafts = []
@@ -412,6 +454,11 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
     support_craft = (
         ctx.crafts.get(team.support_craft_id)
         if team.support_craft_id is not None
+        else None
+    )
+    support_second_craft = (
+        ctx.crafts.get(team.support_second_craft_id)
+        if team.support_second_craft_id is not None
         else None
     )
     support_in_front = bool(
@@ -437,6 +484,7 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
                 activity_bonus=activity_bonus,
                 aura_bonus=aura_bonus,
                 support_craft=support_craft,
+                support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
             )
         )
@@ -453,7 +501,10 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
     """返回队伍评分详情。"""
     if team.players:
         player_crafts = [
-            ctx.crafts[p.craft_id] for p in team.players if p.craft_id is not None
+            ctx.crafts[cid]
+            for p in team.players
+            for cid in (p.craft_id, p.second_craft_id)
+            if cid is not None
         ]
     else:
         player_crafts = []
@@ -467,13 +518,19 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
     support_craft = (
         ctx.crafts.get(team.support_craft_id) if team.support_craft_id is not None else None
     )
-    effect_crafts = _effect_crafts(player_crafts, support_craft)
+    support_second_craft = (
+        ctx.crafts.get(team.support_second_craft_id)
+        if team.support_second_craft_id is not None
+        else None
+    )
+    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
     support_in_front = bool(
         team.support_position is not None and team.support_position in FRONT_POSITIONS
     )
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
+    base_bond = float(team.base_bond or 0.0)
 
     members: List[Dict[str, Any]] = []
     total_multiplier = 0.0
@@ -485,6 +542,9 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             continue
         traits = ctx.servant_traits(p.servant_id, p.stage)
         craft = ctx.crafts.get(p.craft_id) if p.craft_id is not None else None
+        second_craft = (
+            ctx.crafts.get(p.second_craft_id) if p.second_craft_id is not None else None
+        )
 
         # 满绊且关闭开关二：个人收益为 0，但仍占位
         if p.max_bond and not p.bond_switch2:
@@ -500,6 +560,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 activity_bonus=activity_bonus,
                 aura_bonus=aura_bonus,
                 support_craft=support_craft,
+                support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
             )
             personal_bonus_used = p.personal_bonus
@@ -523,19 +584,24 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 "isSupport": False,
                 "isFixed": p.fixed,
                 "isMaxBond": p.max_bond,
+                "isCrown": p.is_crown,
                 "craftId": p.craft_id,
                 "craftName": craft.name if craft else "",
                 "craftType": "bond" if (craft and craft.is_bond_ce) else "other",
+                "secondCraftId": p.second_craft_id,
+                "secondCraftName": second_craft.name if second_craft else "",
+                "secondCraftType": "bond" if (second_craft and second_craft.is_bond_ce) else "other",
                 "bonusDetail": {
                     "frontlineBonus": frontline_bonus(p.position, support_in_front),
                     "universalCraftBonus": universal_bonus(effect_crafts),
-                    "supportCraftBonus": support_craft_bonus(support_craft),
+                    "supportCraftBonus": support_crafts_bonus(support_craft, support_second_craft),
                     "traitCraftBonus": trait_bonus_for_servant(traits, effect_crafts),
                     "maxBondBonus": max_bond_bonus,
                     "activityBonus": activity_bonus,
                     "auraBonus": round(aura_bonus, 4),
                     "personalBonus": personal_bonus_used,
                     "totalMultiplier": round(multiplier, 6),
+                    "bondPoints": round(multiplier * base_bond, 2) if base_bond else 0.0,
                 },
             }
         )
@@ -549,6 +615,11 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             if team.support_craft_id is not None
             else None
         )
+        second_craft = (
+            ctx.crafts.get(team.support_second_craft_id)
+            if team.support_second_craft_id is not None
+            else None
+        )
         support_member = {
             "position": team.support_position,
             "servantId": team.support_servant_id,
@@ -557,9 +628,13 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             "isSupport": True,
             "isFixed": False,
             "isMaxBond": False,
+            "isCrown": team.support_position in team.crown_positions,
             "craftId": team.support_craft_id,
             "craftName": craft.name if craft else "",
             "craftType": "bond" if (craft and craft.is_bond_ce) else "other",
+            "secondCraftId": team.support_second_craft_id,
+            "secondCraftName": second_craft.name if second_craft else "",
+            "secondCraftType": "bond" if (second_craft and second_craft.is_bond_ce) else "other",
             "bonusDetail": {
                 "frontlineBonus": 0.0,
                 "universalCraftBonus": 0.0,
@@ -570,6 +645,7 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 "auraBonus": 0.0,
                 "personalBonus": 0.0,
                 "totalMultiplier": 0.0,
+                "bondPoints": 0.0,
             },
         }
 
@@ -581,6 +657,8 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
     return {
         "totalMultiplier": round(total_multiplier, 6),
         "costUsed": team_cost(ctx, team),
+        "baseBond": base_bond,
+        "totalBondPoints": round(total_multiplier * base_bond, 2) if base_bond else 0.0,
         "team": all_members,
         "maxBondStats": {
             "count": max_bond_count,

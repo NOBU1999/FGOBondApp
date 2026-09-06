@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from . import calculator
 from .calculator import DataContext, PlacedMember, TeamConfig
 from .models import (
+    CLASS_GROUPS,
     FRONT_POSITIONS,
     POSITIONS,
     STRATEGY_BALANCED,
@@ -51,6 +52,18 @@ class PlayerSlot:
     fixed_servant_id: Optional[int] = None
     fixed_craft_id: Optional[int] = None
     fixed_craft_type: Optional[str] = None  # bond / other
+    is_crown: bool = False
+    fixed_second_craft_id: Optional[int] = None
+    fixed_second_craft_type: Optional[str] = None  # bond / other
+
+
+@dataclass
+class CraftSlot:
+    """玩家位上的一个物理礼装格。index=0 主礼装位，index=1 冠位第二礼装位。"""
+    position: str
+    index: int = 0
+    fixed_craft_id: Optional[int] = None
+    fixed_craft_type: Optional[str] = None  # bond / other
 
 
 @dataclass
@@ -58,14 +71,16 @@ class Blueprint:
     support_position: str
     support_servant_id: Optional[int]  # None = auto
     support_craft_id: Optional[int]    # None = auto
+    support_second_craft_id: Optional[int] = None
     player_slots: List[PlayerSlot] = field(default_factory=list)
     fixed_player_members: List[PlacedMember] = field(default_factory=list)
     free_servant_positions: List[str] = field(default_factory=list)
-    # 没有固定礼装、可放牵绊礼装的玩家位
+    player_craft_slots: List[CraftSlot] = field(default_factory=list)
     free_bond_positions: List[str] = field(default_factory=list)
     fixed_bond_craft_ids: List[int] = field(default_factory=list)
     fixed_other_craft_ids: List[int] = field(default_factory=list)
     fixed_servant_ids: Set[int] = field(default_factory=set)
+    crown_positions: Set[str] = field(default_factory=set)
 
 
 def _box_map(req: CalculationRequest) -> Dict[int, BoxServant]:
@@ -89,23 +104,41 @@ def _choose_support_position(
     return POSITIONS[-1]
 
 
+def _servant_in_class_group(ctx: DataContext, servant_id: int, class_group: Optional[str]) -> bool:
+    if not class_group:
+        return True
+    allowed = CLASS_GROUPS.get(class_group)
+    if allowed is None:
+        return True
+    info = ctx.servants.get(servant_id)
+    return bool(info and info.servant_class in allowed)
+
+
 def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
     """根据请求生成队伍布局。"""
+    if req.class_group and req.class_group not in CLASS_GROUPS:
+        raise ValueError(f"未知职阶筛选: {req.class_group}")
+
     box = _box_map(req)
-    # 支持位
-    # 先按固定从者/礼装位置占用情况做初步检查，随后再选 support position
-    raw_slots = {pos: PlayerSlot(position=pos) for pos in POSITIONS}
+    raw_slots = {
+        pos: PlayerSlot(position=pos, is_crown=pos in req.crown_positions)
+        for pos in POSITIONS
+    }
 
     # 固定从者
     used_positions: Set[str] = set()
     fixed_servant_ids: Set[int] = set()
     fixed_player_members: List[PlacedMember] = []
 
-    # 如果用户没给固定从者位置，按顺序从前排开始分配
     fixed_servants = list(req.fixed_servants)
     unspecified = [fs for fs in fixed_servants if not fs.position]
     specified = [fs for fs in fixed_servants if fs.position]
-    # 预占指定位置
+
+    def check_servant_class(sid: int) -> None:
+        if not _servant_in_class_group(ctx, sid, req.class_group):
+            name = (ctx.servants.get(sid).name if ctx.servants.get(sid) else sid)
+            raise ValueError(f"固定从者 {name} 不属于当前职阶筛选，请先调整职阶或移除该从者")
+
     for fs in specified:
         if fs.servant_id in fixed_servant_ids:
             raise ValueError(f"固定从者重复: {fs.servant_id}")
@@ -113,6 +146,7 @@ def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
             raise ValueError(f"未知位置: {fs.position}")
         if fs.position in used_positions:
             raise ValueError(f"固定从者位置冲突: {fs.position}")
+        check_servant_class(fs.servant_id)
         used_positions.add(fs.position)
         fixed_servant_ids.add(fs.servant_id)
         raw_slots[fs.position].fixed_servant_id = fs.servant_id
@@ -122,6 +156,7 @@ def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
             fs = unspecified.pop(0)
             if fs.servant_id in fixed_servant_ids:
                 raise ValueError(f"固定从者重复: {fs.servant_id}")
+            check_servant_class(fs.servant_id)
             used_positions.add(pos)
             fixed_servant_ids.add(fs.servant_id)
             raw_slots[pos].fixed_servant_id = fs.servant_id
@@ -129,52 +164,68 @@ def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
     if unspecified:
         raise ValueError("固定从者位置不足")
 
-    # 固定礼装
-    used_craft_positions: Set[str] = set()
+    # 固定礼装（主位 + 冠位第二礼装位）
+    used_craft_slots: Set[Tuple[str, int]] = set()
     fixed_bond_ids: List[int] = []
     fixed_other_ids: List[int] = []
     for fc in req.fixed_crafts:
+        slot_no = fc.slot
         if fc.position not in POSITIONS:
             raise ValueError(f"未知礼装位置: {fc.position}")
-        if fc.position in used_craft_positions:
-            raise ValueError(f"固定礼装位置冲突: {fc.position}")
+        if slot_no not in (0, 1):
+            raise ValueError(f"未知礼装槽位: {slot_no}")
+        if slot_no == 1 and not raw_slots[fc.position].is_crown:
+            raise ValueError(f"位置 {fc.position} 未设为冠位从者，不能有第二礼装")
         craft = ctx.crafts.get(fc.craft_id)
         if craft is None:
             raise ValueError(f"礼装不存在: {fc.craft_id}")
         # 英灵逢魔系列全局排除：即使是旧预设固定了也忽略，让该位置回退为自由位
         if fc.type == "bond" and _is_ouma_craft(ctx, fc.craft_id):
             continue
-        used_craft_positions.add(fc.position)
-        raw_slots[fc.position].fixed_craft_id = fc.craft_id
-        raw_slots[fc.position].fixed_craft_type = fc.type
+        key = (fc.position, slot_no)
+        if key in used_craft_slots:
+            raise ValueError(f"固定礼装位置冲突: {fc.position} 槽位 {slot_no}")
+        used_craft_slots.add(key)
+        if slot_no == 0:
+            raw_slots[fc.position].fixed_craft_id = fc.craft_id
+            raw_slots[fc.position].fixed_craft_type = fc.type
+        else:
+            raw_slots[fc.position].fixed_second_craft_id = fc.craft_id
+            raw_slots[fc.position].fixed_second_craft_type = fc.type
         if fc.type == "bond":
             fixed_bond_ids.append(fc.craft_id)
         else:
             fixed_other_ids.append(fc.craft_id)
 
-    # 助战位不能与固定礼装位冲突；助战从者允许和玩家位重复（与助战礼装规则一致）
     manual_support = SupportConfig(
         servant_id=req.support.servant_id if req.support else None,
         craft_id=req.support.craft_id if req.support else None,
+        second_craft_id=req.support.second_craft_id if req.support else None,
         position=req.support.position if req.support else None,
     )
     # 英灵逢魔系列全局排除：助战固定了也按“未指定礼装”处理
     if manual_support.craft_id is not None and _is_ouma_craft(ctx, manual_support.craft_id):
         manual_support.craft_id = None
+    if manual_support.second_craft_id is not None and _is_ouma_craft(ctx, manual_support.second_craft_id):
+        manual_support.second_craft_id = None
+    if manual_support.servant_id is not None and not _servant_in_class_group(
+        ctx, manual_support.servant_id, req.class_group
+    ):
+        name = ctx.servants.get(manual_support.servant_id)
+        raise ValueError(f"助战从者 {name.name if name else manual_support.servant_id} 不属于当前职阶筛选，请先调整职阶")
 
-    player_slots = [s for s in raw_slots.values()]
-    support_position = _choose_support_position(req, player_slots)
-    # 若 support 位被固定从者占用且手动指定了助战位，报错
+    player_slots_all = [s for s in raw_slots.values()]
+    support_position = _choose_support_position(req, player_slots_all)
     support_slot = raw_slots[support_position]
     if support_slot.fixed_servant_id is not None:
         raise ValueError(f"助战位与固定从者冲突: {support_position}")
-    if support_slot.fixed_craft_id is not None:
+    if support_slot.fixed_craft_id is not None or support_slot.fixed_second_craft_id is not None:
         raise ValueError(f"助战位与固定礼装冲突: {support_position}")
 
     # 玩家位 = 除 support_position 外的 5 个位置
     player_slots = [raw_slots[pos] for pos in POSITIONS if pos != support_position]
 
-    # 组装 fixed player members
+    # 组装 fixed player members（含主礼装/第二礼装）
     fixed_stage_by_position = {
         fs.position: fs.stage for fs in req.fixed_servants if fs.position
     }
@@ -196,6 +247,8 @@ def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
                 bond_switch1=bs.bond_switch1,
                 bond_switch2=bs.bond_switch2,
                 craft_id=slot.fixed_craft_id,
+                second_craft_id=slot.fixed_second_craft_id,
+                is_crown=slot.is_crown,
                 fixed=True,
                 stage_locked=user_stage is not None,
             )
@@ -204,21 +257,35 @@ def prepare_blueprint(req: CalculationRequest, ctx: DataContext) -> Blueprint:
     free_servant_positions = [
         s.position for s in player_slots if s.fixed_servant_id is None
     ]
+
+    # 玩家礼装物理槽。优先把自由礼装槽放在冠位槽前面（计算时优先填充冠位）。
+    player_craft_slots: List[CraftSlot] = []
+    for slot in sorted(player_slots, key=lambda s: (not s.is_crown, POSITIONS.index(s.position))):
+        player_craft_slots.append(CraftSlot(position=slot.position, index=0,
+                                             fixed_craft_id=slot.fixed_craft_id,
+                                             fixed_craft_type=slot.fixed_craft_type))
+        if slot.is_crown:
+            player_craft_slots.append(CraftSlot(position=slot.position, index=1,
+                                                 fixed_craft_id=slot.fixed_second_craft_id,
+                                                 fixed_craft_type=slot.fixed_second_craft_type))
     free_bond_positions = [
-        s.position for s in player_slots if s.fixed_craft_id is None
+        cs.position for cs in player_craft_slots if cs.fixed_craft_id is None
     ]
 
     bp = Blueprint(
         support_position=support_position,
         support_servant_id=manual_support.servant_id,
         support_craft_id=manual_support.craft_id,
+        support_second_craft_id=manual_support.second_craft_id,
         player_slots=player_slots,
         fixed_player_members=fixed_player_members,
         free_servant_positions=free_servant_positions,
+        player_craft_slots=player_craft_slots,
         free_bond_positions=free_bond_positions,
         fixed_bond_craft_ids=fixed_bond_ids,
         fixed_other_craft_ids=fixed_other_ids,
         fixed_servant_ids=fixed_servant_ids,
+        crown_positions=set(req.crown_positions),
     )
     return bp
 
@@ -462,10 +529,13 @@ def _default_servant_combo_limit(req: CalculationRequest) -> int:
 
 
 def _default_craft_combo_limit(req: CalculationRequest) -> int:
-    """大 Box 下控制单组从者要尝试的礼装组合数量，避免组合爆炸。"""
-    base = req.craft_pool_size * 10
-    dynamic = int(_time_budget_seconds(req) * 20)
-    return max(100, min(4000, max(base, dynamic)))
+    """大 Box 下控制单组从者要尝试的礼装组合数量，避免组合爆炸。
+
+    需要保留足够多的“少装一两张礼装”的组合：当 Cost 不够放满全部礼装时，
+    如果只截断在高数量组合，容易漏掉末尾的特性礼装（如杀阶 20% 礼装）。
+    """
+    dynamic = int(_time_budget_seconds(req) * 200)
+    return max(4000, min(12000, dynamic))
 
 
 def _generate_craft_combinations_with_cost(
@@ -473,23 +543,67 @@ def _generate_craft_combinations_with_cost(
     candidate_craft_ids: Sequence[int],
     free_slots_count: int,
     max_total: int = 200000,
+    zero_cost_slots: Optional[Sequence[bool]] = None,
 ) -> List[Tuple[int, Tuple[int, ...]]]:
     """生成 0..free_slots_count 的礼装组合，并带上礼装总Cost。
 
     返回 [(craftCost, craftIds), ...]，排序为“礼装数量多优先、Cost小优先”。
+    zero_cost_slots 与 free_bond_positions 对齐，True 表示该自由礼装格是冠位第二礼装位，
+    即使放了礼装也不计 Cost（仍参与加成）。
     """
     if free_slots_count <= 0:
         return [(0, ())]
+    zero = list(zero_cost_slots or [])
     result: List[Tuple[int, Tuple[int, ...]]] = []
     seen: set = set()
-    # 可重复礼装能填满所有空位，因此最大数量直接按空位数生成。
+
+    def combo_cost(c: Tuple[int, ...]) -> int:
+        costs = [ctx.crafts[cid].cost for cid in c]
+        total = sum(costs)
+        z = sum(1 for i in range(len(c)) if i < len(zero) and zero[i])
+        if z and costs:
+            costs.sort()
+            total -= sum(costs[-z:])
+        return total
+
+    candidate_ids = list(candidate_craft_ids)
+    cheapest_ids = sorted(
+        candidate_ids,
+        key=lambda cid: ctx.crafts[cid].cost if cid in ctx.crafts else 0,
+    )
     max_size = free_slots_count
+
+    # 多样性种子：确保每个候选礼装都在“少装 1~N 张”的组合里至少出现一次。
+    # 这样即使后续被 max_total 截断，也不会因为礼装排在候选池末尾而完全漏掉。
+    for size in range(1, max_size + 1):
+        for target in candidate_ids:
+            if len(result) >= max_total:
+                break
+            parts = [target]
+            for cid in cheapest_ids:
+                if len(parts) >= size:
+                    break
+                if cid != target:
+                    parts.append(cid)
+            # 候选池不足 size 时，只有可重复通用5%能补足；否则该种子不合法，跳过
+            if len(parts) < size and -10 not in candidate_ids:
+                continue
+            while len(parts) < size:
+                parts.append(-10)
+            c = tuple(sorted(parts))
+            cost = combo_cost(c)
+            entry = (cost, c)
+            if entry not in seen:
+                result.append(entry)
+                seen.add(entry)
+
+    # 再按“礼装多优先”生成常规组合；种子已经保证了每个礼装在低数量组合里也有代表。
     stopped_size: Optional[int] = None
     for size in range(max_size, -1, -1):
         for c in _generate_multiset_combinations(
-            candidate_craft_ids, size, set(REPEATABLE_BOND_IDS)
+            candidate_ids, size, set(REPEATABLE_BOND_IDS)
         ):
-            cost = sum(ctx.crafts[cid].cost for cid in c)
+            cost = combo_cost(c)
             entry = (cost, tuple(c))
             if entry not in seen:
                 result.append(entry)
@@ -499,24 +613,6 @@ def _generate_craft_combinations_with_cost(
                 break
         if stopped_size is not None:
             break
-
-    # 如果截断发生在大尺寸组合上（如 5 张礼装），较低尺寸的 4/3/2/1/0
-    # 可能完全没被生成，导致 Cost 只够 2~3 张时结果却全部“无礼装”。
-    # 这里为每个较小尺寸补少量代表性组合，保证 Cost 不足时仍有礼装可用。
-    if stopped_size is not None and stopped_size > 0:
-        for size in range(stopped_size - 1, -1, -1):
-            added = 0
-            for c in _generate_multiset_combinations(
-                candidate_craft_ids, size, set(REPEATABLE_BOND_IDS)
-            ):
-                cost = sum(ctx.crafts[cid].cost for cid in c)
-                entry = (cost, tuple(c))
-                if entry not in seen:
-                    result.append(entry)
-                    seen.add(entry)
-                    added += 1
-                    if added >= 3:
-                        break
 
     # 确保有空礼装兜底
     if (0, ()) not in seen:
@@ -566,12 +662,14 @@ def _make_team_config(
     craft_choice: Sequence[int],
     support_servant_id: int,
     support_craft_id: Optional[int],
+    support_second_craft_id: Optional[int] = None,
 ) -> Optional[TeamConfig]:
     box = _box_map(req)
-    # 必须复制固定成员，不能直接复用 bp.fixed_player_members 里的对象：
-    # 否则首次给固定位分配礼装后，后续方案会沿用上一次的 craft_id，导致搜索失效。
-    players: List[PlacedMember] = [
-        PlacedMember(
+
+    # 必须复制固定成员，不能直接复用 bp.fixed_player_members 里的对象
+    players_by_pos: Dict[str, PlacedMember] = {}
+    for p in bp.fixed_player_members:
+        players_by_pos[p.position] = PlacedMember(
             position=p.position,
             servant_id=p.servant_id,
             stage=p.stage,
@@ -581,19 +679,13 @@ def _make_team_config(
             bond_switch1=p.bond_switch1,
             bond_switch2=p.bond_switch2,
             craft_id=p.craft_id,
+            second_craft_id=p.second_craft_id,
+            is_crown=p.is_crown,
             fixed=p.fixed,
             stage_locked=p.stage_locked,
         )
-        for p in bp.fixed_player_members
-    ]
 
-    # 先补充固定玩家位置的 craft（如果固定礼装与固定从者同位置已在 fixed member 中体现）
-    # 把 free_bond_positions 按顺序与 craft_choice 配对
-    craft_iter = iter(craft_choice)
-
-    # 处理所有玩家位置（固定/自由统一构建）
     for slot in bp.player_slots:
-        # 固定从者成员已在 fixed_player_members，跳过重建，但需要确保其 craft_id 正确
         if slot.fixed_servant_id is not None:
             continue
         sid = mapping.get(slot.position)
@@ -602,48 +694,67 @@ def _make_team_config(
         bs = box.get(sid)
         if bs is None:
             return None
-        craft_id = slot.fixed_craft_id
-        if craft_id is None:
-            # 若该位置是可放牵绊礼装的位置，则取 craft_choice 中的下一张
-            craft_id = next(craft_iter, None)
-        players.append(
-            PlacedMember(
-                position=slot.position,
-                servant_id=sid,
-                stage=bs.stage,
-                personal_bonus=bs.personal_bonus,
-                aura_bonus=bs.aura_bonus,
-                max_bond=bs.max_bond,
-                bond_switch1=bs.bond_switch1,
-                bond_switch2=bs.bond_switch2,
-                craft_id=craft_id,
-                fixed=False,
-            )
+        players_by_pos[slot.position] = PlacedMember(
+            position=slot.position,
+            servant_id=sid,
+            stage=bs.stage,
+            personal_bonus=bs.personal_bonus,
+            aura_bonus=bs.aura_bonus,
+            max_bond=bs.max_bond,
+            bond_switch1=bs.bond_switch1,
+            bond_switch2=bs.bond_switch2,
+            craft_id=None,
+            second_craft_id=None,
+            is_crown=slot.is_crown,
+            fixed=False,
         )
 
-    # 如果固定从者位置没有固定礼装，且属于 free_bond_positions，则也应获得 craft_choice 中的礼装。
-    # 上面的逻辑只给非固定从者分配了礼装；下面修正固定从者的空礼装位。
-    # 先收集已分配 craft 的位置
-    assigned_craft_positions = {
-        p.position for p in players if p.craft_id is not None
-    }
-    missing_fixed = [
-        p
-        for p in players
-        if p.craft_id is None and p.position in bp.free_bond_positions
-    ]
-    for p in missing_fixed:
-        p.craft_id = next(craft_iter, None)
-
-    if len(players) != 5:
+    if len(players_by_pos) != 5:
         return None
 
-    # 排序不重要，TeamConfig 内部处理
+    # 先填手动固定礼装，再把自动生成的礼装填入自由礼装槽。
+    for cs in bp.player_craft_slots:
+        if cs.fixed_craft_id is None:
+            continue
+        player = players_by_pos.get(cs.position)
+        if player is None:
+            continue
+        if cs.index == 0:
+            player.craft_id = cs.fixed_craft_id
+        else:
+            player.second_craft_id = cs.fixed_craft_id
+
+    # bp.player_craft_slots 已按“冠位槽优先”排序；自由槽也保持该顺序。
+    # 冠位第二礼装位 0 Cost：为了 Cost 最优，把更贵的礼装优先放到第二礼装位。
+    free_slots = [cs for cs in bp.player_craft_slots if cs.fixed_craft_id is None]
+    used_free_slots = free_slots[:len(craft_choice)]
+    # 稳定排序：第二礼装位（0 Cost）优先承接高价礼装
+    ordered_free_slots = sorted(
+        used_free_slots,
+        key=lambda cs: (0 if cs.index == 1 else 1, POSITIONS.index(cs.position)),
+    )
+    ordered_crafts = sorted(
+        craft_choice,
+        key=lambda cid: ctx.crafts[cid].cost if cid in ctx.crafts else 0,
+        reverse=True,
+    )
+    for cs, cid in zip(ordered_free_slots, ordered_crafts):
+        player = players_by_pos.get(cs.position)
+        if player is None:
+            continue
+        if cs.index == 0:
+            player.craft_id = cid
+        else:
+            player.second_craft_id = cid
+
     return TeamConfig(
-        players=players,
+        players=list(players_by_pos.values()),
         support_position=bp.support_position,
         support_servant_id=support_servant_id,
         support_craft_id=support_craft_id,
+        support_second_craft_id=support_second_craft_id,
+        crown_positions=bp.crown_positions,
+        base_bond=req.base_bond,
         activity_bonus=req.activity_bonus,
     )
 
@@ -659,13 +770,15 @@ def _choose_support(
         # 手动指定助战允许与玩家位重复；只校验从者存在于本地数据
         if sid not in ctx.servants:
             return None
+        if not _servant_in_class_group(ctx, sid, req.class_group):
+            return None
         return sid
 
-    # 自动助战：助战从者本身不参与收益优化，也不占用玩家位，
-    # 因此只要随便选一个未被排除的从者作为展示即可。
+    # 自动助战：按职阶筛选约束选择展示用从者。
     candidates = [
         sid for sid in ctx.servants
         if sid not in req.excluded_servant_ids
+        and _servant_in_class_group(ctx, sid, req.class_group)
     ]
     return min(candidates) if candidates else None
 
@@ -731,17 +844,12 @@ def _filter_support_options_for_team(
     return result
 
 
-def _support_craft_options(ctx: DataContext, req: CalculationRequest) -> List[int]:
-    """生成助战位候选礼装列表。
+def _auto_support_craft_options(ctx: DataContext, req: CalculationRequest) -> List[int]:
+    """生成助战位“自动可选”礼装列表，不受手动主礼装影响。
 
-    - 用户手动指定助战礼装（包括显式选午茶或无礼装 0）时，只使用该礼装；
-    - 未指定时，把午茶、普通通用、特性礼装都作为候选参与搜索，
-      由实际收益决定最优助战礼装（如全队兽科时 NFF 可能优于午茶）。
+    把午茶、普通通用、特性礼装都作为候选参与搜索，由实际收益决定最优助战礼装
+    （如全队兽科时 NFF 可能优于午茶）。
     """
-    if req.support and req.support.craft_id is not None:
-        cid = req.support.craft_id
-        return [cid] if cid in ctx.crafts else []
-
     options: List[int] = []
     for cid, craft in ctx.crafts.items():
         if not craft.is_bond_ce:
@@ -764,11 +872,25 @@ def _support_craft_options(ctx: DataContext, req: CalculationRequest) -> List[in
     return options[: req.craft_pool_size + 1]
 
 
+def _support_craft_options(ctx: DataContext, req: CalculationRequest) -> List[int]:
+    """生成助战主礼装位候选。
+
+    - 用户手动指定助战礼装（包括显式选午茶或无礼装 0）时，只使用该礼装；
+    - 未指定时，使用自动候选池。
+    """
+    if req.support and req.support.craft_id is not None:
+        cid = req.support.craft_id
+        return [cid] if cid in ctx.crafts else []
+    return _auto_support_craft_options(ctx, req)
+
+
 def _solution_dict(result: Dict[str, Any], rank: int) -> Dict[str, Any]:
     return {
         "rank": rank,
         "totalMultiplier": result["totalMultiplier"],
         "costUsed": result["costUsed"],
+        "baseBond": result.get("baseBond", 0),
+        "totalBondPoints": result.get("totalBondPoints", 0),
         "team": result["team"],
         "maxBondStats": result["maxBondStats"],
         "traitCoverage": result["traitCoverage"],
@@ -804,14 +926,18 @@ def _collect_used_trait_craft_ids(
         if team is None:
             continue
         for p in getattr(team, "players", []):
-            if p.craft_id is not None:
-                craft = ctx.crafts.get(p.craft_id)
+            for cid in (getattr(p, "craft_id", None), getattr(p, "second_craft_id", None)):
+                if cid is None:
+                    continue
+                craft = ctx.crafts.get(cid)
                 if craft is not None and craft.bonus_type == "trait":
-                    used.add(p.craft_id)
-        if getattr(team, "support_craft_id", None) is not None:
-            craft = ctx.crafts.get(team.support_craft_id)
+                    used.add(cid)
+        for cid in (getattr(team, "support_craft_id", None), getattr(team, "support_second_craft_id", None)):
+            if cid is None:
+                continue
+            craft = ctx.crafts.get(cid)
             if craft is not None and craft.bonus_type == "trait":
-                used.add(team.support_craft_id)
+                used.add(cid)
     return used
 
 
@@ -931,13 +1057,14 @@ def search_top_teams(
         raise ValueError("固定从者不能超过6人")
 
     choose_count = len(bp.free_servant_positions)
-    # 候选从者：Box 中未被固定玩家使用的。
+    # 候选从者：Box 中未被固定玩家使用的，且符合当前职阶筛选。
     # 助战位从者不占用玩家位，也不参与“选谁收益最大”的优化，因此不排除它。
     fixed_player_ids = set(bp.fixed_servant_ids)
     player_candidates = [
         sid for sid, bs in box.items()
         if sid not in fixed_player_ids
         and sid not in req.excluded_servant_ids
+        and _servant_in_class_group(ctx, sid, req.class_group)
     ]
 
     # Cost 可行性预检：如果“最省配置”都超上限，提前给出明确提示
@@ -947,11 +1074,14 @@ def search_top_teams(
             s_info = ctx.servants.get(slot.fixed_servant_id)
             if s_info:
                 fixed_cost += s_info.cost
-        if slot.fixed_craft_id is not None:
-            c_info = ctx.crafts.get(slot.fixed_craft_id)
-            if c_info:
-                if c_info.support_bonus > 0:
-                    raise ValueError("迦勒底午茶时光等助战加成礼装只能放在助战位")
+        for cid in (slot.fixed_craft_id, slot.fixed_second_craft_id):
+            if cid is None:
+                continue
+            c_info = ctx.crafts.get(cid)
+            if c_info and c_info.support_bonus > 0:
+                raise ValueError("迦勒底午茶时光等助战加成礼装只能放在助战位")
+            # 第二礼装位 0 Cost，只校验类型，不累加
+            if cid == slot.fixed_craft_id and c_info:
                 fixed_cost += c_info.cost
     if choose_count > len(player_candidates):
         raise ValueError("Box 人数不足，无法组成 5 名玩家 + 助战的队伍")
@@ -1059,15 +1189,29 @@ def search_top_teams(
 
     report("正在搜索组合...")
     free_slots_count = len(bp.free_bond_positions)
+    free_bond_zero_cost = [
+        cs.index == 1 for cs in bp.player_craft_slots if cs.fixed_craft_id is None
+    ]
     craft_combos_with_cost = _generate_craft_combinations_with_cost(
         ctx, craft_pool, free_slots_count,
         max_total=_default_craft_combo_limit(req),
+        zero_cost_slots=free_bond_zero_cost,
     )
 
     support_servant_id = bp.support_servant_id
-    # 助战礼装位参与计算：未手动指定时枚举午茶/普通通用/特性礼装，
-    # 按队伍实际收益决定；用户显式选“没有（无礼装）”传 0 时不填。
+    # 助战礼装位参与计算：主礼装未手动指定时枚举午茶/普通通用/特性礼装，
+    # 冠位第二礼装位始终用“自动可选池”，不受主礼装手动选择影响。
     support_craft_options = _support_craft_options(ctx, req)
+    support_auto_craft_options = _auto_support_craft_options(ctx, req)
+    support_crown = bp.support_position in bp.crown_positions
+    support_top_options = (
+        [bp.support_craft_id] if bp.support_craft_id is not None else list(support_craft_options)
+    )
+    support_second_options = (
+        [bp.support_second_craft_id]
+        if bp.support_second_craft_id is not None
+        else (list(support_auto_craft_options) if support_crown else [])
+    )
 
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
     seen: Set[Tuple[Any, ...]] = set()
@@ -1115,66 +1259,85 @@ def search_top_teams(
             if ce_budget < 0:
                 continue
 
-            team_support_options = _filter_support_options_for_team(
-                ctx, support_craft_options, used_players
+            team_support_options = (
+                list(support_top_options)
+                if bp.support_craft_id is not None
+                else _filter_support_options_for_team(ctx, support_top_options, used_players)
+            )
+            team_support_second_options = (
+                list(support_second_options)
+                if bp.support_second_craft_id is not None
+                else (_filter_support_options_for_team(ctx, support_second_options, used_players) if support_second_options else [])
             )
             for craft_cost, craft_choice in craft_combos_with_cost:
                 if craft_cost > ce_budget:
                     continue
                 for support_craft_id in team_support_options:
-                    team = _make_team_config(
-                        ctx,
-                        req,
-                        bp,
-                        extras_tuple,
-                        mapping,
-                        craft_choice,
-                        support_id,
-                        support_craft_id,
-                    )
-                    if team is None:
-                        continue
-                    # 阶段不再由用户手动指定：根据当前礼装组合自动选择最优阶段/灵衣
-                    team = calculator.optimize_team_stages(ctx, team)
-
-                    key = tuple(
-                        (p.position, p.servant_id, p.craft_id)
-                        for p in sorted(team.players, key=lambda x: x.position)
-                    ) + ((team.support_position, team.support_servant_id, team.support_craft_id),)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-
-                    metrics = calculator.calculate_team_metrics(ctx, team)
-                    evaluated_total += 1
-                    total = metrics["totalMultiplier"]
-
-                    if req.strategy == STRATEGY_TARGET_MAX:
-                        target_id = req.target_servant_id
-                        target_mult = next(
-                            (
-                                m
-                                for p, m in zip(team.players, metrics["multipliers"])
-                                if p.servant_id == target_id
-                            ),
-                            0.0,
+                    # 非冠位助战没有第二礼装位；只有手动/自动给了第二候选才枚举
+                    second_ids = team_support_second_options or [None]
+                    for support_second_craft_id in second_ids:
+                        if (
+                            support_second_craft_id is not None
+                            and support_craft_id is not None
+                            and support_second_craft_id == support_craft_id
+                            and support_second_craft_id not in REPEATABLE_BOND_IDS
+                            and support_second_craft_id > 0
+                        ):
+                            continue
+                        team = _make_team_config(
+                            ctx,
+                            req,
+                            bp,
+                            extras_tuple,
+                            mapping,
+                            craft_choice,
+                            support_id,
+                            support_craft_id,
+                            support_second_craft_id=support_second_craft_id,
                         )
-                        score = target_mult * 10000 + total
-                    elif req.strategy == STRATEGY_BALANCED:
-                        vals = metrics["multipliers"]
-                        avg = (sum(vals) / len(vals)) if vals else 0
-                        variance = sum((v - avg) ** 2 for v in vals) / len(vals) if vals else 0
-                        score = total * 0.85 - variance * 2.0
-                    else:
-                        score = total
+                        if team is None:
+                            continue
+                        # 阶段不再由用户手动指定：根据当前礼装组合自动选择最优阶段/灵衣
+                        team = calculator.optimize_team_stages(ctx, team)
 
-                    # 同一组玩家从者只保留最优礼装/位置组合，避免 Top20 全是同阵容换礼装
-                    old = best_by_set.get(servant_set)
-                    if old is None or score > old["score"]:
-                        best_by_set[servant_set] = {
-                            "score": score,
-                            "team": team,
-                        }
+                        key = tuple(
+                            (p.position, p.servant_id, p.craft_id, p.second_craft_id)
+                            for p in sorted(team.players, key=lambda x: x.position)
+                        ) + ((team.support_position, team.support_servant_id, team.support_craft_id, team.support_second_craft_id),)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                        metrics = calculator.calculate_team_metrics(ctx, team)
+                        evaluated_total += 1
+                        total = metrics["totalMultiplier"]
+
+                        if req.strategy == STRATEGY_TARGET_MAX:
+                            target_id = req.target_servant_id
+                            target_mult = next(
+                                (
+                                    m
+                                    for p, m in zip(team.players, metrics["multipliers"])
+                                    if p.servant_id == target_id
+                                ),
+                                0.0,
+                            )
+                            score = target_mult * 10000 + total
+                        elif req.strategy == STRATEGY_BALANCED:
+                            vals = metrics["multipliers"]
+                            avg = (sum(vals) / len(vals)) if vals else 0
+                            variance = sum((v - avg) ** 2 for v in vals) / len(vals) if vals else 0
+                            score = total * 0.85 - variance * 2.0
+                        else:
+                            score = total
+
+                        # 同一组玩家从者只保留最优礼装/位置组合，避免 Top20 全是同阵容换礼装
+                        old = best_by_set.get(servant_set)
+                        if old is None or score > old["score"]:
+                            best_by_set[servant_set] = {
+                                "score": score,
+                                "team": team,
+                            }
 
             processed += 1
             processed_total += 1

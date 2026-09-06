@@ -19,6 +19,26 @@ POSITIONS = [
 ]
 FRONT_POSITIONS = {"front_left", "front_middle", "front_right"}
 
+# 戴冠战职阶筛选组
+CLASS_GROUPS: Dict[str, Set[str]] = {
+    "saber": {"saber"},
+    "archer": {"archer"},
+    "lancer": {"lancer"},
+    "rider": {"rider"},
+    "caster": {"caster"},
+    "assassin": {"assassin"},
+    "berserker": {"berserker"},
+    "ex1": {"ruler", "avenger", "moonCancer", "shielder"},
+    "ex2": {
+        "alterEgo",
+        "foreigner",
+        "pretender",
+        "beast",
+        "beastEresh",
+        "unBeastOlgaMarie",
+    },
+}
+
 # 策略
 STRATEGY_TOTAL_MAX = "total_max"
 STRATEGY_TARGET_MAX = "target_max"
@@ -73,6 +93,7 @@ class FixedCraft:
     position: str
     craft_id: int
     type: str = "bond"  # bond / other
+    slot: int = 0       # 0=主礼装位/最上面，1=冠位第二礼装位
 
 
 @dataclass
@@ -81,6 +102,7 @@ class SupportConfig:
     craft_id: Optional[int] = None
     # 扩展：UI 可指定助战位置；默认 back_right
     position: Optional[str] = None
+    second_craft_id: Optional[int] = None  # 冠位助战第二礼装位
 
 
 @dataclass
@@ -95,9 +117,14 @@ class CalculationRequest:
     excluded_craft_ids: Set[int] = field(default_factory=set)
     activity_bonus: float = 0.0
     tea_bonus: float = 1.0  # 1 表示使用午茶/助战加成档位
+    # 戴冠战/普通模式
+    mode: str = "normal"  # normal / crown
+    class_group: Optional[str] = None  # saber/ex1/ex2...；None=不限
+    crown_positions: Set[str] = field(default_factory=set)
+    base_bond: float = 0.0  # 基础牵绊获取数值（默认0）
     # 算法参数
     candidate_pool_size: int = 30
-    craft_pool_size: int = 10
+    craft_pool_size: int = 50
     top_n: int = 20
     timeout_ms: int = 10000
     target_servant_id: Optional[int] = None
@@ -112,9 +139,13 @@ class TeamMember:
     is_support: bool = False
     is_fixed: bool = False
     is_max_bond: bool = False
+    is_crown: bool = False
     craft_id: Optional[int] = None
     craft_name: str = ""
     craft_type: str = "other"  # bond / other / none
+    second_craft_id: Optional[int] = None
+    second_craft_name: str = ""
+    second_craft_type: str = "other"  # bond / other / none
     bonus_detail: Optional[Dict[str, Any]] = None
 
 
@@ -123,6 +154,8 @@ class TeamSolution:
     rank: int = 0
     total_multiplier: float = 0.0
     cost_used: int = 0
+    base_bond: float = 0.0
+    total_bond_points: float = 0.0
     team: List[TeamMember] = field(default_factory=list)
     max_bond_stats: Dict[str, Any] = field(default_factory=dict)
     trait_coverage: List[str] = field(default_factory=list)
@@ -182,6 +215,7 @@ def parse_fixed_crafts(raw_list: List[Dict[str, Any]]) -> List[FixedCraft]:
                 position=str(raw["position"]),
                 craft_id=int(raw["craftId"]),
                 type=str(raw.get("type", "bond")).lower(),
+                slot=int(raw.get("slot", raw.get("craftIndex", 0)) or 0),
             )
         )
     return result
@@ -193,15 +227,18 @@ def parse_support(raw: Any) -> Optional[SupportConfig]:
     if isinstance(raw, dict):
         has_servant = raw.get("servantId") is not None
         has_craft = raw.get("craftId") is not None
-        if not has_servant and not has_craft:
+        has_second_craft = raw.get("secondCraftId") is not None
+        if not has_servant and not has_craft and not has_second_craft:
             # 空对象表示“由系统推荐”（助战礼装自动参与计算）
             return SupportConfig()
         servant_id = raw.get("servantId")
         craft_id = raw.get("craftId")
+        second_craft_id = raw.get("secondCraftId")
         position = raw.get("position")
         return SupportConfig(
             servant_id=int(servant_id) if servant_id is not None else None,
             craft_id=int(craft_id) if craft_id is not None else None,
+            second_craft_id=int(second_craft_id) if second_craft_id is not None else None,
             position=position,
         )
     return None
@@ -221,11 +258,19 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         excluded_craft_ids={int(x) for x in (data.get("excludedCraftIds") or [])},
         activity_bonus=float(data.get("activityBonus", 0) or 0),
         tea_bonus=float(data.get("teaBonus", 1) or 1),
+        mode=str(data.get("mode", "normal") or "normal").lower(),
+        class_group=(data.get("classGroup") or data.get("classFilter") or "all"),
+        crown_positions={
+            str(x) for x in (data.get("crownPositions") or [])
+        },
+        base_bond=float(data.get("baseBond", 0) or 0),
         top_n=int(data.get("topN", 20) or 20),
         timeout_ms=int(data.get("timeoutMs", 10000) or 10000),
     )
     req.candidate_pool_size = int(data.get("candidatePoolSize", 30) or 30)
     req.craft_pool_size = int(data.get("craftPoolSize", 10) or 10)
+    if req.class_group in (None, "", "all"):
+        req.class_group = None
     if strategy == STRATEGY_TARGET_MAX:
         req.target_servant_id = data.get("targetServantId") or data.get(TARGET_SERVANT_KEY)
     return req

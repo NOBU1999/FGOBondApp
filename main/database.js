@@ -75,10 +75,15 @@ function ensureSchema(db) {
       fixed_crafts TEXT,
       support_id INTEGER,
       support_craft_id INTEGER,
+      support_second_craft_id INTEGER,
       support_position TEXT DEFAULT 'front_right',
       cost_limit INTEGER DEFAULT 114,
       strategy TEXT DEFAULT 'total_max',
       quality_mode TEXT DEFAULT 'balanced',
+      mode TEXT DEFAULT 'normal',
+      crown_class TEXT DEFAULT 'all',
+      crown_positions TEXT,
+      base_bond REAL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -89,6 +94,31 @@ function ensureSchema(db) {
   }
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN support_position TEXT DEFAULT 'front_right'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN support_second_craft_id INTEGER");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN mode TEXT DEFAULT 'normal'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN crown_class TEXT DEFAULT 'all'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN crown_positions TEXT");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN base_bond REAL DEFAULT 0");
   } catch (_) {
     // 列已存在
   }
@@ -151,14 +181,14 @@ function getStageTraits(db, servantId, stage) {
     if (!Number.isFinite(costumeId)) return [];
     const rows = all(
       db,
-      "SELECT trait FROM servant_costume_traits WHERE servant_id = ? AND costume_id = ? ORDER BY trait",
+      "SELECT trait FROM servant_costume_traits WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait",
       [servantId, costumeId]
     );
     return rows.map((r) => r.trait);
   }
   const rows = all(
     db,
-    "SELECT servant_id AS servantId, stage, trait FROM servant_stage_traits WHERE servant_id = ? AND stage = ? ORDER BY trait",
+    "SELECT servant_id AS servantId, stage, trait FROM servant_stage_traits WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait",
     [servantId, st]
   );
   return rows.map((r) => r.trait);
@@ -167,7 +197,7 @@ function getStageTraits(db, servantId, stage) {
 function getAllStageTraits(db, servantId) {
   const rows = all(
     db,
-    "SELECT stage, trait FROM servant_stage_traits WHERE servant_id = ? ORDER BY stage, trait",
+    "SELECT stage, trait FROM servant_stage_traits WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait",
     [servantId]
   );
   const result = {};
@@ -209,7 +239,7 @@ function saveUserBox(db, entries) {
         Number(e.servantId),
         e.stage || "fourth",
         e.isMaxBond ? 1 : 0,
-        e.bondSwitch1 !== false ? 1 : 0,
+        e.bondSwitch1 ? 1 : 0,
         e.bondSwitch2 ? 1 : 0,
         Number(e.personalBonus || 0),
         Number(e.auraBonus || 0)
@@ -260,12 +290,22 @@ function importCaptureContent(db, content) {
   for (const sid of ownedIds) {
     const colRec = collectionMap[sid];
     const bondRank = Number(colRec && colRec.friendshipRank || 0);
-    const maxBond = bondRank >= 15;
+    // Chaldea 规则：
+    // - 普通从者默认牵绊上限 10；每使用一个“牵绊上限开放”道具，上限 +1
+    // - 玛修基础上限特殊（Chaldea 中为 5），同样按 exceedCount 递增
+    // 满绊 = 当前 rank 已达到当前最大可达到 rank（10/10、11/11、13/13、15/15…）
+    // 而不是简单 >=15；10/10、11/11 这类旧上限满绊不应获得 25% 全队加成。
+    const exceedCount = Number(colRec && colRec.friendshipExceedCount || 0);
+    const isMash = Number(sid) === 800100;
+    const defaultMaxRank = isMash ? 5 : 10;
+    const maxRank = defaultMaxRank + exceedCount;
+    const isAtBondLimit = bondRank > 0 && bondRank >= maxRank;
+    const hasTeam25Bonus = bondRank >= 15;
     entries.push({
       servantId: sid,
       stage: "fourth",
-      isMaxBond: maxBond ? 1 : 0,
-      bondSwitch1: maxBond ? 1 : 0,
+      isMaxBond: isAtBondLimit ? 1 : 0,
+      bondSwitch1: hasTeam25Bonus ? 1 : 0,
       bondSwitch2: 0,
       personalBonus: 0,
     });
@@ -301,20 +341,26 @@ function saveExclusions(db, exclusions) {
 
 function saveUserTeam(db, team) {
   const supportCraftId = team.supportCraftId !== undefined && team.supportCraftId !== null ? team.supportCraftId : null;
+  const supportSecondCraftId = team.supportSecondCraftId !== undefined && team.supportSecondCraftId !== null ? team.supportSecondCraftId : null;
   const info = run(
     db,
-    `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, support_position, cost_limit, strategy, quality_mode)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, support_second_craft_id, support_position, cost_limit, strategy, quality_mode, mode, crown_class, crown_positions, base_bond)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       team.name || "",
       JSON.stringify(team.fixedServants || []),
       JSON.stringify(team.fixedCrafts || []),
       team.supportId || null,
       supportCraftId,
+      supportSecondCraftId,
       team.supportPosition || "front_right",
       team.costLimit || 116,
       team.strategy || "total_max",
       team.qualityMode || "balanced",
+      team.mode || "normal",
+      team.crownClass || "all",
+      JSON.stringify(team.crownPositions || []),
+      Number(team.baseBond || 0),
     ]
   );
   return info.lastInsertRowid;
@@ -323,7 +369,7 @@ function saveUserTeam(db, team) {
 function listUserTeams(db) {
   const rows = all(
     db,
-    "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, support_position AS supportPosition, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, created_at AS createdAt FROM user_teams ORDER BY id DESC"
+    "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, support_second_craft_id AS supportSecondCraftId, support_position AS supportPosition, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, mode, crown_class AS crownClass, crown_positions AS crownPositions, base_bond AS baseBond, created_at AS createdAt FROM user_teams ORDER BY id DESC"
   );
   for (const r of rows) {
     try {
@@ -335,6 +381,11 @@ function listUserTeams(db) {
       r.fixedCrafts = JSON.parse(r.fixedCrafts || "[]");
     } catch (_) {
       r.fixedCrafts = [];
+    }
+    try {
+      r.crownPositions = JSON.parse(r.crownPositions || "[]");
+    } catch (_) {
+      r.crownPositions = [];
     }
   }
   return rows;

@@ -232,7 +232,13 @@ def get_remote_export_meta(region: Optional[str] = None) -> Dict[str, str]:
 # 从者解析
 # ---------------------------------------------------------------------------
 def _trait_pairs(traits: Iterable[Dict[str, Any]]) -> List[Tuple[str, Optional[int]]]:
-    return [(t.get("name", ""), t.get("id")) for t in traits if t.get("name")]
+    # “unknown”在 Atlas 里是多个不同 trait id 共用的占位显示名，
+    # 不能当作同一种特性匹配，否则会误伤/误全量生效（如迦勒底之人）。
+    return [
+        (t.get("name", ""), t.get("id"))
+        for t in traits
+        if t.get("name") and t.get("name") != "unknown"
+    ]
 
 
 def _manual_trait_pairs(servant_id: int, stage: str) -> List[Tuple[str, Optional[int]]]:
@@ -375,7 +381,7 @@ def _condition_groups(func: Dict[str, Any]) -> List[List[str]]:
         # functvals 中的多个 trait 通常是“或”关系（如“星之力或恶”），
         # 每个 trait 单独成一组；组间在计算阶段按“任一组成立即可”处理。
         groups.extend(
-            [[t.get("name", "")] for t in functvals if t.get("name")]
+            [[t.get("name", "")] for t in functvals if t.get("name") and t.get("name") != "unknown"]
         )
         return groups
 
@@ -384,7 +390,7 @@ def _condition_groups(func: Dict[str, Any]) -> List[List[str]]:
         overwrite = (func.get("script") or {}).get("overwriteTvals") or []
     for group in overwrite:
         if isinstance(group, list):
-            names = [t.get("name", "") for t in group if t.get("name")]
+            names = [t.get("name", "") for t in group if t.get("name") and t.get("name") != "unknown"]
             if names:
                 groups.append(names)
     return groups

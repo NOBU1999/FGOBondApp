@@ -35,6 +35,39 @@ const CLASSES = [
   "Beast",
 ];
 
+// 戴冠战一级职阶筛选
+const CROWN_CLASS_FILTERS = [
+  { value: "all", label: "不限职阶" },
+  { value: "saber", label: "剑" },
+  { value: "archer", label: "弓" },
+  { value: "lancer", label: "枪" },
+  { value: "rider", label: "骑" },
+  { value: "caster", label: "术" },
+  { value: "assassin", label: "杀" },
+  { value: "berserker", label: "狂" },
+  { value: "ex1", label: "EX1（尺仇月盾）" },
+  { value: "ex2", label: "EX2（他批降兽）" },
+];
+
+const CROWN_CLASS_GROUPS = {
+  all: null,
+  saber: ["Saber"],
+  archer: ["Archer"],
+  lancer: ["Lancer"],
+  rider: ["Rider"],
+  caster: ["Caster"],
+  assassin: ["Assassin"],
+  berserker: ["Berserker"],
+  ex1: ["Ruler", "Avenger", "MoonCancer", "Shielder"],
+  ex2: ["AlterEgo", "Foreigner", "Pretender", "Beast", "beastEresh", "unBeastOlgaMarie"],
+};
+
+function formatBondNumber(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n)) return "0";
+  return n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
 // 本地已下载的牵绊礼装图（equipFace，JP 数据）
 const CRAFT_IMAGE_IDS = new Set([
   9401970, 9403520, 9404310, 9405110, 9405710,
@@ -113,8 +146,10 @@ function makeSlots() {
   return Array.from({ length: 6 }, (_, i) => ({
     servantId: null,
     craftId: null,
+    secondCraftId: null,
     isSupport: i === 2,
     stage: null,
+    isCrown: false,
   }));
 }
 
@@ -135,12 +170,15 @@ const App = {
       boxFilter: { keyword: "", class: "all", rarity: "all", owned: "all", maxBond: "all" },
       batchBonus: 0,
       slots: makeSlots(),
+      mode: "normal",
+      crownClass: "all",
+      baseBond: 0,
       costLimit: 116,
       strategy: "total_max",
       qualityMode: "balanced",
       targetServantId: null,
       targetServantKeyword: "",
-      overlay: { visible: false, slotIndex: null, target: "servant", keyword: "", classFilter: "all", rarityFilter: "all", ownedOnly: true, craftType: "bond" },
+      overlay: { visible: false, slotIndex: null, target: "servant", craftIndex: 0, keyword: "", classFilter: "all", rarityFilter: "all", ownedOnly: true, craftType: "bond" },
       boxModalVisible: false,
       exclusionModalVisible: false,
       exclusionTab: "servant",
@@ -255,16 +293,21 @@ const App = {
     freeCount() {
       return this.slots.filter((s) => !s.isSupport && s.servantId === null).length;
     },
+    crownCount() {
+      return this.mode === "crown" ? this.slots.filter((s) => s.isCrown).length : 0;
+    },
     overlayItems() {
       if (this.overlay.target === "servant") {
         const kw = this.overlay.keyword.toLowerCase();
         const isSupportSlot = this.overlay.slotIndex !== null && this.slots[this.overlay.slotIndex] && this.slots[this.overlay.slotIndex].isSupport;
+        const crownGroup = this.mode === "crown" ? this.crownClass : "all";
         // 助战从者可选择所有已收录角色（不限于自己 Box）
         const source = isSupportSlot ? this.servants : this.ownedServants;
         return source
           .filter((s) => {
             if (kw && !s.name.toLowerCase().includes(kw)) return false;
             if (!this.matchesClassFilter(s.class, this.overlay.classFilter)) return false;
+            if (!this.matchesCrownClassFilter(s.class, crownGroup)) return false;
             if (this.overlay.rarityFilter !== "all" && Number(s.rarity) !== Number(this.overlay.rarityFilter)) return false;
             return true;
           })
@@ -402,6 +445,7 @@ const App = {
   },
   methods: {
     // ---------- 工具 ----------
+    formatBondNumber(v) { return formatBondNumber(v); },
     stageLabel(s) { return STAGE_LABELS[s] || s; },
     stageNumber(s) {
       if (String(s || "").startsWith("costume_")) return "灵衣";
@@ -419,6 +463,35 @@ const App = {
     },
     slotCraft(slot) {
       return this.craftById(slot.craftId);
+    },
+    slotCraftAt(slot, index) {
+      return index === 1 ? this.craftById(slot.secondCraftId) : this.slotCraft(slot);
+    },
+    slotCraftItems(slot) {
+      const items = [{ index: 0, craftId: slot.craftId, craft: this.slotCraft(slot) }];
+      if (this.mode === "crown" && slot.isCrown) {
+        items.push({ index: 1, craftId: slot.secondCraftId, craft: this.craftById(slot.secondCraftId) });
+      }
+      return items;
+    },
+    resultCraftItems(member) {
+      const items = [{
+        index: 0,
+        craftId: member.craftId,
+        craftName: member.craftName || "",
+        craftType: member.craftType || "other",
+        hasImage: this.hasCraftImageId(member.craftId),
+      }];
+      if (member.secondCraftId !== null && member.secondCraftId !== undefined) {
+        items.push({
+          index: 1,
+          craftId: member.secondCraftId,
+          craftName: member.secondCraftName || "",
+          craftType: member.secondCraftType || "other",
+          hasImage: this.hasCraftImageId(member.secondCraftId),
+        });
+      }
+      return items;
     },
     craftEffect(c) {
       if (!c) return "";
@@ -453,6 +526,12 @@ const App = {
       if (f === "beast") return c.includes("beast");
       return c === f;
     },
+    matchesCrownClassFilter(servantClass, crownFilter) {
+      const groups = CROWN_CLASS_GROUPS[crownFilter];
+      if (!groups) return true;
+      return groups.some((g) => String(servantClass || "").toLowerCase() === g.toLowerCase());
+    },
+    crownClassFilters() { return CROWN_CLASS_FILTERS; },
     avatarPath(servantId) {
       return `./assets/servantface/${servantId}.png`;
     },
@@ -609,7 +688,7 @@ const App = {
         b.switch2 = false;
         // 如果队伍里已使用该从者，自动移除
         for (const slot of this.slots) {
-          if (slot.servantId === id) { slot.servantId = null; slot.craftId = null; }
+          if (slot.servantId === id) { slot.servantId = null; slot.craftId = null; slot.secondCraftId = null; }
         }
       }
       this.persistBox();
@@ -617,12 +696,22 @@ const App = {
     toggleMaxBond(id) {
       const b = this.box[id];
       b.maxBond = !b.maxBond;
-      if (!b.maxBond) { b.switch1 = false; b.switch2 = false; }
-      else { b.switch1 = true; b.switch2 = false; }
+      if (!b.maxBond) {
+        // 取消满绊时，25%全队加成与自身收益开关也应清掉
+        b.switch1 = false;
+        b.switch2 = false;
+      } else {
+        // 满绊标记与25%全队加成分开：勾选满绊不再自动勾选25%
+        b.switch2 = false;
+      }
       this.persistBox();
     },
     toggleSwitch1(id) {
       const b = this.box[id];
+      if (!b.maxBond) {
+        alert("请先标记满绊，再启用25%全队加成");
+        return;
+      }
       b.switch1 = !b.switch1;
       if (!b.switch1) b.switch2 = false;
       this.persistBox();
@@ -852,11 +941,12 @@ const App = {
     },
 
     // ---------- 槽位选择 ----------
-    openOverlay(slotIndex, target) {
+    openOverlay(slotIndex, target, craftIndex = 0) {
       this.overlay = {
         visible: true,
         slotIndex,
         target,
+        craftIndex,
         keyword: "",
         classFilter: "all",
         rarityFilter: "all",
@@ -874,6 +964,7 @@ const App = {
         if (!confirm("该从者已在其他槽位，是否移回当前槽位？")) return;
         this.slots[existing].servantId = null;
         this.slots[existing].craftId = null;
+        this.slots[existing].secondCraftId = null;
         this.slots[existing].stage = null;
       }
       const slot = this.slots[slotIndex];
@@ -890,13 +981,21 @@ const App = {
       const c = this.craftById(craftId);
       return !!(c && Number(c.supportBonus || 0) > 0);
     },
-    chooseCraft(slotIndex, craftId) {
+    chooseCraft(slotIndex, craftId, craftIndex = 0) {
       const target = this.slots[slotIndex];
       if (!target.isSupport && this.isSupportOnlyCraft(craftId)) {
         alert("迦勒底午茶时光等助战加成礼装只能放在助战位");
         return;
       }
-      const existing = this.slots.findIndex((s, i) => i !== slotIndex && s.craftId === craftId);
+      const otherInSlot = craftIndex === 1 ? target.craftId : target.secondCraftId;
+      if (otherInSlot !== null && otherInSlot !== undefined && otherInSlot === craftId && !this.isRepeatableCraft(craftId)) {
+        alert("同一冠位从者不能重复装备同一张非通用礼装");
+        return;
+      }
+      const existing = this.slots.findIndex((s, i) => {
+        if (i === slotIndex) return false;
+        return s.craftId === craftId || (s.isCrown && s.secondCraftId === craftId);
+      });
       // 助战位可与任意位置重复；“通用5%”在玩家位之间也可重复。
       const allowDuplicate =
         (existing >= 0 && (target.isSupport || this.slots[existing].isSupport)) ||
@@ -904,18 +1003,40 @@ const App = {
       if (existing >= 0 && !allowDuplicate) {
         if (!confirm("该礼装已在其他槽位，是否移回当前槽位？")) return;
         this.slots[existing].craftId = null;
+        this.slots[existing].secondCraftId = null;
       }
-      this.slots[slotIndex].craftId = craftId;
+      if (craftIndex === 1) this.slots[slotIndex].secondCraftId = craftId;
+      else this.slots[slotIndex].craftId = craftId;
       this.closeOverlay();
     },
     clearSlotServant(i) {
       this.slots[i].servantId = null;
       this.slots[i].craftId = null;
+      this.slots[i].secondCraftId = null;
       this.slots[i].isSupport = false;
       this.slots[i].stage = null;
     },
-    clearSlotCraft(i) {
-      this.slots[i].craftId = null;
+    clearSlotCraft(i, craftIndex = 0) {
+      if (craftIndex === 1) this.slots[i].secondCraftId = null;
+      else this.slots[i].craftId = null;
+    },
+    toggleCrown(i) {
+      const slot = this.slots[i];
+      if (!slot) return;
+      slot.isCrown = !slot.isCrown;
+      if (!slot.isCrown) slot.secondCraftId = null;
+    },
+    switchMode(mode) {
+      if (this.mode === mode) return;
+      this.mode = mode;
+      if (mode !== "crown") {
+        // 普通模式不展示/不计算第二礼装位，但不清除冠位标记，便于切回后恢复
+        this.results = [];
+      } else {
+        this.crownClass = this.crownClass || "all";
+        this.results = [];
+      }
+      this.currentPage = 1;
     },
     toggleSupport(i) {
       // 助战只允许一个
@@ -931,9 +1052,9 @@ const App = {
     },
 
     // ---------- 右键菜单 ----------
-    openContextMenu(e, slotIndex, target) {
+    openContextMenu(e, slotIndex, target, craftIndex = 0) {
       e.preventDefault();
-      this.contextMenu = { visible: true, x: e.clientX, y: e.clientY, slotIndex, target };
+      this.contextMenu = { visible: true, x: e.clientX, y: e.clientY, slotIndex, target, craftIndex };
     },
     closeContextMenu() { this.contextMenu.visible = false; },
     ctxSupport() {
@@ -941,11 +1062,16 @@ const App = {
       if (i !== null) this.toggleSupport(i);
       this.closeContextMenu();
     },
+    ctxCrown() {
+      const i = this.contextMenu.slotIndex;
+      if (i !== null) this.toggleCrown(i);
+      this.closeContextMenu();
+    },
     ctxClear() {
-      const { slotIndex, target } = this.contextMenu;
+      const { slotIndex, target, craftIndex } = this.contextMenu;
       if (slotIndex !== null) {
         if (target === "servant") this.clearSlotServant(slotIndex);
-        else this.clearSlotCraft(slotIndex);
+        else this.clearSlotCraft(slotIndex, craftIndex || 0);
       }
       this.closeContextMenu();
     },
@@ -961,11 +1087,11 @@ const App = {
       if (sid !== null) this.openServantDetail(sid, detailSlotIndex);
     },
     ctxReplace() {
-      const { slotIndex, target } = this.contextMenu;
+      const { slotIndex, target, craftIndex } = this.contextMenu;
       this.closeContextMenu();
-      if (slotIndex !== null) this.openOverlay(slotIndex, target);
+      if (slotIndex !== null) this.openOverlay(slotIndex, target, target === "craft" ? (craftIndex || 0) : 0);
     },
-    openResultContext(e, result, member, kind) {
+    openResultContext(e, result, member, kind, craftIndex = 0) {
       e.preventDefault();
       this.contextMenu = {
         visible: true,
@@ -975,6 +1101,7 @@ const App = {
         target: kind === "craft" ? "result-craft" : "result-servant",
         result,
         member,
+        craftIndex,
       };
     },
     ctxSimpleExclude() {
@@ -983,9 +1110,9 @@ const App = {
       if (m) this.toggleSimpleExclude(m.servantId);
     },
     ctxResultInfo() {
-      const { result, member, target } = this.contextMenu;
+      const { result, member, target, craftIndex } = this.contextMenu;
       this.closeContextMenu();
-      if (result && member) this.openResultInfo(result, member, target === "result-craft" ? "craft" : "servant");
+      if (result && member) this.openResultInfo(result, member, target === "result-craft" ? "craft" : "servant", craftIndex || 0);
     },
     toggleSimpleExclude(id) {
       const n = Number(id);
@@ -1018,30 +1145,35 @@ const App = {
       const active = new Set();
       const seenCraft = new Set();
       for (const m of result.team || []) {
-        const c = this.craftById(m.craftId);
-        if (!c || seenCraft.has(c.id) || c.bonusType !== "trait") continue;
-        seenCraft.add(c.id);
-        let groups = [];
-        try {
-          groups = JSON.parse(c.triggerTraitsJson || "[]");
-        } catch (_) { /* ignore */ }
-        for (const g of groups) {
-          if (Array.isArray(g) && g.length && g.every((t) => traitSet.has(t))) {
-            for (const t of g) active.add(t);
+        const craftIds = [m.craftId];
+        if (m.secondCraftId !== null && m.secondCraftId !== undefined) craftIds.push(m.secondCraftId);
+        for (const cid of craftIds) {
+          const c = this.craftById(cid);
+          if (!c || seenCraft.has(c.id) || c.bonusType !== "trait") continue;
+          seenCraft.add(c.id);
+          let groups = [];
+          try {
+            groups = JSON.parse(c.triggerTraitsJson || "[]");
+          } catch (_) { /* ignore */ }
+          for (const g of groups) {
+            if (Array.isArray(g) && g.length && g.every((t) => traitSet.has(t))) {
+              for (const t of g) active.add(t);
+            }
           }
         }
       }
       return active;
     },
-    async openResultInfo(result, member, kind) {
+    async openResultInfo(result, member, kind, craftIndex = 0) {
       if (kind === "craft") {
-        const c = this.craftById(member.craftId);
+        const cid = craftIndex === 1 ? member.secondCraftId : member.craftId;
+        const c = this.craftById(cid);
         if (!c) return;
         this.resultInfo = {
           visible: true,
           mode: "craft",
           title: c.name || "礼装",
-          subtitle: `${c.rarity || 0}★ / Cost ${c.cost || 0}`,
+          subtitle: `${c.rarity || 0}★ / ${craftIndex === 1 ? '冠位第二礼装位 · 计算时 Cost 0' : 'Cost ' + (c.cost || 0)}`,
           rows: [
             { label: "类型", value: c.craftType === "bond" ? "牵绊加成礼装" : "其他礼装" },
             { label: "效果", value: c.detail || c.name || "无特殊效果" },
@@ -1075,19 +1207,28 @@ const App = {
 
     // ---------- 队伍 ----------
     resetTeam() {
-      if (!confirm("此操作将清空所有格子、固定状态、助战状态，并恢复Cost上限与策略，是否继续？")) return;
+      if (!confirm("此操作将清空所有格子、固定状态、助战状态、冠位标记，并恢复Cost上限/策略/基础数值/模式，是否继续？")) return;
       this.slots = makeSlots();
       this.costLimit = 116;
       this.strategy = "total_max";
       this.qualityMode = "balanced";
       this.targetServantId = null;
       this.targetServantKeyword = "";
+      this.baseBond = 0;
+      this.mode = "normal";
+      this.crownClass = "all";
       this.results = [];
     },
     randomFillFree() {
       const usedIds = new Set(this.slots.filter((s) => s.servantId !== null).map((s) => s.servantId));
-      const usedCraftIds = new Set(this.slots.filter((s) => !s.isSupport && s.craftId !== null).map((s) => s.craftId));
-      const candidates = this.ownedServants.filter((s) => !usedIds.has(s.id));
+      const usedCraftIds = new Set(
+        this.slots
+          .filter((s) => !s.isSupport)
+          .flatMap((s) => [s.craftId, s.secondCraftId])
+          .filter((x) => x !== null && x !== undefined)
+      );
+      const crownGroup = this.mode === "crown" ? this.crownClass : "all";
+      const candidates = this.ownedServants.filter((s) => !usedIds.has(s.id) && this.matchesCrownClassFilter(s.class, crownGroup));
       for (let i = 0; i < this.slots.length; i++) {
         if (this.slots[i].servantId === null && !this.slots[i].isSupport) {
           if (!candidates.length) break;
@@ -1120,15 +1261,18 @@ const App = {
       this.presetSaveVisible = false;
       const fixedServants = [];
       const fixedCrafts = [];
+      const crownPositions = [];
       let supportPosition = null;
-      let support = { servantId: null, craftId: null };
+      let support = { servantId: null, craftId: null, secondCraftId: null };
       this.slots.forEach((slot, i) => {
         const pos = this.slotPosition(i);
+        if (this.mode === "crown" && slot.isCrown) crownPositions.push(pos);
         if (slot.isSupport) {
           supportPosition = pos;
           support = {
             servantId: slot.servantId !== null ? slot.servantId : null,
             craftId: slot.craftId !== null && slot.craftId !== undefined ? slot.craftId : null,
+            secondCraftId: this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
           };
           return;
         }
@@ -1139,15 +1283,24 @@ const App = {
         }
         if (slot.craftId !== null) {
           const craft = this.craftById(slot.craftId);
-          fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other" });
+          fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 0 });
+        }
+        if (this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
+          const craft = this.craftById(slot.secondCraftId);
+          fixedCrafts.push({ position: pos, craftId: slot.secondCraftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 1 });
         }
       });
       const team = {
         name,
+        mode: this.mode,
+        crownClass: this.crownClass,
+        crownPositions,
+        baseBond: Number(this.baseBond || 0),
         fixedServants,
         fixedCrafts,
         supportId: support.servantId,
         supportCraftId: support.craftId,
+        supportSecondCraftId: support.secondCraftId,
         supportPosition,
         costLimit: this.costLimit,
         strategy: this.strategy,
@@ -1165,11 +1318,15 @@ const App = {
     async loadPreset(preset) {
       const fixedServants = preset.fixedServants || [];
       const fixedCrafts = preset.fixedCrafts || [];
-      const support = { servantId: preset.supportId, craftId: preset.supportCraftId };
+      const support = { servantId: preset.supportId, craftId: preset.supportCraftId, secondCraftId: preset.supportSecondCraftId };
       const supportPosition = preset.supportPosition || null;
+      const crownPositions = new Set((preset.crownPositions || []).map(String));
       const fresh = makeSlots();
       // 清空默认助战标记，待下面按预设精确重建助战位
       fresh.forEach((s) => { s.isSupport = false; });
+      POSITION_KEYS.forEach((pos, i) => {
+        fresh[i].isCrown = crownPositions.has(pos);
+      });
       fixedServants.forEach((f) => {
         const idx = POSITION_KEYS.indexOf(f.position);
         if (idx >= 0) {
@@ -1180,7 +1337,10 @@ const App = {
       });
       fixedCrafts.forEach((f) => {
         const idx = POSITION_KEYS.indexOf(f.position);
-        if (idx >= 0) fresh[idx].craftId = f.craftId;
+        if (idx >= 0) {
+          if (Number(f.slot || 0) === 1) fresh[idx].secondCraftId = f.craftId;
+          else fresh[idx].craftId = f.craftId;
+        }
       });
       // 旧预设没有 supportPosition 时采用兼容策略：尽量放回默认助战位，
       // 若默认位已被固定占用则放到第一个空闲位。
@@ -1197,11 +1357,15 @@ const App = {
       if (idx < 0) idx = 0;
       if (support.servantId) fresh[idx].servantId = support.servantId;
       if (support.craftId !== null && support.craftId !== undefined) fresh[idx].craftId = support.craftId;
+      if (support.secondCraftId !== null && support.secondCraftId !== undefined) fresh[idx].secondCraftId = support.secondCraftId;
       fresh[idx].isSupport = true;
       this.slots = fresh;
       this.costLimit = preset.costLimit || 116;
       this.strategy = preset.strategy || "total_max";
       this.qualityMode = preset.qualityMode || "balanced";
+      this.mode = preset.mode || "normal";
+      this.crownClass = preset.crownClass || "all";
+      this.baseBond = Number(preset.baseBond || 0);
       this.presetModalVisible = false;
     },
     async deletePreset(preset) {
@@ -1231,14 +1395,17 @@ const App = {
       });
       const fixedServants = [];
       const fixedCrafts = [];
+      const crownPositions = [];
       let support = {};
       this.slots.forEach((slot, i) => {
         const pos = this.slotPosition(i);
+        if (this.mode === "crown" && slot.isCrown) crownPositions.push(pos);
         if (slot.isSupport) {
           support = {
             position: pos,
             servantId: slot.servantId || null,
             craftId: slot.craftId === null ? null : slot.craftId,
+            secondCraftId: this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
           };
           return;
         }
@@ -1249,11 +1416,19 @@ const App = {
         }
         if (slot.craftId !== null) {
           const craft = this.craftById(slot.craftId);
-          fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other" });
+          fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 0 });
+        }
+        if (this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
+          const craft = this.craftById(slot.secondCraftId);
+          fixedCrafts.push({ position: pos, craftId: slot.secondCraftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 1 });
         }
       });
       return {
         box,
+        mode: this.mode,
+        classGroup: this.mode === "crown" && this.crownClass && this.crownClass !== "all" ? this.crownClass : null,
+        crownPositions: this.mode === "crown" ? crownPositions : [],
+        baseBond: Number(this.baseBond || 0),
         fixedServants,
         fixedCrafts,
         support,
@@ -1265,6 +1440,7 @@ const App = {
         activityBonus: 0,
         teaBonus: 1,
         topN: 1000,
+        craftPoolSize: 60,
         timeoutMs: { fast: 20000, balanced: 45000, high: 120000 }[this.qualityMode] || 20000,
       };
     },
@@ -1449,16 +1625,36 @@ const App = {
       </div>
     </div>
 
+    <!-- 模式切换 -->
+    <div class="mode-switch">
+      <button :class="{ active: mode === 'normal' }" @click="switchMode('normal')">普通战斗</button>
+      <button :class="{ active: mode === 'crown' }" @click="switchMode('crown')">戴冠战模式</button>
+    </div>
+
+    <!-- 戴冠战职阶筛选（一级界面） -->
+    <div v-if="mode === 'crown'" class="crown-filter panel">
+      <div class="team-config-title">戴冠战职阶筛选</div>
+      <div class="crown-filter-buttons">
+        <button
+          v-for="opt in crownClassFilters()"
+          :key="opt.value"
+          :class="{ active: crownClass === opt.value }"
+          @click="crownClass = opt.value; results = []; currentPage = 1"
+        >{{ opt.label }}</button>
+      </div>
+      <div class="text-muted" style="margin-top:6px">选定职阶后，只有该职阶从者参与计算；冠位从者位通过右键菜单设置。</div>
+    </div>
+
     <div v-if="error" class="panel error">{{ error }}</div>
     <div v-if="loading" class="empty">加载中...</div>
     <template v-else>
       <!-- 6 槽位主区域 -->
       <div class="board-area">
-        <div v-for="(slot, i) in slots" :key="i" class="slot-col" :class="{ 'slot-support': slot.isSupport }">
+        <div v-for="(slot, i) in slots" :key="i" class="slot-col" :class="{ 'slot-support': slot.isSupport, 'slot-crown': mode === 'crown' && slot.isCrown }">
           <div
             class="cell cell-servant"
             :class="{ empty: !slot.servantId, support: slot.isSupport }"
-            @click="slot.servantId ? openOverlay(i, 'servant') : openOverlay(i, 'servant')"
+            @click="openOverlay(i, 'servant')"
             @contextmenu="openContextMenu($event, i, 'servant')"
           >
             <template v-if="slot.servantId">
@@ -1479,23 +1675,28 @@ const App = {
             <template v-else>
               <span class="placeholder">{{ slot.isSupport ? '选择助战从者' : '点击选择从者' }}</span>
             </template>
+            <div v-if="mode === 'crown' && slot.isCrown" class="crown-star" title="冠位从者位（允许两个加成礼装）">✴</div>
           </div>
 
-          <div
-            class="cell cell-craft"
-            :class="{ empty: slot.craftId === null || slot.craftId === undefined }"
-            @click="openOverlay(i, 'craft')"
-            @contextmenu="openContextMenu($event, i, 'craft')"
-          >
-            <template v-if="slot.craftId !== null && slot.craftId !== undefined">
-              <img v-if="hasCraftImage(slotCraft(slot))" :src="craftImagePath(slotCraft(slot))" class="cell-craft-img" alt="" />
-              <div class="cell-name small">{{ slotCraft(slot).name }}</div>
-              <div class="cell-meta">{{ slotCraft(slot).rarity }}★ / Cost {{ slotCraft(slot).cost }}</div>
-              <div class="cell-effect">{{ craftEffect(slotCraft(slot)) }}</div>
-            </template>
-            <template v-else>
-              <span class="placeholder">{{ slot.isSupport ? '选择助战礼装' : '点击选择礼装' }}</span>
-            </template>
+          <div class="craft-stack" :class="{ 'crown-mode': mode === 'crown', 'has-second': mode === 'crown' && slot.isCrown }">
+            <div
+              v-for="cs in slotCraftItems(slot)"
+              :key="cs.index"
+              class="cell cell-craft"
+              :class="{ empty: cs.craftId === null || cs.craftId === undefined, second: cs.index === 1 }"
+              @click="openOverlay(i, 'craft', cs.index)"
+              @contextmenu="openContextMenu($event, i, 'craft', cs.index)"
+            >
+              <template v-if="cs.craftId !== null && cs.craftId !== undefined">
+                <img v-if="hasCraftImage(cs.craft)" :src="craftImagePath(cs.craft)" class="cell-craft-img" alt="" />
+                <div class="cell-name small">{{ cs.craft.name }}</div>
+                <div class="cell-meta">{{ cs.craft.rarity }}★ / {{ cs.index === 1 ? 'Cost 0' : 'Cost ' + cs.craft.cost }}</div>
+                <div class="cell-effect">{{ craftEffect(cs.craft) }}</div>
+              </template>
+              <template v-else>
+                <span class="placeholder">{{ slot.isSupport ? '选择助战礼装' : (cs.index === 1 ? '第二礼装位' : '点击选择礼装') }}</span>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -1524,6 +1725,11 @@ const App = {
               <option value="high">高质量（约 1~2 分钟）</option>
             </select>
           </div>
+          <div class="field">
+            <label>基础牵绊获取数值（默认0）</label>
+            <input type="number" min="0" step="1" v-model.number="baseBond" placeholder="0" />
+            <div class="text-muted">填 0 时结果只显示倍率；填实际基础值后显示预计牵绊数。</div>
+          </div>
           <div v-if="strategy === 'target_max'" class="field target-field">
             <label>指定从者</label>
             <input v-model="targetServantKeyword" placeholder="搜索从者名称" />
@@ -1549,7 +1755,7 @@ const App = {
       <!-- 底部信息/操作 -->
       <div class="bottom-bar panel">
         <div class="text-muted">
-          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}
+          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}<span v-if="mode === 'crown'"> | 冠位 {{ crownCount }}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           <button class="secondary" @click="resetTeam">清空队伍</button>
@@ -1585,6 +1791,7 @@ const App = {
         <div v-for="r in pagedResults" :key="r.rank" class="result-card">
           <div class="head">
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
+            <span v-if="r.baseBond" class="text-muted">基础 {{ formatBondNumber(r.baseBond) }} → 预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
             <span class="text-muted">Cost {{ r.costUsed }}/{{ costLimit }}</span>
             <span style="flex:1"></span>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
@@ -1592,17 +1799,25 @@ const App = {
           </div>
           <div class="result-board">
             <div v-for="m in r.team" :key="m.position" class="result-col">
-              <div class="mini-cell mini-servant" :class="{ support: m.isSupport, fixed: m.isFixed }" @contextmenu="openResultContext($event, r, m, 'servant')">
+              <div class="mini-cell mini-servant" :class="{ support: m.isSupport, fixed: m.isFixed, crown: m.isCrown }" @contextmenu="openResultContext($event, r, m, 'servant')">
                 <img v-if="!avatarMissingSet.has(String(m.servantId))" :src="avatarPath(m.servantId)" class="mini-avatar" alt="" @error="markAvatarBroken(m.servantId)" />
                 <div v-else class="mini-avatar fallback">{{ (m.name || '?').charAt(0) }}</div>
                 <div class="mini-stage">{{ stageNumber(m.stage) }}</div>
                 <div v-if="m.isSupport" class="mini-support">助战</div>
                 <div v-if="m.isFixed" class="mini-fixed">🔒</div>
+                <div v-if="m.isCrown" class="mini-crown-star" title="冠位从者位">✴</div>
               </div>
-              <div class="mini-cell mini-craft" @contextmenu="openResultContext($event, r, m, 'craft')">
-                <img v-if="hasCraftImageId(m.craftId)" :src="craftImagePathId(m.craftId)" class="mini-craft-img" alt="" />
-                <span class="mini-craft-name">{{ m.craftName || '无礼装' }}</span>
+              <div
+                v-for="cm in resultCraftItems(m)"
+                :key="'craft-' + cm.index"
+                class="mini-cell mini-craft"
+                :class="{ second: cm.index === 1 }"
+                @contextmenu="openResultContext($event, r, m, 'craft', cm.index)"
+              >
+                <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
+                <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
                 <span v-if="!m.isSupport" class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
+                <span v-if="r.baseBond && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
               </div>
             </div>
           </div>
@@ -1646,7 +1861,7 @@ const App = {
             :key="item.id"
             class="pick-card"
             :class="overlay.target === 'servant' ? 'servant-pick' : ''"
-            @click="overlay.target === 'servant' ? chooseServant(overlay.slotIndex, item.id) : chooseCraft(overlay.slotIndex, item.id)"
+            @click="overlay.target === 'servant' ? chooseServant(overlay.slotIndex, item.id) : chooseCraft(overlay.slotIndex, item.id, overlay.craftIndex || 0)"
             @mouseenter="overlay.target === 'servant' ? showHover($event, item) : null"
             @mousemove="overlay.target === 'servant' ? moveHover($event) : null"
             @mouseleave="hideHover"
@@ -1700,7 +1915,7 @@ const App = {
             <div v-if="box[s.id].checked" class="box-owned-mark">✔</div>
             <div class="box-sn">{{ s.collectionNo }}</div>
 
-            <div v-if="box[s.id].checked" class="box-maxbond" :class="{ active: box[s.id].maxBond }" @click.stop="toggleMaxBond(s.id)" title="满绊标记">绊</div>
+            <div v-if="box[s.id].checked" class="box-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" @click.stop="toggleMaxBond(s.id)" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
           </div>
         </div>
       </div>
@@ -1788,7 +2003,7 @@ const App = {
           >
             <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" @error="markAvatarBroken(s.id)" />
             <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
-            <div class="box-maxbond exclusion-maxbond" :class="{ active: box[s.id].maxBond }" title="满绊标记">绊</div>
+            <div class="box-maxbond exclusion-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
             <div class="exclusion-check">{{ isExcludedServant(s.id) ? '✓' : '' }}</div>
           </div>
           <div v-if="!filteredExclusionServants.length" class="empty">没有可排除的从者</div>
@@ -1932,7 +2147,8 @@ const App = {
             </select>
           </div>
           <div v-else class="text-muted" style="margin-bottom:8px">自由位/Box：灵基阶段与灵衣由引擎根据特性礼装自动选择</div>
-          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].maxBond" @change="toggleMaxBond(servantDetail.servantId)" /> 满绊标记（自动包含25%全队加成）</label>
+          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].maxBond" @change="toggleMaxBond(servantDetail.servantId)" /> 满绊标记（达到当前牵绊上限）</label>
+          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch1" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch1(servantDetail.servantId)" /> 全队25%加成（仅15级以上满绊生效）</label>
           <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch2" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch2(servantDetail.servantId)" /> 开关二（自身参与收益）</label>
           <div class="field">
             <label>个人加成（%）</label>
@@ -1997,11 +2213,14 @@ const App = {
       </template>
       <template v-else>
         <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
+        <div v-if="mode === 'crown' && contextMenu.target === 'servant' && contextMenu.slotIndex !== null" class="ctx-item" @click="ctxCrown">
+          {{ slots[contextMenu.slotIndex].isCrown ? '✴️ 取消冠位从者位' : '✴️ 设为冠位从者位' }}
+        </div>
         <div class="ctx-item" @click="ctxSupport">
           {{ contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].isSupport ? '取消助战' : '设为助战' }}
         </div>
-        <div class="ctx-item" @click="ctxReplace">✏️ 更换</div>
-        <div class="ctx-item" @click="ctxClear">🗑️ 清空{{ contextMenu.target === 'servant' ? '从者+礼装' : '礼装' }}</div>
+        <div class="ctx-item" @click="ctxReplace">✏️ 更换{{ contextMenu.target === 'craft' && contextMenu.craftIndex === 1 ? '第二礼装' : '' }}</div>
+        <div class="ctx-item" @click="ctxClear">🗑️ 清空{{ contextMenu.target === 'servant' ? '从者+礼装' : (contextMenu.craftIndex === 1 ? '第二礼装' : '礼装') }}</div>
       </template>
     </div>
   </div>

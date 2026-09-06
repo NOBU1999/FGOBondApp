@@ -494,6 +494,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   user-select: none;
 }
 .box-maxbond.active { background: var(--danger); color: #fff; }
+.box-maxbond.full { background: var(--support); color: #fff; }
 
 /* 排除管理弹窗：只保留内部列表一个滚动条 */
 .modal-panel.exclusion-modal {
@@ -770,3 +771,92 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   scrollbar-width: none;
 }
 .cell-effect::-webkit-scrollbar { display: none; }
+
+/* 模式切换 */
+.mode-switch {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.mode-switch button {
+  flex: 1;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.mode-switch button.active {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.22);
+  color: #fff;
+}
+
+/* 戴冠战职阶筛选 */
+.crown-filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crown-filter-buttons button {
+  min-width: 54px;
+}
+.crown-filter-buttons button.active {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.25);
+  color: #fff;
+}
+
+/* 冠位从者位：左上角蓝色八芒星 */
+.crown-star {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #4fc3f7;
+  text-shadow: 0 0 4px rgba(79, 195, 247, 0.9);
+  pointer-events: none;
+  z-index: 3;
+}
+.slot-crown .cell-servant {
+  box-shadow: inset 0 0 0 2px rgba(79, 195, 247, 0.65), 0 0 10px rgba(79, 195, 247, 0.35);
+}
+
+/* 礼装槽纵向容器：戴冠战第二礼装位 */
+.craft-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.craft-stack.crown-mode {
+  justify-content: center;
+  min-height: 192px;
+}
+.craft-stack.crown-mode .cell-craft {
+  flex: 1 1 auto;
+  min-height: 86px;
+}
+.craft-stack.crown-mode:not(.has-second) .cell-craft {
+  min-height: 180px;
+}
+
+/* 结果迷你队伍：冠位标记与预计牵绊数 */
+.mini-cell.mini-servant.crown {
+  border-color: #4fc3f7;
+  box-shadow: 0 0 6px rgba(79, 195, 247, 0.4);
+}
+.mini-crown-star {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  font-size: 11px;
+  line-height: 1;
+  color: #4fc3f7;
+  text-shadow: 0 0 4px rgba(79, 195, 247, 0.9);
+  pointer-events: none;
+}
+.mini-points {
+  display: block;
+  font-size: 10px;
+  color: #ffd166;
+  line-height: 1.2;
+}
