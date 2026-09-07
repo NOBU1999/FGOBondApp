@@ -35,6 +35,7 @@ function registerIpcHandlers() {
         serverRegion: database.getServerRegion(db),
         cnUnavailableBondCeIds: database.getCnUnavailableBondCeIds(db),
         genericParticipatingCraftIds: database.getGenericBondParticipation(db),
+        nonParticipatingCraftIds: database.getNonParticipatingCraftIds(db),
       };
     } finally {
       db.close();
@@ -65,11 +66,23 @@ function registerIpcHandlers() {
     }
   });
 
-  // ---------------- DB 查询 ----------------
-  ipcMain.handle("db:list-servants", () => {
+  // 普通/自定义牵绊礼装是否参与自动搜索
+  ipcMain.handle("app:set-non-participating-crafts", (_e, ids) => {
     const db = database.open();
     try {
-      return database.listServants(db);
+      database.ensureSchema(db);
+      database.setNonParticipatingCraftIds(db, ids || []);
+      return database.getNonParticipatingCraftIds(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  // ---------------- DB 查询 ----------------
+  ipcMain.handle("db:list-servants", (_e, region) => {
+    const db = database.open();
+    try {
+      return database.listServants(db, region || database.getServerRegion(db));
     } finally {
       db.close();
     }

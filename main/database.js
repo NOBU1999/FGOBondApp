@@ -174,11 +174,13 @@ function run(db, sql, params = []) {
 // ---------------------------------------------------------------------------
 // 数据读取（Python 首次启动/更新后写入的库）
 // ---------------------------------------------------------------------------
-function listServants(db) {
+function listServants(db, region) {
   // 剔除 collection_no<=0 的非常规/未实装/重复从者（如未来实装角色），
   // 避免在 Box/排除/选择界面显示 0 号条目。
   const rows = all(db, "SELECT id, collection_no AS collectionNo, name, class, cost, rarity, atk_max AS atkMax, hp_max AS hpMax, type FROM servants WHERE collection_no > 0 ORDER BY collection_no");
-  const costumeRows = all(db, "SELECT DISTINCT servant_id AS servantId, costume_id AS costumeId FROM servant_costume_traits ORDER BY servant_id, costume_id");
+  // 简中服模式只展示简中服已实装的灵衣
+  const costumeTable = region === "cn" ? "servant_costume_traits_cn" : "servant_costume_traits";
+  const costumeRows = all(db, `SELECT DISTINCT servant_id AS servantId, costume_id AS costumeId FROM ${costumeTable} ORDER BY servant_id, costume_id`);
   const costumeMap = {};
   for (const r of costumeRows) {
     if (!costumeMap[r.servantId]) costumeMap[r.servantId] = [];
@@ -446,6 +448,22 @@ function setGenericBondParticipation(db, ids) {
   return getGenericBondParticipation(db);
 }
 
+function getNonParticipatingCraftIds(db) {
+  try {
+    const raw = getMetaValue(db, "non_participating_craft_ids");
+    const list = JSON.parse(raw || "[]");
+    return Array.isArray(list) ? list.map(Number).filter((n) => Number.isFinite(n)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function setNonParticipatingCraftIds(db, ids) {
+  const list = Array.from(new Set((ids || []).map(Number))).filter((n) => Number.isFinite(n));
+  setMetaValue(db, "non_participating_craft_ids", JSON.stringify(list));
+  return getNonParticipatingCraftIds(db);
+}
+
 function listCustomCrafts(db) {
   const rows = all(
     db,
@@ -610,6 +628,8 @@ module.exports = {
   setServerRegion,
   getGenericBondParticipation,
   setGenericBondParticipation,
+  getNonParticipatingCraftIds,
+  setNonParticipatingCraftIds,
   listCustomCrafts,
   saveCustomCrafts,
   getEventBondBonuses,

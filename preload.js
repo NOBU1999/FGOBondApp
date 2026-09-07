@@ -14,10 +14,11 @@ contextBridge.exposeInMainWorld("fgo", {
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
   setServerRegion: (region) => ipcRenderer.invoke("app:set-server-region", toPlain(region)),
   setGenericBondParticipation: (ids) => ipcRenderer.invoke("app:set-generic-participation", toPlain(ids)),
+  setNonParticipatingCraftIds: (ids) => ipcRenderer.invoke("app:set-non-participating-crafts", toPlain(ids)),
   getCostumeNames: () => ipcRenderer.invoke("app:costume-names"),
 
   // 数据查询
-  listServants: () => ipcRenderer.invoke("db:list-servants"),
+  listServants: (region) => ipcRenderer.invoke("db:list-servants", toPlain(region)),
   getServant: (id) => ipcRenderer.invoke("db:get-servant", toPlain(id)),
   getStageTraits: (id, stage, region) => ipcRenderer.invoke("db:get-stage-traits", toPlain(id), toPlain(stage), toPlain(region)),
   getAllStageTraits: (id, region) => ipcRenderer.invoke("db:get-all-stage-traits", toPlain(id), toPlain(region)),

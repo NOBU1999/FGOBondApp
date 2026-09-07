@@ -213,6 +213,7 @@ const App = {
       serverRegion: "jp",
       cnUnavailableCraftIds: [],
       genericParticipatingCraftIds: [],
+      nonParticipatingCraftIds: [],
       customCrafts: [],
       customModalVisible: false,
       customEditing: null,
@@ -347,6 +348,9 @@ const App = {
     },
     genericParticipatingSet() {
       return new Set((this.genericParticipatingCraftIds || []).map(Number));
+    },
+    nonParticipatingCraftSet() {
+      return new Set((this.nonParticipatingCraftIds || []).map(Number));
     },
     traitNameOptions() {
       return Object.keys(TRAIT_LABELS)
@@ -497,6 +501,7 @@ const App = {
       this.serverRegion = (info && info.serverRegion) || "jp";
       this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
       this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || [];
+      this.nonParticipatingCraftIds = (info && info.nonParticipatingCraftIds) || [];
       this.costumeNames = costumeNames || {};
       this.excludedServants = (exclusions && exclusions.servants) || [];
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
@@ -683,6 +688,7 @@ const App = {
       this.currentPage = 1;
       try {
         await window.fgo.setServerRegion(next);
+        await this.reloadAllData();
       } catch (e) {
         this.serverRegion = previous;
         this.error = "保存服务器设置失败：" + (e.message || String(e));
@@ -1067,6 +1073,7 @@ const App = {
       this.serverRegion = (info && info.serverRegion) || this.serverRegion || "jp";
       this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
       this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || this.genericParticipatingCraftIds || [];
+      this.nonParticipatingCraftIds = (info && info.nonParticipatingCraftIds) || this.nonParticipatingCraftIds || [];
       this.servants = servants || [];
       this.bondCrafts = bondCrafts || [];
       this.customCrafts = customCrafts || [];
@@ -1301,6 +1308,34 @@ const App = {
       e.preventDefault();
       this.contextMenu = { visible: true, x: e.clientX, y: e.clientY, slotIndex: null, target: "box", servantId: servant.id };
     },
+    openOverlayServantContext(e, servant) {
+      e.preventDefault();
+      this.contextMenu = {
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        slotIndex: this.overlay.slotIndex,
+        target: "overlay-servant",
+        servantId: servant.id,
+      };
+    },
+    ctxOverlayServantDetail() {
+      const sid = Number(this.contextMenu.servantId);
+      this.closeContextMenu();
+      this.overlay.visible = false;
+      if (sid && this.box[sid]) {
+        this.openServantDetail(sid, null);
+      } else {
+        const s = this.servantMap[sid];
+        alert(s ? `「${s.name}」不在你的 Box 中，无法设置` : "未找到该从者");
+      }
+    },
+    ctxOverlayServantAttr() {
+      const sid = Number(this.contextMenu.servantId);
+      this.closeContextMenu();
+      this.overlay.visible = false;
+      if (sid) this.openServantAttr(sid);
+    },
     ctxDetail() {
       const { slotIndex, servantId } = this.contextMenu;
       const sid = servantId !== undefined ? servantId : (slotIndex !== null ? this.slots[slotIndex].servantId : null);
@@ -1460,7 +1495,7 @@ const App = {
           const availableCrafts = this.meaningfulBondCrafts.filter(
             (c) =>
               !this.isSupportOnlyCraft(c.id) &&
-              (!this.isGenericCraft(c) || this.isGenericParticipating(c)) &&
+              this.isCraftParticipating(c) &&
               (this.isRepeatableCraft(c.id) || !usedCraftIds.has(c.id))
           );
           const c = availableCrafts.length ? availableCrafts[Math.floor(Math.random() * availableCrafts.length)] : null;
@@ -1766,27 +1801,44 @@ const App = {
       }
     },
 
-    // ---------- 通用礼装参与开关 ----------
+    // ---------- 礼装参与自动搜索开关 ----------
     isGenericCraft(c) {
       if (!c) return false;
       return !!(c.isGenericCraft || GENERIC_BOND_CRAFT_IDS.includes(Number(c.id)));
     },
-    isGenericParticipating(c) {
+    isCraftParticipating(c) {
       if (!c) return false;
-      return this.genericParticipatingSet.has(Number(c.id));
-    },
-    async toggleGenericCraftParticipation(c) {
-      if (!c || !this.isGenericCraft(c)) return;
       const id = Number(c.id);
-      const set = new Set(this.genericParticipatingCraftIds.map(Number));
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
-      const next = Array.from(set);
-      this.genericParticipatingCraftIds = next;
-      try {
-        this.genericParticipatingCraftIds = await window.fgo.setGenericBondParticipation(plainClone(next));
-      } catch (err) {
-        alert("保存通用礼装参与设置失败：" + (err && err.message ? err.message : String(err)));
+      // 通用礼装默认不参与，除非在 genericParticipatingCraftIds 中；
+      // 其他牵绊礼装默认参与，除非在 nonParticipatingCraftIds 中。
+      if (this.isGenericCraft(c)) return this.genericParticipatingSet.has(id);
+      return !this.nonParticipatingCraftSet.has(id);
+    },
+    async toggleCraftAutoParticipation(c) {
+      if (!c || c.craftType !== "bond") return;
+      const id = Number(c.id);
+      if (this.isGenericCraft(c)) {
+        const set = new Set(this.genericParticipatingCraftIds.map(Number));
+        if (set.has(id)) set.delete(id);
+        else set.add(id);
+        const next = Array.from(set);
+        this.genericParticipatingCraftIds = next;
+        try {
+          this.genericParticipatingCraftIds = await window.fgo.setGenericBondParticipation(plainClone(next));
+        } catch (err) {
+          alert("保存通用礼装参与设置失败：" + (err && err.message ? err.message : String(err)));
+        }
+      } else {
+        const set = new Set(this.nonParticipatingCraftIds.map(Number));
+        if (set.has(id)) set.delete(id);
+        else set.add(id);
+        const next = Array.from(set);
+        this.nonParticipatingCraftIds = next;
+        try {
+          this.nonParticipatingCraftIds = await window.fgo.setNonParticipatingCraftIds(plainClone(next));
+        } catch (err) {
+          alert("保存礼装参与设置失败：" + (err && err.message ? err.message : String(err)));
+        }
       }
     },
 
@@ -1837,11 +1889,12 @@ const App = {
       const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
       const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
       const genericNotParticipatingIds = this.genericBondCrafts
-        .filter((c) => !this.isGenericParticipating(c))
+        .filter((c) => !this.isCraftParticipating(c))
         .map((c) => Number(c.id));
-      // 玩家自由礼装位：手动排除 + 服务器未实装 + 通用礼装未开启参与，全部排除。
-      // 助战是“借别人”的：手动排除不生效；只排除服务器未实装和未开启参与的通用礼装。
-      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds];
+      const nonParticipatingIds = (Array.isArray(this.nonParticipatingCraftIds) ? this.nonParticipatingCraftIds : []).map(Number);
+      // 玩家自由礼装位：手动排除 + 服务器未实装 + 右键设为“不参与自动”的礼装，全部排除。
+      // 助战是“借别人”的：手动排除不生效；但服务器未实装、以及用户右键关闭自动参与的礼装仍不进入。
+      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
       return {
         box,
         mode: this.mode,
@@ -1856,7 +1909,7 @@ const App = {
         strategy: this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
         excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
-        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds])),
+        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds])),
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
@@ -2291,12 +2344,12 @@ const App = {
             class="pick-card"
             :class="overlay.target === 'servant' ? 'servant-pick' : ''"
             @click="overlay.target === 'servant' ? chooseServant(overlay.slotIndex, item.id) : chooseCraft(overlay.slotIndex, item.id, overlay.craftIndex || 0)"
-            @contextmenu.prevent="overlay.target === 'craft' ? toggleGenericCraftParticipation(item) : null"
+            @contextmenu.prevent="overlay.target === 'servant' ? openOverlayServantContext($event, item) : (overlay.target === 'craft' ? toggleCraftAutoParticipation(item) : null)"
             @mouseenter="overlay.target === 'servant' ? showHover($event, item) : null"
             @mousemove="overlay.target === 'servant' ? moveHover($event) : null"
             @mouseleave="hideHover"
           >
-            <div v-if="overlay.target === 'craft' && isGenericCraft(item) && !isGenericParticipating(item)" class="pick-not-participate">不参与自动</div>
+            <div v-if="overlay.target === 'craft' && item.craftType === 'bond' && !isCraftParticipating(item)" class="pick-not-participate">不参与自动</div>
             <img v-if="overlay.target === 'servant' && !avatarMissingSet.has(String(item.id))" :src="avatarPath(item.id)" class="pick-avatar" alt="" @error="markAvatarBroken(item.id)" />
             <div v-else-if="overlay.target === 'servant'" class="pick-name">{{ item.name.charAt(0) }}</div>
             <template v-if="overlay.target === 'craft'">
@@ -2751,6 +2804,10 @@ const App = {
       <template v-if="contextMenu.target === 'box'">
         <div class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
         <div class="ctx-item" @click="ctxServantAttr">🔍 从者属性</div>
+      </template>
+      <template v-else-if="contextMenu.target === 'overlay-servant'">
+        <div class="ctx-item" @click="ctxOverlayServantDetail">⚙️ 从者设置</div>
+        <div class="ctx-item" @click="ctxOverlayServantAttr">🔍 从者属性</div>
       </template>
       <template v-else-if="contextMenu.target === 'result-servant'">
         <div class="ctx-item" @click="ctxSimpleExclude">🚫 简易排除</div>
