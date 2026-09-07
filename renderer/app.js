@@ -246,6 +246,7 @@ const App = {
       hover: { visible: false, x: 0, y: 0, text: "" },
       servantDetail: { visible: false, servantId: null, slotIndex: null },
       servantDetailEventId: "",
+      servantAttr: { visible: false, servantId: null, stage: "fourth", rows: [], loading: false },
       presets: [],
       presetModalVisible: false,
       presetSaveVisible: false,
@@ -744,6 +745,49 @@ const App = {
         (ev) => this.eventBonusForServant(ev, sid) !== null
       );
       this.servantDetailEventId = withBonus.length ? String(withBonus[0].eventId) : "";
+    },
+    openServantAttr(servantId) {
+      const sid = Number(servantId);
+      if (!this.servantMap[sid]) return;
+      this.servantAttr = { visible: true, servantId: sid, stage: "fourth", rows: [], loading: false };
+      this.loadServantAttrTraits();
+    },
+    closeServantAttr() {
+      this.servantAttr.visible = false;
+    },
+    servantAttrOptions() {
+      const sid = Number(this.servantAttr.servantId);
+      const servant = this.servantMap[sid];
+      const options = [];
+      STAGES.forEach((s) => options.push({ value: s, label: STAGE_LABELS[s] }));
+      if (servant) {
+        (servant.costumes || []).forEach((cid) => {
+          const name = this.costumeNames[String(cid)];
+          options.push({ value: `costume_${cid}`, label: name ? `灵衣：${name}` : `灵衣 ${cid}` });
+        });
+      }
+      return options;
+    },
+    async loadServantAttrTraits() {
+      const sid = Number(this.servantAttr.servantId);
+      const stage = this.servantAttr.stage;
+      if (!sid || !stage) return;
+      this.servantAttr.loading = true;
+      try {
+        const traits = await window.fgo.getStageTraits(sid, stage, this.serverRegion);
+        this.servantAttr.rows = (traits || []).map((t) => ({ label: t, active: false }));
+      } catch (e) {
+        this.servantAttr.rows = [];
+        this.servantAttr.error = (e && e.message) || String(e);
+      } finally {
+        this.servantAttr.loading = false;
+      }
+    },
+    ctxServantAttr() {
+      const { servantId, slotIndex } = this.contextMenu;
+      const sid = servantId !== undefined ? servantId : (slotIndex !== null ? this.slots[slotIndex].servantId : null);
+      this.closeContextMenu();
+      if (sid !== null) this.openServantAttr(sid);
     },
     servantEventRecord(ev, servantId) {
       const sid = Number(servantId);
@@ -1372,7 +1416,7 @@ const App = {
         rows: [],
       };
       try {
-        const traits = await window.fgo.getStageTraits(member.servantId, member.stage || "fourth");
+        const traits = await window.fgo.getStageTraits(member.servantId, member.stage || "fourth", this.serverRegion);
         const active = this.activeTraitKeys(result, member, traits || []);
         this.resultInfo.rows = (traits || []).map((t) => ({ label: t, active: active.has(t) }));
       } catch (e) {
@@ -1801,6 +1845,7 @@ const App = {
       return {
         box,
         mode: this.mode,
+        serverRegion: this.serverRegion,
         classGroup: this.mode === "crown" && this.crownClass && this.crownClass !== "all" ? this.crownClass : null,
         crownPositions: this.mode === "crown" ? crownPositions : [],
         baseBond: Number(this.baseBond || 0),
@@ -2654,6 +2699,28 @@ const App = {
       </div>
     </div>
 
+    <!-- 从者属性查看（可切换阶段/灵衣） -->
+    <div v-if="servantAttr.visible" class="modal-mask" @click.self="closeServantAttr">
+      <div class="modal-panel small">
+        <div class="overlay-head">
+          <h2>{{ servantAttr.servantId ? (servantMap[servantAttr.servantId] ? servantMap[servantAttr.servantId].name : '') : '' }} 属性</h2>
+          <button class="secondary" @click="closeServantAttr">✕</button>
+        </div>
+        <div class="field">
+          <label>阶段 / 灵衣</label>
+          <select v-model="servantAttr.stage" @change="loadServantAttrTraits">
+            <option v-for="opt in servantAttrOptions()" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+        </div>
+        <div class="text-muted" style="margin-bottom:6px">服务器：{{ serverRegion === 'cn' ? '简中服' : '日服' }}</div>
+        <div v-if="servantAttr.loading" class="empty">加载中...</div>
+        <div v-else-if="!servantAttr.rows.length" class="empty">没有读取到属性</div>
+        <div v-else class="trait-info">
+          <div v-for="row in servantAttr.rows" :key="row.label" class="trait-chip">{{ traitLabel(row.label) }}</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 结果查看信息弹窗 -->
     <div v-if="resultInfo.visible" class="modal-mask" @click.self="closeResultInfo">
       <div class="modal-panel small">
@@ -2681,7 +2748,10 @@ const App = {
 
     <!-- 右键菜单 -->
     <div v-if="contextMenu.visible" class="context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" @click.stop>
-      <div v-if="contextMenu.target === 'box'" class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
+      <template v-if="contextMenu.target === 'box'">
+        <div class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
+        <div class="ctx-item" @click="ctxServantAttr">🔍 从者属性</div>
+      </template>
       <template v-else-if="contextMenu.target === 'result-servant'">
         <div class="ctx-item" @click="ctxSimpleExclude">🚫 简易排除</div>
         <div class="ctx-item" @click="ctxResultInfo">ℹ️ 查看属性</div>
@@ -2691,6 +2761,7 @@ const App = {
       </template>
       <template v-else>
         <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
+        <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxServantAttr">🔍 从者属性</div>
         <div v-if="mode === 'crown' && contextMenu.target === 'servant' && contextMenu.slotIndex !== null" class="ctx-item" @click="ctxCrown">
           {{ slots[contextMenu.slotIndex].isCrown ? '✴️ 取消冠位从者位' : '✴️ 设为冠位从者位' }}
         </div>

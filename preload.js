@@ -19,8 +19,8 @@ contextBridge.exposeInMainWorld("fgo", {
   // 数据查询
   listServants: () => ipcRenderer.invoke("db:list-servants"),
   getServant: (id) => ipcRenderer.invoke("db:get-servant", toPlain(id)),
-  getStageTraits: (id, stage) => ipcRenderer.invoke("db:get-stage-traits", toPlain(id), toPlain(stage)),
-  getAllStageTraits: (id) => ipcRenderer.invoke("db:get-all-stage-traits", toPlain(id)),
+  getStageTraits: (id, stage, region) => ipcRenderer.invoke("db:get-stage-traits", toPlain(id), toPlain(stage), toPlain(region)),
+  getAllStageTraits: (id, region) => ipcRenderer.invoke("db:get-all-stage-traits", toPlain(id), toPlain(region)),
   listBondCrafts: () => ipcRenderer.invoke("db:list-bond-crafts"),
   listAllCrafts: () => ipcRenderer.invoke("db:list-all-crafts"),
 

@@ -116,6 +116,7 @@ class CalculationRequest:
     excluded_servant_ids: Set[int] = field(default_factory=set)
     excluded_craft_ids: Set[int] = field(default_factory=set)
     support_excluded_craft_ids: Set[int] = field(default_factory=set)
+    server_region: str = "jp"
     activity_bonus: float = 0.0
     tea_bonus: float = 1.0  # 1 表示使用午茶/助战加成档位
     # 戴冠战/普通模式
@@ -258,6 +259,7 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         excluded_servant_ids={int(x) for x in (data.get("excludedServantIds") or [])},
         excluded_craft_ids={int(x) for x in (data.get("excludedCraftIds") or [])},
         support_excluded_craft_ids={int(x) for x in (data.get("supportExcludedCraftIds") or [])},
+        server_region=str(data.get("serverRegion") or "jp").lower(),
         activity_bonus=float(data.get("activityBonus", 0) or 0),
         tea_bonus=float(data.get("teaBonus", 1) or 1),
         mode=str(data.get("mode", "normal") or "normal").lower(),

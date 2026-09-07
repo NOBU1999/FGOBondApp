@@ -66,6 +66,26 @@ CREATE TABLE IF NOT EXISTS servant_costumes (
     PRIMARY KEY (servant_id, costume_id)
 );
 
+CREATE TABLE IF NOT EXISTS servant_stage_traits_cn (
+    servant_id INTEGER NOT NULL REFERENCES servants(id),
+    stage TEXT NOT NULL CHECK(stage IN ('initial','first','second','third','fourth')),
+    trait TEXT NOT NULL,
+    trait_id INTEGER,
+    PRIMARY KEY (servant_id, stage, trait)
+);
+CREATE INDEX IF NOT EXISTS idx_stage_traits_cn_stage_trait
+    ON servant_stage_traits_cn(stage, trait);
+
+CREATE TABLE IF NOT EXISTS servant_costume_traits_cn (
+    servant_id INTEGER NOT NULL REFERENCES servants(id),
+    costume_id INTEGER NOT NULL,
+    trait TEXT NOT NULL,
+    trait_id INTEGER,
+    PRIMARY KEY (servant_id, costume_id, trait)
+);
+CREATE INDEX IF NOT EXISTS idx_costume_traits_cn_costume
+    ON servant_costume_traits_cn(costume_id, trait);
+
 CREATE TABLE IF NOT EXISTS crafts (
     id INTEGER PRIMARY KEY,
     collection_no INTEGER,
@@ -164,7 +184,9 @@ def clear_data_tables(conn: sqlite3.Connection) -> None:
     """清空数据表（保留用户表与 meta），用于全量重建。"""
     conn.execute("DELETE FROM servant_costumes")
     conn.execute("DELETE FROM servant_costume_traits")
+    conn.execute("DELETE FROM servant_costume_traits_cn")
     conn.execute("DELETE FROM servant_stage_traits")
+    conn.execute("DELETE FROM servant_stage_traits_cn")
     conn.execute("DELETE FROM servants")
     conn.execute("DELETE FROM crafts")
     conn.commit()
@@ -247,6 +269,52 @@ def upsert_costume_traits(
     conn.executemany(
         """
         INSERT OR IGNORE INTO servant_costume_traits(servant_id, costume_id, trait, trait_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (servant_id, costume_id, trait_name, trait_id)
+            for trait_name, trait_id in traits
+        ],
+    )
+
+
+def upsert_stage_traits_cn(
+    conn: sqlite3.Connection,
+    servant_id: int,
+    stage: str,
+    traits: Iterable[Tuple[str, Optional[int]]],
+) -> None:
+    """写入简中服该从者某阶段的完整特性集合（先删后插）。"""
+    stage = stage.lower()
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage: {stage}")
+    conn.execute(
+        "DELETE FROM servant_stage_traits_cn WHERE servant_id=? AND stage=?",
+        (servant_id, stage),
+    )
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO servant_stage_traits_cn(servant_id, stage, trait, trait_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        [(servant_id, stage, trait_name, trait_id) for trait_name, trait_id in traits],
+    )
+
+
+def upsert_costume_traits_cn(
+    conn: sqlite3.Connection,
+    servant_id: int,
+    costume_id: int,
+    traits: Iterable[Tuple[str, Optional[int]]],
+) -> None:
+    """写入简中服某从者灵衣状态的完整特性集合（先删后插）。"""
+    conn.execute(
+        "DELETE FROM servant_costume_traits_cn WHERE servant_id=? AND costume_id=?",
+        (servant_id, costume_id),
+    )
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO servant_costume_traits_cn(servant_id, costume_id, trait, trait_id)
         VALUES (?, ?, ?, ?)
         """,
         [

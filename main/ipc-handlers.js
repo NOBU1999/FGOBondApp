@@ -84,19 +84,19 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle("db:get-stage-traits", (_e, servantId, stage) => {
+  ipcMain.handle("db:get-stage-traits", (_e, servantId, stage, region) => {
     const db = database.open();
     try {
-      return database.getStageTraits(db, servantId, stage);
+      return database.getStageTraits(db, servantId, stage, region);
     } finally {
       db.close();
     }
   });
 
-  ipcMain.handle("db:get-all-stage-traits", (_e, servantId) => {
+  ipcMain.handle("db:get-all-stage-traits", (_e, servantId, region) => {
     const db = database.open();
     try {
-      return database.getAllStageTraits(db, servantId);
+      return database.getAllStageTraits(db, servantId, region);
     } finally {
       db.close();
     }

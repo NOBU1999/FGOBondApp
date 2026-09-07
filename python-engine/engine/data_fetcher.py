@@ -47,6 +47,18 @@ PLAYABLE_SERVANT_TYPES = {"normal", "heroine"}
 # 礼装（Craft Essence）type
 CRAFT_EQUIP_TYPES = {"servantEquip"}
 
+# Atlas ascensionAdd.attribute 的取值 -> trait 机器名。
+# 该字段会在部分从者 3破/4破/灵衣时整体改变“属性（天/地/人/星/兽）”。
+ATTRIBUTE_VALUE_TO_TRAIT = {
+    "star": "attributeStar",
+    "sky": "attributeSky",
+    "earth": "attributeEarth",
+    "man": "attributeMan",
+    "human": "attributeMan",
+    "beast": "attributeBeast",
+}
+ATTRIBUTE_TRAIT_NAMES = set(ATTRIBUTE_VALUE_TO_TRAIT.values())
+
 # 本地 Chaldea 翻译表（JP -> CN），由 scripts/update_name_translations.py 生成
 _TRANSLATION_CACHE: Optional[Dict[str, Dict[str, str]]] = None
 
@@ -273,6 +285,28 @@ def _global_trait_add_pairs(
     return result
 
 
+def _apply_attribute_override(
+    traits: List[Tuple[str, Optional[int]]],
+    attribute_value: Optional[str],
+) -> List[Tuple[str, Optional[int]]]:
+    """应用 Atlas ascensionAdd.attribute 的属性整体覆盖。
+
+    API 的 ascensionAdd.individuality 列表里仍保留基础属性 trait，
+    但 attribute.ascension 表示该阶段属性整体变为另一值（如星→人），
+    因此需要把旧的 attribute* trait 移除并替换成目标 trait。
+    """
+    if not attribute_value:
+        return traits
+    new_name = ATTRIBUTE_VALUE_TO_TRAIT.get(str(attribute_value).lower())
+    if not new_name:
+        return traits
+    result = [(name, tid) for name, tid in traits if name not in ATTRIBUTE_TRAIT_NAMES]
+    names = {name for name, _ in result}
+    if new_name not in names:
+        result.append((new_name, None))
+    return result
+
+
 def resolve_stage_trait_sets(
     servant: Dict[str, Any],
 ) -> Dict[str, List[Tuple[str, Optional[int]]]]:
@@ -292,6 +326,10 @@ def resolve_stage_trait_sets(
     ascension_add = (
         (servant.get("ascensionAdd") or {}).get("individuality") or {}
     ).get("ascension") or {}
+    attribute_asc = (
+        ((servant.get("ascensionAdd") or {}).get("attribute") or {})
+        .get("ascension") or {}
+    )
 
     result: Dict[str, List[Tuple[str, Optional[int]]]] = {}
     global_add = _global_trait_add_pairs(servant)
@@ -317,6 +355,9 @@ def resolve_stage_trait_sets(
                 traits.append((name, tid))
                 names.add(name)
 
+        # 应用 Atlas ascensionAdd.attribute 的属性整体覆盖（如星→人）
+        traits = _apply_attribute_override(traits, attribute_asc.get(asc_key))
+
         # 排序便于稳定输出
         result[stage] = sorted(traits, key=lambda x: x[0])
     return result
@@ -335,6 +376,10 @@ def resolve_costume_trait_sets(
         (servant.get("ascensionAdd") or {}).get("individuality") or {}
     )
     costume_map = ascension_add.get("costume") or {}
+    attribute_costume = (
+        ((servant.get("ascensionAdd") or {}).get("attribute") or {})
+        .get("costume") or {}
+    )
     global_add = _global_trait_add_pairs(servant)
     result: Dict[int, List[Tuple[str, Optional[int]]]] = {}
     for costume_id, raw in costume_map.items():
@@ -344,6 +389,9 @@ def resolve_costume_trait_sets(
             if name not in names:
                 traits.append((name, tid))
                 names.add(name)
+        traits = _apply_attribute_override(
+            traits, attribute_costume.get(str(costume_id))
+        )
         if traits:
             result[int(costume_id)] = sorted(traits, key=lambda x: x[0])
     return result
@@ -562,6 +610,27 @@ def build_database(
         costume_traits = resolve_costume_trait_sets(raw)
         for costume_id, traits in costume_traits.items():
             database.upsert_costume_traits(conn, parsed["id"], costume_id, traits)
+
+    # JP 全量作为主库时，额外写入简中服 traits，供“日服/简中服”切换后按服务器取数。
+    if region != "CN":
+        if progress:
+            progress("正在写入简中服特性数据...")
+        try:
+            cn_servants_api = load_nice_servants("CN", use_cache=use_cache)
+            for raw in cn_servants_api:
+                parsed = parse_servant(raw)
+                if parsed is None:
+                    continue
+                stage_traits = resolve_stage_trait_sets(raw)
+                for stage, traits in stage_traits.items():
+                    database.upsert_stage_traits_cn(conn, parsed["id"], stage, traits)
+                costume_traits = resolve_costume_trait_sets(raw)
+                for costume_id, traits in costume_traits.items():
+                    database.upsert_costume_traits_cn(conn, parsed["id"], costume_id, traits)
+        except Exception as exc:
+            # CN traits 只是日服模式的辅助数据，失败不阻断主数据更新
+            if progress:
+                progress(f"警告：无法写入简中服特性数据（{exc}）")
 
     if progress:
         progress("正在写入礼装数据...")

@@ -53,6 +53,20 @@ function ensureSchema(db) {
       name TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (servant_id, costume_id)
     );
+    CREATE TABLE IF NOT EXISTS servant_stage_traits_cn (
+      servant_id INTEGER NOT NULL,
+      stage TEXT NOT NULL,
+      trait TEXT NOT NULL,
+      trait_id INTEGER,
+      PRIMARY KEY (servant_id, stage, trait)
+    );
+    CREATE TABLE IF NOT EXISTS servant_costume_traits_cn (
+      servant_id INTEGER NOT NULL,
+      costume_id INTEGER NOT NULL,
+      trait TEXT NOT NULL,
+      trait_id INTEGER,
+      PRIMARY KEY (servant_id, costume_id, trait)
+    );
     CREATE TABLE IF NOT EXISTS user_exclusions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       target_type TEXT NOT NULL,
@@ -187,36 +201,72 @@ function getServant(db, servantId) {
   return get(db, "SELECT id, collection_no AS collectionNo, name, class, cost, rarity, atk_max AS atkMax, hp_max AS hpMax, type FROM servants WHERE id = ?", [servantId]);
 }
 
-function getStageTraits(db, servantId, stage) {
+function getStageTraits(db, servantId, stage, region) {
   const st = String(stage || "fourth");
+  const useCn = region === "cn";
   if (st.startsWith("costume_")) {
     const costumeId = Number(st.split("_")[1]);
     if (!Number.isFinite(costumeId)) return [];
+    const table = useCn ? "servant_costume_traits_cn" : "servant_costume_traits";
     const rows = all(
       db,
-      "SELECT trait FROM servant_costume_traits WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait",
+      `SELECT trait FROM ${table} WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait`,
       [servantId, costumeId]
     );
-    return rows.map((r) => r.trait);
+    if (rows.length) return rows.map((r) => r.trait);
+    // CN 库缺失时回退主库，避免旧数据/未更新数据直接空白
+    if (useCn) {
+      const fallback = all(
+        db,
+        "SELECT trait FROM servant_costume_traits WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait",
+        [servantId, costumeId]
+      );
+      return fallback.map((r) => r.trait);
+    }
+    return [];
   }
+  const table = useCn ? "servant_stage_traits_cn" : "servant_stage_traits";
   const rows = all(
     db,
-    "SELECT servant_id AS servantId, stage, trait FROM servant_stage_traits WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait",
+    `SELECT trait FROM ${table} WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait`,
     [servantId, st]
   );
-  return rows.map((r) => r.trait);
+  if (rows.length) return rows.map((r) => r.trait);
+  if (useCn) {
+    const fallback = all(
+      db,
+      "SELECT trait FROM servant_stage_traits WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait",
+      [servantId, st]
+    );
+    return fallback.map((r) => r.trait);
+  }
+  return [];
 }
 
-function getAllStageTraits(db, servantId) {
+function getAllStageTraits(db, servantId, region) {
+  const useCn = region === "cn";
+  const table = useCn ? "servant_stage_traits_cn" : "servant_stage_traits";
   const rows = all(
     db,
-    "SELECT stage, trait FROM servant_stage_traits WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait",
+    `SELECT stage, trait FROM ${table} WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait`,
     [servantId]
   );
-  const result = {};
+  let result = {};
   for (const r of rows) {
     if (!result[r.stage]) result[r.stage] = [];
     result[r.stage].push(r.trait);
+  }
+  if (useCn && !Object.keys(result).length) {
+    const fallbackRows = all(
+      db,
+      "SELECT stage, trait FROM servant_stage_traits WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait",
+      [servantId]
+    );
+    result = {};
+    for (const r of fallbackRows) {
+      if (!result[r.stage]) result[r.stage] = [];
+      result[r.stage].push(r.trait);
+    }
   }
   return result;
 }

@@ -43,10 +43,10 @@ def calculate_from_stdin(db_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 def calculate(data: Dict[str, Any], db_path: Optional[str] = None) -> Dict[str, Any]:
-    _progress("正在加载本地数据...")
-    ctx = calculator.load_context(db_path)
-
     req = parse_request(data)
+    _progress("正在加载本地数据...")
+    ctx = calculator.load_context(db_path, region=req.server_region)
+
     if req.cost_limit < 50 or req.cost_limit > 200:
         raise ValueError("Cost上限需在50~200之间")
 

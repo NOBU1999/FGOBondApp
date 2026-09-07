@@ -75,11 +75,22 @@ def _load_all_servants(conn: sqlite3.Connection) -> Dict[int, ServantInfo]:
     return result
 
 
-def _load_all_traits(conn: sqlite3.Connection) -> Dict[int, Dict[str, Set[str]]]:
+def _load_all_traits(
+    conn: sqlite3.Connection,
+    region: str = "jp",
+) -> Dict[int, Dict[str, Set[str]]]:
+    """加载从者阶段/灵衣特性。
+
+    region=cn 时优先读取 CN 特性表；若某从者在 CN 表缺失则回退 JP 主表，
+    避免旧库/未更新库出现空白。
+    """
+    use_cn = region == "cn"
+    stage_table = "servant_stage_traits_cn" if use_cn else "servant_stage_traits"
+    costume_table = "servant_costume_traits_cn" if use_cn else "servant_costume_traits"
     # 旧库/新库都可能有名为 unknown 的占位特性；多个不同 trait id 都叫 unknown，
     # 不能作为同一条件参与匹配，因此加载时统一丢弃。
     rows = conn.execute(
-        "SELECT servant_id, stage, trait FROM servant_stage_traits WHERE trait <> 'unknown'"
+        f"SELECT servant_id, stage, trait FROM {stage_table} WHERE trait <> 'unknown'"
     ).fetchall()
     result: Dict[int, Dict[str, Set[str]]] = {}
     for r in rows:
@@ -88,12 +99,30 @@ def _load_all_traits(conn: sqlite3.Connection) -> Dict[int, Dict[str, Set[str]]]
 
     # 灵衣状态使用独立表，加载时表示为 costume_<id>，不占用普通再临阶段键。
     costume_rows = conn.execute(
-        "SELECT servant_id, costume_id, trait FROM servant_costume_traits WHERE trait <> 'unknown'"
+        f"SELECT servant_id, costume_id, trait FROM {costume_table} WHERE trait <> 'unknown'"
     ).fetchall()
     for r in costume_rows:
         sid = int(r["servant_id"])
         key = f"costume_{int(r['costume_id'])}"
         result.setdefault(sid, {}).setdefault(key, set()).add(r["trait"])
+
+    if use_cn:
+        # CN 未收录/旧库缺失的从者回退 JP 数据
+        fallback_stage = conn.execute(
+            "SELECT servant_id, stage, trait FROM servant_stage_traits WHERE trait <> 'unknown'"
+        ).fetchall()
+        for r in fallback_stage:
+            sid = int(r["servant_id"])
+            if sid not in result or not result[sid]:
+                result.setdefault(sid, {}).setdefault(r["stage"], set()).add(r["trait"])
+        fallback_costume = conn.execute(
+            "SELECT servant_id, costume_id, trait FROM servant_costume_traits WHERE trait <> 'unknown'"
+        ).fetchall()
+        for r in fallback_costume:
+            sid = int(r["servant_id"])
+            key = f"costume_{int(r['costume_id'])}"
+            if sid not in result or not result.get(sid, {}).get(key):
+                result.setdefault(sid, {}).setdefault(key, set()).add(r["trait"])
     return result
 
 
@@ -197,14 +226,17 @@ def _load_all_crafts(conn: sqlite3.Connection) -> Dict[int, CraftInfo]:
     return result
 
 
-def load_context(db_path: Optional[str] = None) -> DataContext:
+def load_context(
+    db_path: Optional[str] = None,
+    region: str = "jp",
+) -> DataContext:
     """从 SQLite 一次性加载计算所需数据。"""
     conn = database.connect(db_path)
     # 确保较新表（如灵衣特性表）存在，兼容旧库。
     database.init_db(conn)
     try:
         servants = _load_all_servants(conn)
-        traits = _load_all_traits(conn)
+        traits = _load_all_traits(conn, region=region)
         for sid, info in servants.items():
             info.traits = traits.get(sid, {})
         crafts = _load_all_crafts(conn)
