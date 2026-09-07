@@ -93,7 +93,9 @@ function ensureSchema(db) {
       bond_switch1 INTEGER DEFAULT 1,
       bond_switch2 INTEGER DEFAULT 0,
       personal_bonus REAL DEFAULT 0,
-      aura_bonus REAL DEFAULT 0
+      aura_bonus REAL DEFAULT 0,
+      bond_rank INTEGER DEFAULT 0,
+      bond_max_rank INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS user_teams (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +153,16 @@ function ensureSchema(db) {
   }
   try {
     db.exec("ALTER TABLE user_box ADD COLUMN aura_bonus REAL DEFAULT 0");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_box ADD COLUMN bond_rank INTEGER DEFAULT 0");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_box ADD COLUMN bond_max_rank INTEGER DEFAULT 0");
   } catch (_) {
     // 列已存在
   }
@@ -289,7 +301,7 @@ function listCrafts(db, bondOnly = false) {
 // 用户 Box / 队伍
 // ---------------------------------------------------------------------------
 function getUserBox(db) {
-  return all(db, "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus FROM user_box");
+  return all(db, "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus, bond_rank AS bondRank, bond_max_rank AS bondMaxRank FROM user_box");
 }
 
 function saveUserBox(db, entries) {
@@ -297,7 +309,7 @@ function saveUserBox(db, entries) {
   try {
     db.exec("DELETE FROM user_box");
     const stmt = db.prepare(
-      "INSERT INTO user_box (servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO user_box (servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus, bond_rank, bond_max_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     for (const e of entries || []) {
       stmt.run(
@@ -307,7 +319,9 @@ function saveUserBox(db, entries) {
         e.bondSwitch1 ? 1 : 0,
         e.bondSwitch2 ? 1 : 0,
         Number(e.personalBonus || 0),
-        Number(e.auraBonus || 0)
+        Number(e.auraBonus || 0),
+        Number(e.bondRank || 0),
+        Number(e.bondMaxRank || 0)
       );
     }
     db.exec("COMMIT");
@@ -373,6 +387,8 @@ function importCaptureContent(db, content) {
       bondSwitch1: hasTeam25Bonus ? 1 : 0,
       bondSwitch2: 0,
       personalBonus: 0,
+      bondRank: bondRank,
+      bondMaxRank: maxRank,
     });
   }
   saveUserBox(db, entries);

@@ -226,7 +226,7 @@ const App = {
       qualityMode: "balanced",
       targetServantId: null,
       targetServantKeyword: "",
-      overlay: { visible: false, slotIndex: null, target: "servant", craftIndex: 0, keyword: "", classFilter: "all", rarityFilter: "all", ownedOnly: true, craftType: "bond" },
+      overlay: { visible: false, slotIndex: null, target: "servant", craftIndex: 0, keyword: "", classFilter: "all", rarityFilter: "all", ownedOnly: true, craftType: "bond", sortBy: "collectionNo", sortOrder: "desc" },
       boxModalVisible: false,
       exclusionModalVisible: false,
       exclusionTab: "servant",
@@ -234,6 +234,8 @@ const App = {
       exclusionClass: "all",
       exclusionRarity: "all",
       exclusionMaxBond: "all",
+      exclusionSortBy: "collectionNo",
+      exclusionSortOrder: "desc",
       exclusionCraftKeyword: "",
       excludedServants: [],
       excludedCrafts: [],
@@ -400,16 +402,17 @@ const App = {
         const crownGroup = this.mode === "crown" ? this.crownClass : "all";
         // 助战从者可选择所有已收录角色（不限于自己 Box）
         const source = isSupportSlot ? this.servants : this.ownedServants;
-        return source
-          .filter((s) => {
+        return this.sortServantList(
+          source.filter((s) => {
             if (kw && !s.name.toLowerCase().includes(kw)) return false;
             if (!this.matchesClassFilter(s.class, this.overlay.classFilter)) return false;
             if (!this.matchesCrownClassFilter(s.class, crownGroup)) return false;
             if (this.overlay.rarityFilter !== "all" && Number(s.rarity) !== Number(this.overlay.rarityFilter)) return false;
             return true;
-          })
-          .slice()
-          .sort((a, b) => b.collectionNo - a.collectionNo);
+          }),
+          this.overlay.sortBy,
+          this.overlay.sortOrder
+        );
       }
       // 礼装
       const kw = this.overlay.keyword.toLowerCase();
@@ -451,8 +454,8 @@ const App = {
     },
     filteredExclusionServants() {
       const kw = this.exclusionKeyword.trim().toLowerCase();
-      return this.ownedServants
-        .filter((s) => {
+      return this.sortServantList(
+        this.ownedServants.filter((s) => {
           if (kw && !s.name.toLowerCase().includes(kw)) return false;
           if (!this.matchesClassFilter(s.class, this.exclusionClass)) return false;
           if (this.exclusionRarity !== "all" && Number(s.rarity) !== Number(this.exclusionRarity)) return false;
@@ -460,9 +463,10 @@ const App = {
           if (this.exclusionMaxBond === "max" && !(b && b.maxBond)) return false;
           if (this.exclusionMaxBond === "notMax" && b && b.maxBond) return false;
           return true;
-        })
-        .slice()
-        .sort((a, b) => b.collectionNo - a.collectionNo);
+        }),
+        this.exclusionSortBy,
+        this.exclusionSortOrder
+      );
     },
     filteredExclusionCrafts() {
       const kw = this.exclusionCraftKeyword.trim().toLowerCase();
@@ -522,11 +526,13 @@ const App = {
           switch2: !!e.bondSwitch2,
           personalBonus: e.personalBonus || 0,
           auraBonus: e.auraBonus || 0,
+          bondRank: e.bondRank || 0,
+          bondMaxRank: e.bondMaxRank || 0,
         };
       });
       this.servants.forEach((s) => {
         if (!saved[s.id]) {
-          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0 };
+          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
         }
       });
       this.box = saved;
@@ -552,6 +558,44 @@ const App = {
   methods: {
     // ---------- 工具 ----------
     formatBondNumber(v) { return formatBondNumber(v); },
+    servantBondInfo(s) {
+      if (!s) return null;
+      const b = this.box[s.id];
+      if (!b || !b.checked) return null;
+      let rank = Number(b.bondRank || 0);
+      let max = Number(b.bondMaxRank || 0);
+      // 旧数据/手动只有满绊标记时：按现有“满绊类型”给出可显示的上限
+      if (rank <= 0 || max <= 0) {
+        if (!b.maxBond) return null;
+        if (b.switch1) { rank = 15; max = 15; }
+        else { rank = 10; max = 10; }
+      }
+      if (rank <= 0) return null;
+      if (max <= 0) max = Math.max(rank, 10);
+      return {
+        rank,
+        max,
+        text: `${rank}/${max}`,
+        kind: b.maxBond ? (b.switch1 ? "active" : "full") : "",
+      };
+    },
+    sortServantList(list, sortBy, sortOrder) {
+      const dir = String(sortOrder) === "asc" ? 1 : -1;
+      return (list || []).slice().sort((a, b) => {
+        if (sortBy !== "bond") {
+          return (Number(a.collectionNo) - Number(b.collectionNo)) * dir;
+        }
+        const ia = this.servantBondInfo(a);
+        const ib = this.servantBondInfo(b);
+        const ua = ia ? 0 : 1;
+        const ub = ib ? 0 : 1;
+        if (ua !== ub) return ua - ub; // 无牵绊数据的人始终排最后
+        if (!ia || !ib) return (Number(a.collectionNo) - Number(b.collectionNo)) * dir;
+        if (ia.rank !== ib.rank) return (ia.rank - ib.rank) * dir;
+        if (ia.max !== ib.max) return (ia.max - ib.max) * dir;
+        return (Number(a.collectionNo) - Number(b.collectionNo)) * dir;
+      });
+    },
     stageLabel(s) { return STAGE_LABELS[s] || s; },
     stageNumber(s) {
       if (String(s || "").startsWith("costume_")) return "灵衣";
@@ -600,6 +644,53 @@ const App = {
         });
       }
       return items;
+    },
+    resultMemberStage(member) {
+      if (!member) return "";
+      const stage = String(member.stage || "fourth");
+      if (stage.startsWith("costume_")) {
+        const cid = stage.split("_")[1];
+        return this.costumeNames[String(cid)] ? `灵衣：${this.costumeNames[String(cid)]}` : stage;
+      }
+      return this.stageLabel(stage);
+    },
+    resultMemberClass(member) {
+      const s = member && this.servantMap[member.servantId];
+      return s ? s.class : "";
+    },
+    resultBonusParts(member) {
+      if (!member || member.isSupport || !member.bonusDetail) return [];
+      const d = member.bonusDetail;
+      const out = [];
+      const percent = (v) => v ? `${(Number(v) * 100).toFixed(1).replace(/\.0$/, "")}%` : "";
+      if (Number(d.frontlineBonus || 0) > 0) out.push({ label: "前排", value: percent(d.frontlineBonus) });
+      if (Number(d.universalCraftBonus || 0) > 0) out.push({ label: "通用礼装", value: percent(d.universalCraftBonus) });
+      if (Number(d.supportCraftBonus || 0) > 0) out.push({ label: "助战礼装", value: percent(d.supportCraftBonus) });
+      if (Number(d.traitCraftBonus || 0) > 0) out.push({ label: "特性礼装", value: percent(d.traitCraftBonus) });
+      if (Number(d.maxBondBonus || 0) > 0) out.push({ label: "满绊加成", value: percent(d.maxBondBonus) });
+      if (Number(d.activityBonus || 0) > 0) out.push({ label: "活动加成", value: percent(d.activityBonus) });
+      if (Number(d.auraBonus || 0) > 0) out.push({ label: "玛修光环", value: percent(d.auraBonus) });
+      if (Number(d.personalBonus || 0) > 0) out.push({ label: "个人", value: percent(d.personalBonus) });
+      if (Number(d.flatCraftBonus || 0) > 0) out.push({ label: "固定", value: `+${this.formatBondNumber(d.flatCraftBonus)}` });
+      return out;
+    },
+    resultTeamCrafts(result) {
+      if (!result || !Array.isArray(result.team)) return [];
+      const seen = new Set();
+      const out = [];
+      for (const m of result.team) {
+        const ids = [m.craftId, m.secondCraftId];
+        for (const cid of ids) {
+          if (cid === null || cid === undefined || cid === 0 || cid === "") continue;
+          const key = Number(cid);
+          if (seen.has(key)) continue;
+          const c = this.craftById(cid);
+          if (!c) continue;
+          seen.add(key);
+          out.push(c);
+        }
+      }
+      return out;
     },
     craftEffect(c) {
       if (!c) return "";
@@ -895,6 +986,8 @@ const App = {
           bondSwitch2: this.box[s.id].switch2 ? 1 : 0,
           personalBonus: Number(this.box[s.id].personalBonus || 0),
           auraBonus: Number(this.box[s.id].auraBonus || 0),
+          bondRank: Number(this.box[s.id].bondRank || 0),
+          bondMaxRank: Number(this.box[s.id].bondMaxRank || 0),
         }));
       try { await window.fgo.saveUserBox(plainClone(entries)); } catch (_) { /* ignore */ }
     },
@@ -914,13 +1007,22 @@ const App = {
     },
     toggleMaxBond(id) {
       const b = this.box[id];
+      const wasSwitch1 = !!b.switch1;
       b.maxBond = !b.maxBond;
       if (!b.maxBond) {
-        // 取消满绊时，25%全队加成与自身收益开关也应清掉
+        // 取消满绊时，25%全队加成与自身收益开关也应清掉；
+        // 若已有/能推断出上限，把当前等级降为“差一级满”
+        const max = Number(b.bondMaxRank || 0) || (wasSwitch1 ? 15 : 10);
+        const rank = Number(b.bondRank || 0) || max;
+        b.bondMaxRank = max;
+        b.bondRank = Math.max(0, rank >= max ? max - 1 : rank);
         b.switch1 = false;
         b.switch2 = false;
       } else {
         // 满绊标记与25%全队加成分开：勾选满绊不再自动勾选25%
+        const max = Number(b.bondMaxRank || 0) || (wasSwitch1 ? 15 : 10);
+        b.bondMaxRank = max;
+        b.bondRank = max;
         b.switch2 = false;
       }
       this.persistBox();
@@ -932,7 +1034,53 @@ const App = {
         return;
       }
       b.switch1 = !b.switch1;
+      if (b.switch1) {
+        // 25% 全队加成意味着达到 15 级及以上的当前上限
+        const max = Math.max(15, Number(b.bondMaxRank || 0) || 15);
+        b.bondMaxRank = max;
+        b.bondRank = Math.max(15, Number(b.bondRank || 0) || 15);
+      }
       if (!b.switch1) b.switch2 = false;
+      this.persistBox();
+    },
+    setBondRank(id, val) {
+      const b = this.box[id];
+      if (!b) return;
+      let rank = Math.max(0, Math.floor(Number(val) || 0));
+      let max = Number(b.bondMaxRank || 0);
+      if (max <= 0 && rank > 0) max = Math.max(rank, b.maxBond ? (b.switch1 ? 15 : 10) : 10);
+      if (max > 0 && rank > max) rank = max;
+      b.bondRank = rank;
+      b.bondMaxRank = max;
+      if (max > 0 && rank >= max) b.maxBond = true;
+      else if (max > 0 && rank < max) {
+        b.maxBond = false;
+        b.switch1 = false;
+        b.switch2 = false;
+      }
+      if (b.maxBond && rank >= 15) b.switch1 = true;
+      else if (rank < 15) b.switch1 = false;
+      this.persistBox();
+    },
+    setBondMaxRank(id, val) {
+      const b = this.box[id];
+      if (!b) return;
+      let max = Math.max(0, Math.floor(Number(val) || 0));
+      if (max <= 0) {
+        max = b.maxBond ? (b.switch1 ? 15 : 10) : Math.max(10, Number(b.bondRank || 0));
+      }
+      let rank = Number(b.bondRank || 0);
+      if (max > 0 && rank > max) rank = max;
+      b.bondRank = rank;
+      b.bondMaxRank = max;
+      if (max > 0 && rank >= max) b.maxBond = true;
+      else if (max > 0 && rank < max) {
+        b.maxBond = false;
+        b.switch1 = false;
+        b.switch2 = false;
+      }
+      if (b.maxBond && rank >= 15) b.switch1 = true;
+      else if (rank < 15) b.switch1 = false;
       this.persistBox();
     },
     toggleSwitch2(id) {
@@ -1032,7 +1180,7 @@ const App = {
     resetBox() {
       if (!confirm("此操作将清空所有Box勾选、满绊标记、灵基阶段、个人加成设置，是否继续？")) return;
       this.servants.forEach((s) => {
-        this.box[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0 };
+        this.box[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
       });
       this.slots = makeSlots();
       this.persistBox();
@@ -1049,11 +1197,13 @@ const App = {
           switch2: !!e.bondSwitch2,
           personalBonus: e.personalBonus || 0,
           auraBonus: e.auraBonus || 0,
+          bondRank: e.bondRank || 0,
+          bondMaxRank: e.bondMaxRank || 0,
         };
       });
       this.servants.forEach((s) => {
         if (!saved[s.id]) {
-          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0 };
+          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
         }
       });
       this.box = saved;
@@ -1915,8 +2065,103 @@ const App = {
         teaBonus: 1,
         topN: 1000,
         craftPoolSize: 60,
-        timeoutMs: { fast: 20000, balanced: 45000, high: 120000 }[this.qualityMode] || 20000,
+        timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
       };
+    },
+    buildPresetPayload(preset) {
+      const box = this.ownedServants.map((s) => {
+        const b = this.box[s.id];
+        return {
+          id: s.id,
+          stage: b.stage,
+          maxBond: b.maxBond,
+          bondSwitch1: b.switch1,
+          bondSwitch2: b.switch2,
+          personalBonus: Number(b.personalBonus || 0) / 100,
+          auraBonus: Number(b.auraBonus || 0) / 100,
+        };
+      });
+      const mode = preset.mode || this.mode;
+      const crownClass = preset.crownClass || this.crownClass;
+      const crownPositions = mode === "crown" ? (preset.crownPositions || []) : [];
+      const support = {
+        position: preset.supportPosition || "front_right",
+        servantId: preset.supportId || null,
+        craftId: preset.supportCraftId !== undefined && preset.supportCraftId !== null ? preset.supportCraftId : null,
+        secondCraftId: mode === "crown" && preset.supportSecondCraftId !== undefined && preset.supportSecondCraftId !== null ? preset.supportSecondCraftId : null,
+      };
+      const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
+      const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
+      const genericNotParticipatingIds = this.genericBondCrafts
+        .filter((c) => !this.isCraftParticipating(c))
+        .map((c) => Number(c.id));
+      const nonParticipatingIds = (Array.isArray(this.nonParticipatingCraftIds) ? this.nonParticipatingCraftIds : []).map(Number);
+      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
+      return {
+        box,
+        mode,
+        serverRegion: this.serverRegion,
+        classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
+        crownPositions,
+        baseBond: Number(preset.baseBond !== undefined ? preset.baseBond : this.baseBond || 0),
+        fixedServants: preset.fixedServants || [],
+        fixedCrafts: preset.fixedCrafts || [],
+        support,
+        costLimit: Number(preset.costLimit || this.costLimit),
+        strategy: preset.strategy || this.strategy,
+        targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
+        excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
+        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds])),
+        supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
+        activityBonus: 0,
+        teaBonus: 1,
+        topN: 1000,
+        craftPoolSize: 60,
+        timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
+      };
+    },
+    isFullPreset(preset) {
+      return !!preset && Array.isArray(preset.fixedServants) && preset.fixedServants.length >= 5 && !!preset.supportId;
+    },
+    seedablePresets() {
+      return (this.presets || []).filter((p) => {
+        if (!this.isFullPreset(p)) return false;
+        if ((p.mode || "normal") !== this.mode) return false;
+        if (this.mode === "crown" && (p.crownClass || "all") !== this.crownClass) return false;
+        return true;
+      });
+    },
+    resultSortValue(r) {
+      if (r.totalBondPoints) return Number(r.totalBondPoints);
+      return Number(r.totalMultiplier || 0);
+    },
+    resultTeamKey(r) {
+      return JSON.stringify((r.team || []).map((m) => [m.position, m.servantId, m.craftId, m.secondCraftId]));
+    },
+    mergeRankResults(results) {
+      const seen = new Set();
+      const merged = [];
+      for (const r of results || []) {
+        const key = this.resultTeamKey(r);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(r);
+      }
+      merged.sort((a, b) => this.resultSortValue(b) - this.resultSortValue(a));
+      merged.forEach((r, i) => { r.rank = i + 1; });
+      return merged;
+    },
+    async cancelCalculation() {
+      if (!this.calculating) return;
+      this.progress = "正在终止计算...";
+      try {
+        await window.fgo.cancelEngine();
+      } catch (_) {
+        // 引擎可能已经自行结束，忽略取消失败
+      }
+      this.calculating = false;
+      this.progress = "";
+      this.error = "计算已终止";
     },
     async calculate() {
       this.error = "";
@@ -1936,7 +2181,18 @@ const App = {
       try {
         const payload = this.buildPayload();
         const result = await window.fgo.calculate(plainClone(payload));
-        this.results = result.top20 || [];
+        const allResults = [...(result.top20 || [])];
+        // 把你保存过的完整预设作为“种子队伍”一并计算并合并进结果，
+        // 避免完整预设因为搜索抽样/时间不足而完全不出现在结果里。
+        for (const preset of this.seedablePresets()) {
+          try {
+            const seedResult = await window.fgo.calculate(plainClone(this.buildPresetPayload(preset)));
+            allResults.push(...((seedResult && seedResult.top20) || []).slice(0, 3));
+          } catch (_) {
+            // 单个预设不兼容/超时不影响主结果
+          }
+        }
+        this.results = this.mergeRankResults(allResults);
         this.totalCandidates = result.totalCandidates || this.results.length;
         this.currentPage = 1;
         setTimeout(() => {
@@ -2202,9 +2458,10 @@ const App = {
           <div class="field">
             <label>计算质量 / 等待时间</label>
             <select v-model="qualityMode">
-              <option value="fast">快速（约 10~20 秒）</option>
-              <option value="balanced">平衡（约 20~45 秒）</option>
-              <option value="high">高质量（约 1~2 分钟）</option>
+              <option value="fast">快速（约 35 秒）</option>
+              <option value="balanced">平衡（约 60 秒）</option>
+              <option value="high">高质量（约 135 秒）</option>
+              <option value="extreme">极限精算（约 300 秒）</option>
             </select>
           </div>
           <div class="field">
@@ -2245,6 +2502,7 @@ const App = {
           <button class="secondary" @click="saveTeam">保存队伍</button>
           <button class="secondary" @click="presetModalVisible = true; presets = presets">加载预设</button>
           <button class="primary main-action" :disabled="calculating" @click="calculate">🚀 开始计算</button>
+          <button class="secondary danger" :disabled="!calculating" @click="cancelCalculation">⏹ 终止计算</button>
         </div>
         <progress-bar :visible="calculating" :message="progress"></progress-bar>
       </div>
@@ -2303,8 +2561,76 @@ const App = {
               </div>
             </div>
           </div>
-          <div v-if="expandedResult === r" style="margin-top:8px">
-            <pre style="white-space:pre-wrap;font-size:12px">{{ JSON.stringify(r, null, 2) }}</pre>
+          <div v-if="expandedResult === r" class="result-detail">
+            <div class="detail-summary">
+              <div class="summary-item"><span class="label">总倍率</span><span class="value">x{{ Number(r.totalMultiplier).toFixed(3) }}</span></div>
+              <div v-if="r.totalBondPoints" class="summary-item"><span class="label">预计总牵绊</span><span class="value">{{ formatBondNumber(r.totalBondPoints) }}</span></div>
+              <div class="summary-item"><span class="label">Cost 使用</span><span class="value">{{ r.costUsed }}/{{ costLimit }}</span></div>
+              <div class="summary-item"><span class="label">基础牵绊</span><span class="value">{{ formatBondNumber(r.baseBond || 0) }}</span></div>
+              <div v-if="r.maxBondStats && r.maxBondStats.count" class="summary-item"><span class="label">满绊共享加成</span><span class="value">{{ r.maxBondStats.count }} 人 × 25%</span></div>
+            </div>
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>位置</th>
+                  <th>从者</th>
+                  <th>阶段</th>
+                  <th>礼装</th>
+                  <th>加成明细</th>
+                  <th>个人倍率</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in r.team" :key="m.position" :class="{ 'support-row': m.isSupport }">
+                  <td>
+                    <div>{{ positionLabel(m.position) }}</div>
+                    <div class="detail-meta">
+                      <span v-if="m.isSupport" class="detail-tag" style="color:var(--support);border-color:var(--support)">助战</span>
+                      <span v-if="m.isCrown" class="detail-tag" style="color:#4fc3f7;border-color:#4fc3f7">冠位</span>
+                      <span v-if="m.isFixed" class="detail-tag" style="color:var(--danger);border-color:var(--danger)">固定</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="detail-craft-name">{{ m.name || (servantMap[m.servantId] ? servantMap[m.servantId].name : '') || m.servantId }}</div>
+                    <div class="text-muted">{{ resultMemberClass(m) }}</div>
+                  </td>
+                  <td>{{ resultMemberStage(m) }}</td>
+                  <td>
+                    <div v-for="cm in resultCraftItems(m)" :key="cm.index" class="detail-craft-detail">
+                      <span class="detail-craft-name">{{ cm.craftName || '无礼装' }}</span>
+                      <span v-if="cm.index === 1" class="detail-tag">第二礼装</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div v-if="m.isSupport" class="text-muted">助战不参与个人收益</div>
+                    <div v-else-if="m.bonusDetail" class="detail-bonus-chips">
+                      <span v-for="bp in resultBonusParts(m)" :key="bp.label" class="chip">{{ bp.label }} {{ bp.value }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <template v-if="!m.isSupport && m.bonusDetail">
+                      <div style="font-weight:700;color:var(--ok)">x{{ m.bonusDetail.totalMultiplier.toFixed(3) }}</div>
+                      <div v-if="r.totalBondPoints" class="text-muted">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</div>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="r.traitCoverage && r.traitCoverage.length" class="detail-extra">
+              <div style="margin-bottom:4px;font-weight:600">命中的特性礼装条件</div>
+              <div class="trait-info">
+                <span v-for="t in r.traitCoverage" :key="t" class="trait-chip">{{ traitLabel(t) }}</span>
+              </div>
+            </div>
+            <div v-if="resultTeamCrafts(r).length" class="detail-extra">
+              <div style="margin-bottom:4px;font-weight:600">队伍礼装说明</div>
+              <div v-for="c in resultTeamCrafts(r)" :key="c.id" class="detail-craft-detail" style="margin-bottom:4px">
+                <span class="detail-craft-name">{{ c.name }}</span>
+                <span v-if="c.cost !== undefined" class="text-muted">（Cost {{ c.cost }}）</span>
+                <span v-if="c.bonusType === 'trait'" class="text-muted">：{{ traitGroupsText(c) }}</span>
+                <div class="text-muted">{{ c.detail || '' }}</div>
+              </div>
+            </div>
           </div>
         </div>
         <div v-if="filteredResults.length > pageSize" class="pagination">
@@ -2336,6 +2662,13 @@ const App = {
             <option value="bond">牵绊礼装</option>
             <option value="other">其他礼装</option>
           </select>
+          <template v-if="overlay.target === 'servant'">
+            <select v-model="overlay.sortBy" title="排序方式">
+              <option value="collectionNo">按序号</option>
+              <option value="bond">按牵绊数值</option>
+            </select>
+            <button class="secondary" @click="overlay.sortOrder = overlay.sortOrder === 'desc' ? 'asc' : 'desc'">{{ overlay.sortOrder === 'desc' ? '↓ 倒序' : '↑ 正序' }}</button>
+          </template>
         </div>
         <div class="overlay-grid" :class="overlay.target === 'servant' ? 'servant-grid' : ''">
           <div
@@ -2350,6 +2683,7 @@ const App = {
             @mouseleave="hideHover"
           >
             <div v-if="overlay.target === 'craft' && item.craftType === 'bond' && !isCraftParticipating(item)" class="pick-not-participate">不参与自动</div>
+            <div v-if="overlay.target === 'servant' && overlay.sortBy === 'bond'" class="bond-badge" :class="servantBondInfo(item) ? servantBondInfo(item).kind : ''">{{ servantBondInfo(item) ? servantBondInfo(item).text : '' }}</div>
             <img v-if="overlay.target === 'servant' && !avatarMissingSet.has(String(item.id))" :src="avatarPath(item.id)" class="pick-avatar" alt="" @error="markAvatarBroken(item.id)" />
             <div v-else-if="overlay.target === 'servant'" class="pick-name">{{ item.name.charAt(0) }}</div>
             <template v-if="overlay.target === 'craft'">
@@ -2559,6 +2893,11 @@ const App = {
           <select v-model="exclusionClass"><option value="all">全部职阶</option><option v-for="c in classOptions" :key="c" :value="c">{{ c }}</option></select>
           <select v-model="exclusionRarity"><option value="all">全部星级</option><option v-for="n in [1,2,3,4,5]" :key="n" :value="n">{{ n }}★</option></select>
           <select v-model="exclusionMaxBond"><option value="all">牵绊筛选：全部</option><option value="max">满绊</option><option value="notMax">未满绊</option></select>
+          <select v-model="exclusionSortBy" title="排序方式">
+            <option value="collectionNo">按序号</option>
+            <option value="bond">按牵绊数值</option>
+          </select>
+          <button class="secondary" @click="exclusionSortOrder = exclusionSortOrder === 'desc' ? 'asc' : 'desc'">{{ exclusionSortOrder === 'desc' ? '↓ 倒序' : '↑ 正序' }}</button>
         </div>
         <div v-else class="filters">
           <input v-model="exclusionCraftKeyword" placeholder="搜索礼装" />
@@ -2579,7 +2918,8 @@ const App = {
           >
             <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" @error="markAvatarBroken(s.id)" />
             <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
-            <div class="box-maxbond exclusion-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
+            <div v-if="exclusionSortBy === 'bond' && servantBondInfo(s)" class="bond-badge exclusion-bond-badge" :class="servantBondInfo(s).kind" :title="servantBondInfo(s).text">{{ servantBondInfo(s).text }}</div>
+            <div v-else-if="exclusionSortBy !== 'bond'" class="box-maxbond exclusion-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
             <div class="exclusion-check">{{ isExcludedServant(s.id) ? '✓' : '' }}</div>
           </div>
           <div v-if="!filteredExclusionServants.length" class="empty">没有可排除的从者</div>
@@ -2618,9 +2958,10 @@ const App = {
         <div class="field">
           <label>计算质量 / 等待时间</label>
           <select v-model="qualityMode">
-            <option value="fast">快速（约 10~20 秒）</option>
-            <option value="balanced">平衡（约 20~45 秒）</option>
-            <option value="high">高质量（约 1~2 分钟）</option>
+            <option value="fast">快速（约 35 秒）</option>
+            <option value="balanced">平衡（约 60 秒）</option>
+            <option value="high">高质量（约 135 秒）</option>
+            <option value="extreme">极限精算（约 300 秒）</option>
           </select>
         </div>
         <div v-if="strategy === 'target_max'" class="field">
@@ -2723,6 +3064,18 @@ const App = {
             </select>
           </div>
           <div v-else class="text-muted" style="margin-bottom:8px">自由位/Box：灵基阶段与灵衣由引擎根据特性礼装自动选择</div>
+          <div class="custom-fields-row">
+            <div class="field">
+              <label>当前牵绊等级</label>
+              <input type="number" min="0" max="99" :value="box[servantDetail.servantId].bondRank || 0" @change="setBondRank(servantDetail.servantId, $event.target.value)" />
+              <div class="text-muted" style="margin-top:2px">例如 7/10 填 7；满级可自动同步“满绊标记”。</div>
+            </div>
+            <div class="field">
+              <label>牵绊等级上限</label>
+              <input type="number" min="0" max="99" :value="box[servantDetail.servantId].bondMaxRank || 0" @change="setBondMaxRank(servantDetail.servantId, $event.target.value)" />
+              <div class="text-muted" style="margin-top:2px">例如 10/10 填 10；15/15 填 15。</div>
+            </div>
+          </div>
           <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].maxBond" @change="toggleMaxBond(servantDetail.servantId)" /> 满绊标记（达到当前牵绊上限）</label>
           <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch1" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch1(servantDetail.servantId)" /> 全队25%加成（仅15级以上满绊生效）</label>
           <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch2" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch2(servantDetail.servantId)" /> 开关二（自身参与收益）</label>

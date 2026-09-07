@@ -57,6 +57,8 @@ out_engine.json
 # ---------- 本地内部文件 ----------
 # 包含本机绝对路径，不适合提交到公开仓库
 CONTEXT_HANDOFF.md
+# 本机隐私清理脚本，含本地路径，不推送公开仓库
+scripts/privacy_clean.py
 
 # ---------- 临时/沙箱 ----------
 .pyinstaller-tmp/

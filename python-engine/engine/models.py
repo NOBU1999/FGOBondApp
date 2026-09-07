@@ -231,8 +231,9 @@ def parse_support(raw: Any) -> Optional[SupportConfig]:
         has_craft = raw.get("craftId") is not None
         has_second_craft = raw.get("secondCraftId") is not None
         if not has_servant and not has_craft and not has_second_craft:
-            # 空对象表示“由系统推荐”（助战礼装自动参与计算）
-            return SupportConfig()
+            # 空对象表示“由系统推荐”（助战礼装自动参与计算）；
+            # 但如果只带了 position，仍要保留用户选定的助战位，不能退回默认后排。
+            return SupportConfig(position=raw.get("position"))
         servant_id = raw.get("servantId")
         craft_id = raw.get("craftId")
         second_craft_id = raw.get("secondCraftId")
