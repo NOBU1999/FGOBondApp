@@ -727,15 +727,15 @@ def _greedy_mapping(
     back_positions = [p for p in free_positions if p not in FRONT_POSITIONS]
     mapping = {}
 
-    # 先填后排：优先放“自身收益为 0”的满绊从者；
-    # 若后排仍有空位，再放入剩余收益从者。
+    # 先处理后排：优先放“自身收益为 0”的满绊从者；
+    # 如果后排还有空位，用剩余收益里“较低”的从者补后排。
     for pos in back_positions:
         if no_gain:
             mapping[pos] = no_gain.pop(0)
         elif gainers:
-            mapping[pos] = gainers.pop(0)
+            mapping[pos] = gainers.pop()  # gainers 已降序，pop() 取最低者放后排
 
-    # 再填前排：只放仍有自身收益的从者；万不得已才放无收益从者。
+    # 再处理前排：剩余收益从者里“较高”的放前排；万不得已才放无收益从者。
     for pos in front_positions:
         if gainers:
             mapping[pos] = gainers.pop(0)
@@ -1838,6 +1838,84 @@ def search_top_teams(
             return total_score * 0.85 - variance * 2.0
         return total_score
 
+    def _optimize_free_positions(team):
+        """对自由位从者做小规模全排列优化，避免启发式放位漏掉明显更好的交换。
+
+        只调整自由位上的从者顺序；固定从者、每个位置的礼装/第二礼装都保持不变。
+        位置数最多 5 个（5! = 120），只会用于精算后的少数队伍，不会造成组合爆炸。
+        """
+        free_positions = sorted(bp.free_servant_positions, key=POSITIONS.index)
+        if len(free_positions) <= 1:
+            return team
+        by_pos = {p.position: p for p in team.players}
+        try:
+            current_sids = [by_pos[pos].servant_id for pos in free_positions]
+        except KeyError:
+            return team
+        if len(set(current_sids)) != len(current_sids):
+            return team
+        fixed_players = [p for p in team.players if p.position not in set(free_positions)]
+
+        def build_candidate(perm):
+            players = []
+            for p in fixed_players:
+                players.append(PlacedMember(
+                    position=p.position,
+                    servant_id=p.servant_id,
+                    stage=p.stage,
+                    personal_bonus=p.personal_bonus,
+                    aura_bonus=p.aura_bonus,
+                    max_bond=p.max_bond,
+                    bond_switch1=p.bond_switch1,
+                    bond_switch2=p.bond_switch2,
+                    craft_id=p.craft_id,
+                    second_craft_id=p.second_craft_id,
+                    is_crown=p.is_crown,
+                    fixed=p.fixed,
+                    stage_locked=p.stage_locked,
+                ))
+            for pos, sid in zip(free_positions, perm):
+                slot = by_pos[pos]
+                bs = box.get(sid)
+                players.append(PlacedMember(
+                    position=pos,
+                    servant_id=sid,
+                    stage=bs.stage if bs else "fourth",
+                    personal_bonus=bs.personal_bonus if bs else 0.0,
+                    aura_bonus=bs.aura_bonus if bs else 0.0,
+                    max_bond=bs.max_bond if bs else False,
+                    bond_switch1=bs.bond_switch1 if bs else False,
+                    bond_switch2=bs.bond_switch2 if bs else False,
+                    craft_id=slot.craft_id,
+                    second_craft_id=slot.second_craft_id,
+                    is_crown=slot.is_crown,
+                    fixed=False,
+                    stage_locked=False,
+                ))
+            return TeamConfig(
+                players=players,
+                support_position=team.support_position,
+                support_servant_id=team.support_servant_id,
+                support_craft_id=team.support_craft_id,
+                support_second_craft_id=team.support_second_craft_id,
+                crown_positions=team.crown_positions,
+                base_bond=team.base_bond,
+                activity_bonus=team.activity_bonus,
+            )
+
+        best_team = team
+        initial_metrics = calculator.calculate_team_metrics(ctx, team)
+        best_score = _score_from_metrics(initial_metrics, team, initial_metrics["multipliers"])
+        for perm in set(itertools.permutations(current_sids)):
+            candidate = build_candidate(perm)
+            candidate = calculator.optimize_team_stages(ctx, candidate)
+            metrics = calculator.calculate_team_metrics(ctx, candidate)
+            score = _score_from_metrics(metrics, candidate, metrics["multipliers"])
+            if score > best_score + 1e-9:
+                best_score = score
+                best_team = candidate
+        return best_team
+
     def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False):
         nonlocal seen, evaluated_total, global_best_score
         original_craft_combos = craft_combos
@@ -2065,6 +2143,27 @@ def search_top_teams(
             continue
         extras_tuple = tuple(sorted(set(servant_set) - set(bp.fixed_servant_ids)))
         evaluate_extras(extras_tuple, full_combos)
+
+    # 精算后对每个进入精算的从者阵容做一次自由位排列优化，修正启发式放位漏掉的交换。
+    # 该兜底有额外算力成本，只保留在最后两个高算力档位（高质量/极限精算）。
+    if req.timeout_ms >= 135000:
+        for entry in refine_entries:
+            if time.time() >= refine_deadline:
+                break
+            servant_set = entry.get("servant_set")
+            if not servant_set:
+                continue
+            current = best_by_set.get(servant_set)
+            if not current:
+                continue
+            optimized = _optimize_free_positions(current["team"])
+            metrics = calculator.calculate_team_metrics(ctx, optimized)
+            score = _score_from_metrics(metrics, optimized, metrics["multipliers"])
+            if score > current["score"] + 1e-9:
+                current["team"] = optimized
+                current["score"] = score
+                if global_best_score is None or score > global_best_score:
+                    global_best_score = score
 
     report("排序输出...")
     best_items = sorted(

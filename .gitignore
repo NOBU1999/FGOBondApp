@@ -59,6 +59,10 @@ out_engine.json
 CONTEXT_HANDOFF.md
 # 本机隐私清理脚本，含本地路径，不推送公开仓库
 scripts/privacy_clean.py
+# 抓包/用户数据文件，禁止推送
+*response_*.php
+*bilibiligame.net*
+FGO方案#*.json
 
 # ---------- 临时/沙箱 ----------
 .pyinstaller-tmp/
