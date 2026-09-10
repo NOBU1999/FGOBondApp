@@ -3,7 +3,6 @@ name: Sync FGOBondApp to Gitee
 on:
   release:
     types: [published]
-
   workflow_dispatch:
 
 jobs:
@@ -14,6 +13,7 @@ jobs:
         uses: NEVSTOP-LAB/GitHub-Gitee-Sync@main
         with:
           github-token: ${{ secrets.GH_TOKEN }}
+          github-owner: ${{ secrets.GH_OWNER }}
           gitee-token: ${{ secrets.GITEE_TOKEN }}
           gitee-owner: ${{ secrets.GITEE_OWNER }}
           direction: 'github2gitee'
@@ -21,4 +21,4 @@ jobs:
           sync-extra: 'releases'
           include-private: 'false'
           create-missing-repos: 'false'
-          dry-run: 'ture'
+          dry-run: 'true'
