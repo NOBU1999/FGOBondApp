@@ -21,4 +21,4 @@ jobs:
           sync-extra: 'releases'
           include-private: 'false'
           create-missing-repos: 'false'
-          dry-run: 'true'
+          dry-run: 'false'
