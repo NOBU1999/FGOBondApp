@@ -1,0 +1,24 @@
+name: Sync FGOBondApp to Gitee
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync to Gitee
+        uses: NEVSTOP-LAB/GitHub-Gitee-Sync@main
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          gitee-token: ${{ secrets.GITEE_TOKEN }}
+          gitee-owner: ${{ secrets.GITEE_OWNER }}
+          direction: 'github2gitee'
+          include-repos: 'FGOBondApp'
+          sync-extra: 'releases'
+          include-private: 'false'
+          create-missing-repos: 'false'
+          dry-run: 'ture'
