@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld("fgo", {
   calculate: (payload) => ipcRenderer.invoke("engine:calculate", toPlain(payload)),
   updateData: (force = false) => ipcRenderer.invoke("engine:update", toPlain({ force })),
   cancelEngine: () => ipcRenderer.invoke("engine:cancel"),
+  copyText: (text) => ipcRenderer.invoke("clipboard:write", toPlain(text)),
 
   // 主进程推送事件
   onEngineProgress: (callback) => {
@@ -51,12 +52,14 @@ contextBridge.exposeInMainWorld("fgo", {
     return () => ipcRenderer.removeListener("engine-progress", listener);
   },
   onMenuAction: (callback) => {
-    const listener = (_event, data) => callback(data);
-    for (const channel of ["menu:export", "menu:update-data", "menu:update-data-force", "menu:reset-database"]) {
+    const channels = ["menu:settings", "menu:update-data", "menu:update-data-force", "menu:reset-database"];
+    const listeners = channels.map((channel) => {
+      const listener = (_event, data) => callback(Object.assign({}, data || {}, { channel }));
       ipcRenderer.on(channel, listener);
-    }
+      return [channel, listener];
+    });
     return () => {
-      for (const channel of ["menu:export", "menu:update-data", "menu:update-data-force", "menu:reset-database"]) {
+      for (const [channel, listener] of listeners) {
         ipcRenderer.removeListener(channel, listener);
       }
     };

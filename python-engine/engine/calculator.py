@@ -726,6 +726,8 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             ctx.crafts.get(p.second_craft_id) if p.second_craft_id is not None else None
         )
 
+        trait_hits = []
+        craft_bonus_details = []
         # 满绊且关闭开关二：个人收益为 0，但仍占位
         if p.max_bond and not p.bond_switch2:
             multiplier = 0.0
@@ -747,14 +749,73 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             flat_bonus = flat_bonus_for_servant(traits, effect_crafts)
             personal_bonus_used = p.personal_bonus
             for craft_item in effect_crafts:
-                if craft_item.bonus_type != "trait":
-                    continue
-                if any(
-                    match_trait_group(traits, g)
-                    for g in craft_item.trigger_traits
-                ):
-                    for g in craft_item.trigger_traits:
+                if craft_item.bonus_type == "trait":
+                    matched_groups = [
+                        list(g)
+                        for g in craft_item.trigger_traits
+                        if match_trait_group(traits, g)
+                    ]
+                    if not matched_groups:
+                        continue
+                    for g in matched_groups:
                         trait_coverage.update(g)
+                    trait_hits.append(
+                        {
+                            "craftId": craft_item.id,
+                            "craftName": craft_item.name,
+                            "groups": matched_groups,
+                        }
+                    )
+                    if float(craft_item.bonus_value or 0.0) > 0:
+                        craft_bonus_details.append(
+                            {
+                                "craftId": craft_item.id,
+                                "craftName": craft_item.name,
+                                "type": "trait",
+                                "value": float(craft_item.bonus_value or 0.0),
+                                "groups": matched_groups,
+                            }
+                        )
+                    if float(craft_item.flat_bonus or 0.0) > 0:
+                        craft_bonus_details.append(
+                            {
+                                "craftId": craft_item.id,
+                                "craftName": craft_item.name,
+                                "type": "flat",
+                                "value": float(craft_item.flat_bonus or 0.0),
+                            }
+                        )
+                elif craft_item.bonus_type in ("universal", "support_only"):
+                    if float(craft_item.bonus_value or 0.0) > 0:
+                        craft_bonus_details.append(
+                            {
+                                "craftId": craft_item.id,
+                                "craftName": craft_item.name,
+                                "type": "universal",
+                                "value": float(craft_item.bonus_value or 0.0),
+                            }
+                        )
+                    if float(craft_item.flat_bonus or 0.0) > 0:
+                        craft_bonus_details.append(
+                            {
+                                "craftId": craft_item.id,
+                                "craftName": craft_item.name,
+                                "type": "flat",
+                                "value": float(craft_item.flat_bonus or 0.0),
+                            }
+                        )
+            for support_item in (support_craft, support_second_craft):
+                if support_item is None:
+                    continue
+                if float(support_item.support_bonus or 0.0) > 0:
+                    craft_bonus_details.append(
+                        {
+                            "craftId": support_item.id,
+                            "craftName": support_item.name,
+                            "type": "support",
+                            "value": float(support_item.support_bonus or 0.0),
+                        }
+                    )
 
         total_multiplier += multiplier
         total_flat_bonus += flat_bonus
@@ -774,6 +835,8 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 "secondCraftId": p.second_craft_id,
                 "secondCraftName": second_craft.name if second_craft else "",
                 "secondCraftType": "bond" if (second_craft and second_craft.is_bond_ce) else "other",
+                "traitHits": trait_hits,
+                "craftBonusDetails": craft_bonus_details,
                 "bonusDetail": {
                     "frontlineBonus": frontline_bonus(p.position, support_in_front),
                     "universalCraftBonus": universal_bonus(effect_crafts),
@@ -819,6 +882,8 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
             "secondCraftId": team.support_second_craft_id,
             "secondCraftName": second_craft.name if second_craft else "",
             "secondCraftType": "bond" if (second_craft and second_craft.is_bond_ce) else "other",
+            "traitHits": [],
+            "craftBonusDetails": [],
             "bonusDetail": {
                 "frontlineBonus": 0.0,
                 "universalCraftBonus": 0.0,

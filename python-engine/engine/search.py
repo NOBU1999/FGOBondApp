@@ -908,6 +908,10 @@ def _fill_remaining_craft_slots(
                 craft_cost = craft.cost
                 if craft_cost > remaining:
                     continue
+            # 只补“当前队伍真的能吃到收益”的礼装；
+            # 不要为了用满 Cost/槽位而补一张特性完全触发不了的礼装。
+            if not _free_craft_benefits_team(ctx, team, craft):
+                continue
             # 简单价值排序：百分比 + 固定值折算，重复可用时优先选通用5%或更高百分比。
             value = craft.bonus_value + craft.flat_bonus / 10000.0
             if best_rank is None or value > best_rank:
@@ -961,6 +965,43 @@ def _servant_can_match_craft_any_stage(
     for traits in info.traits.values():
         if any(calculator.match_trait_group(traits, g) for g in craft.trigger_traits):
             return True
+    return False
+
+
+def _free_craft_benefits_team(
+    ctx: DataContext,
+    team: Any,
+    craft: Any,
+) -> bool:
+    """自由礼装位自动填入时，判断这张礼装是否真的能对当前队伍产生收益。
+
+    不检查用户手动固定的礼装；只用于自动搜索/自动补满。
+    - 通用/固定数值礼装：只要队伍里有计入收益的成员即可；
+    - 特性礼装：至少有一位“计入收益的成员”能在其可选/已锁定阶段下满足条件。
+    避免低排名队伍为了“填满空位”而随机补一张完全触发不了的特性礼装。
+    """
+    if craft is None or not craft.is_bond_ce:
+        return False
+    if float(craft.support_bonus or 0.0) > 0:
+        return False
+    if not (float(craft.bonus_value or 0.0) > 0 or float(craft.flat_bonus or 0.0) > 0):
+        return False
+
+    for p in (team.players or []):
+        if p.max_bond and not p.bond_switch2:
+            continue  # 该成员个人收益为 0，放特性/数值礼装不会产生总收益
+        if craft.bonus_type in ("universal", None):
+            return True
+        if craft.bonus_type == "trait":
+            if p.stage_locked:
+                traits = ctx.servant_traits(p.servant_id, p.stage)
+                if any(
+                    calculator.match_trait_group(traits, g)
+                    for g in (craft.trigger_traits or [])
+                ):
+                    return True
+            elif _servant_can_match_craft_any_stage(ctx, p.servant_id, craft):
+                return True
     return False
 
 
@@ -1354,8 +1395,9 @@ def _dp_top_craft_combinations(
         craft_cost = ctx.crafts[cid].cost
         single_value = craft_scores[cid]
         max_copies = free_slots_count if cid in repeatable_ids else 1
-        if single_value <= 0 and craft_cost == 0:
-            # 零收益零 Cost 礼装无需展开；空组合等价。
+        if single_value <= 0:
+            # 零收益礼装即使 Cost 很低也不能提升结果；
+            # 展开只会产生“完全触发不了/没有实际加成”的占位礼装组合。
             continue
         old_items = list(dp.items())
         for (used, raw_cost), entries in old_items:
@@ -2070,7 +2112,14 @@ def search_top_teams(
                             global_best_score = score
         return best_here
 
-    def run_with_craft_combos(candidate_ids, deadline, craft_combos, servant_limit=None, use_dp=False):
+    def run_with_craft_combos(
+        candidate_ids,
+        deadline,
+        craft_combos,
+        servant_limit=None,
+        use_dp=False,
+        max_processed: Optional[int] = None,
+    ):
         nonlocal processed_total
         processed = 0
         combos_iter = (
@@ -2079,7 +2128,10 @@ def search_top_teams(
             else _generate_servant_combinations(candidate_ids, choose_count)
         )
         for extras_tuple in combos_iter:
-            if time.time() >= deadline:
+            if max_processed is not None:
+                if processed >= max_processed:
+                    break
+            elif time.time() >= deadline:
                 report("达到时间预算，提前结束当前轮搜索")
                 break
             used_players = set(bp.fixed_servant_ids) | set(extras_tuple)
@@ -2099,6 +2151,12 @@ def search_top_teams(
                     f"（时间预算 {timeout_seconds:.0f}s，当前 {elapsed:.1f}s）"
                 )
 
+    # 复现模式：用原计算的“分阶段处理数量”代替墙钟时间作为停止条件。
+    # 这样即使短验证串搜索更快，也会在完全相同的进度点停下，结果可精确复现。
+    phase_limits = getattr(req, "verify_phase_limits", None)
+    if not (isinstance(phase_limits, dict) and "firstProcessed" in phase_limits):
+        phase_limits = None
+
     # 粗搜：只对每个被抽到的从者阵容跑“该阵容专属 DP 礼装组合”，
     # 尽量覆盖更多从者组合；完整礼装组合留给少量 Top 精算。
     full_combos = list(craft_combos_with_cost)
@@ -2106,10 +2164,26 @@ def search_top_teams(
 
     # 第一轮：用静态分候选池快速建立 Top 基线（对从者组合等距抽样，覆盖更广）。
     first_deadline = start + min(timeout_seconds, max(5.0, timeout_seconds * 0.5))
-    run_with_craft_combos(reduced, first_deadline, None, servant_limit=servant_sweep_limit, use_dp=True)
+    first_limit = int(phase_limits.get("firstProcessed", 0)) if phase_limits else None
+    before_first = processed_total
+    run_with_craft_combos(
+        reduced,
+        first_deadline,
+        None,
+        servant_limit=servant_sweep_limit,
+        use_dp=True,
+        max_processed=first_limit,
+    )
+    first_processed = processed_total - before_first
 
     # 第二轮：根据第一轮实际用到的特性礼装 + 固定队协同补人后再粗搜。
-    if time.time() < start + timeout_seconds - 3 and best_by_set:
+    second_ran = False
+    second_processed = 0
+    if phase_limits is not None:
+        should_run_second = bool(phase_limits.get("secondRan"))
+    else:
+        should_run_second = time.time() < start + timeout_seconds - 3 and bool(best_by_set)
+    if should_run_second:
         used_trait_craft_ids = _collect_used_trait_craft_ids(ctx, best_by_set)
         expanded = _expand_reduced_for_trait_synergy(
             ctx,
@@ -2125,7 +2199,18 @@ def search_top_teams(
             added = len(expanded) - len(reduced)
             report(f"第二轮补入 {added} 名协同候选，继续搜索...")
             second_deadline = start + min(timeout_seconds, max(5.0, timeout_seconds * 0.75))
-            run_with_craft_combos(expanded, second_deadline, None, servant_limit=servant_sweep_limit, use_dp=True)
+            second_limit = int(phase_limits.get("secondProcessed", 0)) if phase_limits else None
+            before_second = processed_total
+            run_with_craft_combos(
+                expanded,
+                second_deadline,
+                None,
+                servant_limit=servant_sweep_limit,
+                use_dp=True,
+                max_processed=second_limit,
+            )
+            second_processed = processed_total - before_second
+            second_ran = True
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
     refine_count = max(5, min(15, len(best_by_set)))
@@ -2135,9 +2220,14 @@ def search_top_teams(
         reverse=True,
     )[:refine_count]
     refine_deadline = start + timeout_seconds
+    refine_processed = 0
     for entry in refine_entries:
-        if time.time() >= refine_deadline:
+        if phase_limits is not None:
+            if refine_processed >= int(phase_limits.get("refineProcessed", 0)):
+                break
+        elif time.time() >= refine_deadline:
             break
+        refine_processed += 1
         servant_set = entry.get("servant_set")
         if not servant_set:
             continue
@@ -2146,10 +2236,15 @@ def search_top_teams(
 
     # 精算后对每个进入精算的从者阵容做一次自由位排列优化，修正启发式放位漏掉的交换。
     # 该兜底有额外算力成本，只保留在最后两个高算力档位（高质量/极限精算）。
+    optimize_processed = 0
     if req.timeout_ms >= 135000:
         for entry in refine_entries:
-            if time.time() >= refine_deadline:
+            if phase_limits is not None:
+                if optimize_processed >= int(phase_limits.get("optimizeProcessed", 0)):
+                    break
+            elif time.time() >= refine_deadline:
                 break
+            optimize_processed += 1
             servant_set = entry.get("servant_set")
             if not servant_set:
                 continue
@@ -2184,4 +2279,11 @@ def search_top_teams(
         "top20": top,
         "_elapsed": round(time.time() - start, 3),
         "_processed": processed_total,
+        "_verifyPhase": {
+            "firstProcessed": first_processed,
+            "secondRan": second_ran,
+            "secondProcessed": second_processed,
+            "refineProcessed": refine_processed,
+            "optimizeProcessed": optimize_processed,
+        },
     }

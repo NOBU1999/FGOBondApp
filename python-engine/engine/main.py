@@ -59,6 +59,17 @@ def calculate(data: Dict[str, Any], db_path: Optional[str] = None) -> Dict[str, 
     if not result.get("top20"):
         raise ValueError("当前配置下无法组成任何队伍，请提高Cost上限或调整Box/固定配置")
 
+    _progress("生成验证串...")
+    try:
+        from .verification import make_verification_tokens
+        tokens = make_verification_tokens(ctx, data, result)
+        result["verificationToken"] = tokens.get("repro", "")
+        result["verificationTokenFull"] = tokens.get("full", "")
+    except Exception:
+        # 旧引擎/缺依赖时不应影响正常计算；只是没有验证串可复制。
+        result["verificationToken"] = ""
+        result["verificationTokenFull"] = ""
+
     _progress("计算完成")
     return result
 

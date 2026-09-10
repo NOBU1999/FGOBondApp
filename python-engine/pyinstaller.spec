@@ -21,9 +21,27 @@ try:
 except ImportError:
     pass
 
+# 验证串加密：cryptography 依赖（Fernet/AES）
+try:
+    crypto_datas, crypto_binaries, crypto_hidden = collect_all("cryptography")
+    datas += crypto_datas
+    binaries += crypto_binaries
+    hiddenimports += crypto_hidden
+except ImportError:
+    pass
+
+# 验证串压缩：PPMd
+try:
+    ppmd_datas, ppmd_binaries, ppmd_hidden = collect_all("pyppmd")
+    datas += ppmd_datas
+    binaries += ppmd_binaries
+    hiddenimports += ppmd_hidden
+except ImportError:
+    pass
+
 # Chaldea 翻译表（JP 数据 -> CN 显示名）
 datas += [("engine/data/name_translations.json", "engine/data")]
-hiddenimports += ["engine.event_bonus"]
+hiddenimports += ["engine.event_bonus", "engine.verification"]
 
 a = Analysis(
     ["engine_launcher.py"],

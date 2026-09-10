@@ -209,6 +209,9 @@ const App = {
       boxFilter: { keyword: "", class: "all", rarity: "all", owned: "all", maxBond: "all" },
       batchBonus: 0,
       slots: makeSlots(),
+      dragState: { type: null, slotIndex: null, craftIndex: null },
+      dragOverSlot: null,
+      dragOverCraft: null,
       mode: "normal",
       serverRegion: "jp",
       cnUnavailableCraftIds: [],
@@ -258,6 +261,30 @@ const App = {
       progress: "",
       results: [],
       totalCandidates: 0,
+      verificationMode: "repro",
+      verificationTokens: [],
+      verificationTokensFull: [],
+      verificationCopied: false,
+      settingsVisible: false,
+      resultSettings: {
+        autoExpandFirst: false,
+        showSearchStats: false,
+        showBonusFormula: false,
+        showCostBreakdown: false,
+        showCraftTriggers: true,
+        showCraftHits: false,
+        showDataVersion: false,
+        showResultBondBadge: false,
+        hideEmptyCraftSlots: false,
+        hideSupport: false,
+        compareMode: false,
+        feedbackMode: "brief",
+        pageSize: 50,
+        resultTopN: 1000,
+      },
+      compareSelectedRanks: [],
+      compareVisible: false,
+      lastSearchStats: null,
       expandedResult: null,
       simpleExcludedServants: [],
       currentPage: 1,
@@ -394,6 +421,13 @@ const App = {
     },
     crownCount() {
       return this.mode === "crown" ? this.slots.filter((s) => s.isCrown).length : 0;
+    },
+    activeVerificationTokens() {
+      return this.verificationMode === "full" ? this.verificationTokensFull : this.verificationTokens;
+    },
+    compareResults() {
+      const wanted = this.compareSelectedRanks || [];
+      return wanted.map((rank) => this.results.find((r) => r.rank === rank)).filter(Boolean);
     },
     overlayItems() {
       if (this.overlay.target === "servant") {
@@ -537,6 +571,16 @@ const App = {
       });
       this.box = saved;
 
+      try {
+        const rawSettings = localStorage.getItem("fgoBondApp.resultSettings");
+        if (rawSettings) {
+          this.resultSettings = Object.assign({}, this.resultSettings, JSON.parse(rawSettings));
+        }
+      } catch (_) {
+        // 损坏的本地设置忽略即可
+      }
+      this.pageSize = Number(this.resultSettings.pageSize) || 50;
+
       window.fgo.onEngineProgress((data) => {
         const msg = data.message || "";
         if (this.updateRunning) {
@@ -546,6 +590,7 @@ const App = {
         }
       });
       window.fgo.onMenuAction((data) => {
+        if (data && data.channel === "menu:settings") this.settingsVisible = true;
         if (data && data.channel === "menu:update-data") this.runUpdate(false);
         if (data && data.channel === "menu:update-data-force") this.runUpdate(true);
       });
@@ -558,6 +603,228 @@ const App = {
   methods: {
     // ---------- 工具 ----------
     formatBondNumber(v) { return formatBondNumber(v); },
+    persistResultSettings() {
+      try {
+        localStorage.setItem("fgoBondApp.resultSettings", JSON.stringify(this.resultSettings));
+      } catch (_) {
+        // 本地存储不可用时忽略
+      }
+      this.pageSize = Number(this.resultSettings.pageSize) || 50;
+      this.currentPage = 1;
+      if (!this.resultSettings.compareMode) this.compareSelectedRanks = [];
+    },
+    closeSettings() {
+      this.persistResultSettings();
+      this.settingsVisible = false;
+    },
+    resultBonusFormula(member) {
+      if (!member || member.isSupport || !member.bonusDetail) return "";
+      const d = member.bonusDetail;
+      const pct = (v) => `${(Number(v || 0) * 100).toFixed(1).replace(/\.0$/, "")}%`;
+      const inner = [
+        d.universalCraftBonus,
+        d.supportCraftBonus,
+        d.traitCraftBonus,
+        d.maxBondBonus,
+        d.activityBonus,
+        d.auraBonus,
+        d.personalBonus,
+      ].filter((v) => Number(v || 0) > 0).map(pct).join(" + ") || "0%";
+      const front = Number(d.frontlineBonus || 0) > 0 ? pct(d.frontlineBonus) : "0%";
+      return `(1 + ${front}) × (1 + ${inner}) = x${Number(d.totalMultiplier || 0).toFixed(4)}`;
+    },
+    craftCostById(craftId) {
+      if (craftId === null || craftId === undefined) return 0;
+      const craft = this.craftById(craftId);
+      if (craft) return Number(craft.cost || 0);
+      const fallback = { 0: 0, "-1": 1, "-2": 3, "-3": 5, "-4": 9, "-5": 12, "-10": 12, "-20": 5, "-21": 9, "-22": 9 };
+      return Number(fallback[String(Number(craftId))] || 0);
+    },
+    resultCostBreakdown(member) {
+      if (!member || member.isSupport) return "";
+      const servant = this.servantMap[member.servantId];
+      const servantCost = servant ? Number(servant.cost || 0) : 0;
+      const mainCost = this.craftCostById(member.craftId);
+      const secondCost = this.craftCostById(member.secondCraftId);
+      const total = servantCost + mainCost;
+      const secondText = secondCost ? ` + 第二礼装 ${secondCost}` : (member.secondCraftId ? " + 第二礼装 0" : "");
+      return `从者 ${servantCost} + 主礼装 ${mainCost}${secondText} = ${total}`;
+    },
+    qualityModeText(mode) {
+      const map = { fast: "快速", balanced: "平衡", high: "高质量", extreme: "极限精算" };
+      return map[mode] || mode || "";
+    },
+    strategyText(strategy) {
+      const map = { total_max: "总牵绊最大化", target_max: "指定从者最大化", balanced: "均衡模式" };
+      return map[strategy] || strategy || "总牵绊最大化";
+    },
+    visibleResultTeam(result) {
+      const team = (result && result.team) || [];
+      if (!this.resultSettings.hideSupport) return team;
+      return team.filter((m) => !m.isSupport);
+    },
+    visibleResultCraftItems(member) {
+      const items = this.resultCraftItems(member);
+      if (!this.resultSettings.hideEmptyCraftSlots) return items;
+      return items.filter((cm) => cm.craftId !== null && cm.craftId !== undefined && Number(cm.craftId) !== 0);
+    },
+    craftHitMembers(result, craftId) {
+      const team = (result && result.team) || [];
+      if (!team.some((m) => Array.isArray(m.traitHits))) return "—（旧引擎结果无此数据）";
+      const target = Number(craftId);
+      const hits = [];
+      for (const m of team) {
+        if (m.isSupport) continue;
+        const memberHits = (m.traitHits || []).filter((h) => Number(h.craftId) === target);
+        if (!memberHits.length) continue;
+        const name = m.name || (this.servantMap[m.servantId] ? this.servantMap[m.servantId].name : "") || m.servantId;
+        const conditions = [];
+        memberHits.forEach((h) => {
+          (h.groups || []).forEach((g) => {
+            const text = (g || []).map((t) => this.traitLabel(t)).join(" + ");
+            if (text && !conditions.includes(text)) conditions.push(text);
+          });
+        });
+        hits.push(`${name}${conditions.length ? `（${conditions.join(" 或 ")}）` : ""}`);
+      }
+      return hits.join("、") || "未命中任何成员";
+    },
+    resultMemberName(member) {
+      if (!member) return "";
+      const s = this.servantMap[member.servantId];
+      return member.name || (s ? s.name : "") || member.servantId;
+    },
+    resultBondInfo(member) {
+      if (!member || member.isSupport) return null;
+      const s = this.servantMap[member.servantId];
+      return s ? this.servantBondInfo(s) : null;
+    },
+    memberCraftsText(member) {
+      return this.resultCraftItems(member)
+        .map((cm) => cm.craftName || "无礼装")
+        .filter(Boolean)
+        .join(" + ") || "无礼装";
+    },
+    traitCoverageText(result) {
+      return ((result && result.traitCoverage) || []).map((t) => this.traitLabel(t)).join("、");
+    },
+    craftBonusDetailText(d) {
+      if (!d) return "";
+      const typeLabel = { universal: "通用", trait: "特性", support: "助战", flat: "固定" }[d.type] || "礼装";
+      const name = d.craftName ? `「${d.craftName}」` : "";
+      const value = d.type === "flat"
+        ? `+${this.formatBondNumber(d.value)}`
+        : `+${(Number(d.value || 0) * 100).toFixed(1).replace(/\.0$/, "")}%`;
+      const groups = (d.groups || [])
+        .map((g) => (g || []).map((t) => this.traitLabel(t)).join(" + "))
+        .filter(Boolean);
+      const cond = groups.length ? `（条件：${groups.join(" 或 ")}）` : "";
+      return `${typeLabel}${name}：${value}${cond}`;
+    },
+    toggleCompareResult(result) {
+      const rank = Number(result.rank);
+      const idx = this.compareSelectedRanks.indexOf(rank);
+      if (idx >= 0) this.compareSelectedRanks.splice(idx, 1);
+      else this.compareSelectedRanks.push(rank);
+    },
+    openCompare() {
+      if (this.compareResults.length >= 2) this.compareVisible = true;
+    },
+    closeCompare() {
+      this.compareVisible = false;
+    },
+    async copyFeedbackSummary() {
+      const selected = this.compareResults;
+      if (!selected.length) {
+        alert("请先在方案卡片上勾选要包含的方案（可多选）");
+        return;
+      }
+      const full = this.resultSettings.feedbackMode === "full";
+      const lines = [];
+      lines.push(`FGO牵绊推荐器反馈摘要 v${this.info && this.info.version ? this.info.version : "?"}`);
+      lines.push(`服务器：${this.serverRegion === "cn" ? "简中服" : "日服"}｜模式：${this.mode === "crown" ? `戴冠战(${this.crownClass})` : "普通"}｜策略：${this.strategyText(this.strategy)}`);
+      lines.push(`Cost上限：${this.costLimit}｜计算档位：${this.qualityModeText(this.qualityMode)}｜包含方案：${selected.map((r) => `#${r.rank}`).join("、")}`);
+      if (this.info && (this.info.dataUpdatedAt || this.info.dataRegion)) {
+        lines.push(`数据版本：${this.info.dataUpdatedAt || "未知"}｜数据区：${this.info.dataRegion || "JP"}`);
+      }
+      if (this.lastSearchStats) {
+        lines.push(`搜索：用时 ${this.lastSearchStats.elapsed}s｜处理 ${this.lastSearchStats.processed} 组合｜候选队伍 ${this.lastSearchStats.totalCandidates || 0}`);
+      }
+
+      if (full) {
+        const excludedServants = Array.from(new Set([...(this.excludedServants || []), ...(this.simpleExcludedServants || [])].map(Number)));
+        const genericNotParticipating = this.genericBondCrafts.filter((c) => !this.isCraftParticipating(c)).map((c) => Number(c.id));
+        const cnUnavailable = this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []).map(Number) : [];
+        const excludedCrafts = Array.from(new Set([...(this.excludedCrafts || []).map(Number), ...cnUnavailable, ...genericNotParticipating, ...(this.nonParticipatingCraftIds || []).map(Number)]));
+        const supportExcluded = Array.from(new Set([...cnUnavailable, ...genericNotParticipating, ...(this.nonParticipatingCraftIds || []).map(Number)]));
+
+        const fixedServantTexts = [];
+        const fixedCraftTexts = [];
+        const crownTexts = [];
+        for (let i = 0; i < this.slots.length; i += 1) {
+          const slot = this.slots[i];
+          const pos = this.slotPosition(i);
+          if (slot.isCrown) crownTexts.push(this.positionLabel(pos));
+          if (slot.isSupport) continue;
+          if (slot.servantId) fixedServantTexts.push(`${this.servantMap[slot.servantId]?.name || slot.servantId}@${this.positionLabel(pos)}`);
+          if (slot.craftId) fixedCraftTexts.push(`${this.craftById(slot.craftId)?.name || slot.craftId}@${this.positionLabel(pos)}`);
+        }
+        const supportSlot = this.slots.find((s) => s.isSupport);
+        lines.push("");
+        lines.push("【用于计算的队伍配置】");
+        lines.push(`固定从者：${fixedServantTexts.join("、") || "无"}`);
+        lines.push(`固定礼装：${fixedCraftTexts.join("、") || "无"}`);
+        lines.push(`助战：${supportSlot && supportSlot.servantId ? (this.servantMap[supportSlot.servantId]?.name || supportSlot.servantId) : "自动"}${supportSlot && supportSlot.craftId ? `｜礼装：${this.craftById(supportSlot.craftId)?.name || supportSlot.craftId}` : ""}`);
+        lines.push(`冠位位：${crownTexts.join("、") || "无"}`);
+        lines.push(`排除从者：${excludedServants.length ? excludedServants.map((id) => this.servantMap[id]?.name || id).join("、") : "无"}`);
+        lines.push(`排除礼装：${excludedCrafts.length ? excludedCrafts.map((id) => this.craftById(id)?.name || id).join("、") : "无"}`);
+        lines.push(`助战排除礼装：${supportExcluded.length ? supportExcluded.map((id) => this.craftById(id)?.name || id).join("、") : "无"}`);
+
+        const box = this.participatingBox();
+        lines.push("");
+        lines.push(`【参与计算的 Box（已排除）】共 ${box.length} 人`);
+        for (const b of box) {
+          lines.push(`  #${b.id} ${b.name}｜${b.class} ${b.rarity}★｜Cost ${b.cost}｜阶段 ${this.stageLabel(b.stage)}｜满绊 ${b.maxBond ? "是" : "否"}｜开关1 ${b.switch1 ? "开" : "关"}｜开关2 ${b.switch2 ? "开" : "关"}｜个人 +${(Number(b.personalBonus || 0) * 100).toFixed(2)}%｜光环 +${(Number(b.auraBonus || 0) * 100).toFixed(2)}%`);
+        }
+
+        const pool = this.feedbackCraftPool();
+        lines.push("");
+        lines.push(`【参与计算的礼装池】共 ${pool.length} 张`);
+        for (const c of pool) {
+          const effect = c.bonusType === "trait"
+            ? `特性 +${(Number(c.bonusValue || 0) * 100).toFixed(1)}%（${c.trigger || "条件"}）`
+            : `通用 +${(Number(c.bonusValue || 0) * 100).toFixed(1)}%`;
+          lines.push(`  #${c.id} ${c.name}｜${c.rarity}★｜Cost ${c.cost}｜${effect}${c.flatBonus ? `｜固定 +${this.formatBondNumber(c.flatBonus)}` : ""}${c.repeatable ? "｜可重复" : ""}${c.isCustom ? "｜自定义" : ""}`);
+        }
+      }
+
+      lines.push("");
+      lines.push("【选中的方案】");
+      for (const r of selected) {
+        lines.push(`方案 #${r.rank}：x${Number(r.totalMultiplier).toFixed(3)}｜Cost ${r.costUsed}/${this.costLimit}${r.totalBondPoints ? `｜预计牵绊 ${this.formatBondNumber(r.totalBondPoints)}` : ""}`);
+        for (const m of r.team || []) {
+          const name = m.isSupport ? `助战 ${this.resultMemberName(m)}` : this.resultMemberName(m);
+          const crafts = this.resultCraftItems(m)
+            .map((cm) => `${cm.craftName || "无礼装"}${cm.craftId !== null && cm.craftId !== undefined ? `(Cost ${this.craftCostById(cm.craftId)})` : ""}`)
+            .filter(Boolean)
+            .join(" + ");
+          lines.push(`  ${this.positionLabel(m.position)}：${name}｜${crafts || "无礼装"}${m.isSupport ? "" : `｜x${Number(m.bonusDetail?.totalMultiplier || 0).toFixed(3)}`}`);
+          if (!m.isSupport && m.craftBonusDetails && m.craftBonusDetails.length) {
+            lines.push(`    礼装加成：${m.craftBonusDetails.map((d) => this.craftBonusDetailText(d)).join("；")}`);
+          }
+        }
+        if (r.traitCoverage && r.traitCoverage.length) {
+          lines.push(`  特性覆盖：${this.traitCoverageText(r)}`);
+        }
+      }
+      lines.push("");
+      lines.push(full ? "（完整反馈摘要：含队伍配置、参与计算的 Box / 礼装池）" : "（简短反馈摘要；右键“复制反馈摘要”可切换完整模式）");
+      try {
+        await window.fgo.copyText(lines.join("\n"));
+      } catch (e) {
+        alert("复制失败：" + (e && e.message ? e.message : String(e)));
+      }
+    },
     servantBondInfo(s) {
       if (!s) return null;
       const b = this.box[s.id];
@@ -626,6 +893,91 @@ const App = {
       }
       return items;
     },
+    onServantDragStart(e, slotIndex) {
+      const slot = this.slots[slotIndex];
+      if (!slot || !slot.servantId) return;
+      this.dragState = { type: "servant", slotIndex, craftIndex: null };
+      try {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", `servant:${slotIndex}`);
+      } catch (_) {
+        // 旧环境不支持 dataTransfer 时忽略
+      }
+    },
+    onCraftDragStart(e, slotIndex, craftIndex) {
+      const slot = this.slots[slotIndex];
+      if (!slot) return;
+      const craftId = Number(craftIndex) === 1 ? slot.secondCraftId : slot.craftId;
+      if (craftId === null || craftId === undefined || Number(craftId) === 0) return;
+      this.dragState = { type: "craft", slotIndex, craftIndex: Number(craftIndex) };
+      try {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", `craft:${slotIndex}:${craftIndex}`);
+      } catch (_) {
+        // 旧环境不支持 dataTransfer 时忽略
+      }
+    },
+    onSlotDragOver(e, slotIndex) {
+      if (!this.dragState.type) return;
+      if (e) e.preventDefault();
+      this.dragOverSlot = slotIndex;
+      this.dragOverCraft = null;
+    },
+    onCraftDragOver(e, slotIndex, craftIndex) {
+      if (!this.dragState.type) return;
+      if (e) e.preventDefault();
+      this.dragOverSlot = slotIndex;
+      this.dragOverCraft = Number(craftIndex);
+    },
+    onSlotDrop(_e, slotIndex) {
+      if (this.dragState.type === "servant") {
+        this.swapSlots(this.dragState.slotIndex, slotIndex);
+      } else if (this.dragState.type === "craft") {
+        const sourceCraftIndex = Number(this.dragState.craftIndex);
+        const targetSlot = this.slots[slotIndex];
+        if (sourceCraftIndex === 0) {
+          this.swapCraft(this.dragState.slotIndex, 0, slotIndex, 0);
+        } else if (targetSlot && targetSlot.isCrown) {
+          this.swapCraft(this.dragState.slotIndex, 1, slotIndex, 1);
+        }
+      }
+      this.clearDragState();
+    },
+    onCraftDrop(_e, slotIndex, craftIndex) {
+      if (this.dragState.type === "servant") {
+        this.swapSlots(this.dragState.slotIndex, slotIndex);
+      } else if (this.dragState.type === "craft") {
+        this.swapCraft(
+          this.dragState.slotIndex,
+          this.dragState.craftIndex,
+          slotIndex,
+          Number(craftIndex)
+        );
+      }
+      this.clearDragState();
+    },
+    swapSlots(a, b) {
+      if (a === b || a === null || b === null) return;
+      const left = this.slots[a];
+      this.slots[a] = this.slots[b];
+      this.slots[b] = left;
+    },
+    swapCraft(a, ai, b, bi) {
+      if (a === b && Number(ai) === Number(bi)) return;
+      const left = this.slots[a];
+      const right = this.slots[b];
+      if (!left || !right) return;
+      const leftKey = Number(ai) === 1 ? "secondCraftId" : "craftId";
+      const rightKey = Number(bi) === 1 ? "secondCraftId" : "craftId";
+      const tmp = left[leftKey];
+      left[leftKey] = right[rightKey];
+      right[rightKey] = tmp;
+    },
+    clearDragState() {
+      this.dragState = { type: null, slotIndex: null, craftIndex: null };
+      this.dragOverSlot = null;
+      this.dragOverCraft = null;
+    },
     resultCraftItems(member) {
       const items = [{
         index: 0,
@@ -678,7 +1030,7 @@ const App = {
       if (!result || !Array.isArray(result.team)) return [];
       const seen = new Set();
       const out = [];
-      for (const m of result.team) {
+      for (const m of this.visibleResultTeam(result)) {
         const ids = [m.craftId, m.secondCraftId];
         for (const cid of ids) {
           if (cid === null || cid === undefined || cid === 0 || cid === "") continue;
@@ -2063,7 +2415,7 @@ const App = {
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
-        topN: 1000,
+        topN: Number(this.resultSettings.resultTopN) || 1000,
         craftPoolSize: 60,
         timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
       };
@@ -2115,7 +2467,7 @@ const App = {
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
-        topN: 1000,
+        topN: Number(this.resultSettings.resultTopN) || 1000,
         craftPoolSize: 60,
         timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
       };
@@ -2166,6 +2518,11 @@ const App = {
     async calculate() {
       this.error = "";
       this.results = [];
+      this.verificationTokens = [];
+      this.verificationTokensFull = [];
+      this.verificationCopied = false;
+      this.compareSelectedRanks = [];
+      this.compareVisible = false;
       this.expandedResult = null;
       this.progress = "";
       if (!this.ownedServants.length) {
@@ -2181,12 +2538,16 @@ const App = {
       try {
         const payload = this.buildPayload();
         const result = await window.fgo.calculate(plainClone(payload));
+        if (result.verificationToken) this.verificationTokens.push(result.verificationToken);
+        if (result.verificationTokenFull) this.verificationTokensFull.push(result.verificationTokenFull);
         const allResults = [...(result.top20 || [])];
         // 把你保存过的完整预设作为“种子队伍”一并计算并合并进结果，
         // 避免完整预设因为搜索抽样/时间不足而完全不出现在结果里。
         for (const preset of this.seedablePresets()) {
           try {
             const seedResult = await window.fgo.calculate(plainClone(this.buildPresetPayload(preset)));
+            if (seedResult && seedResult.verificationToken) this.verificationTokens.push(seedResult.verificationToken);
+            if (seedResult && seedResult.verificationTokenFull) this.verificationTokensFull.push(seedResult.verificationTokenFull);
             allResults.push(...((seedResult && seedResult.top20) || []).slice(0, 3));
           } catch (_) {
             // 单个预设不兼容/超时不影响主结果
@@ -2194,12 +2555,25 @@ const App = {
         }
         this.results = this.mergeRankResults(allResults);
         this.totalCandidates = result.totalCandidates || this.results.length;
+        this.lastSearchStats = {
+          elapsed: result._elapsed,
+          processed: result._processed,
+          totalCandidates: result.totalCandidates,
+          qualityMode: this.qualityMode,
+          timeoutMs: payload.timeoutMs,
+        };
         this.currentPage = 1;
+        if (this.resultSettings.autoExpandFirst && this.results.length) {
+          this.expandedResult = this.results[0];
+        }
         setTimeout(() => {
           document.querySelector(".results-section")?.scrollIntoView({ behavior: "smooth" });
         }, 50);
       } catch (e) {
         this.error = e.message || String(e);
+        this.verificationTokens = [];
+        this.verificationTokensFull = [];
+        this.verificationCopied = false;
       } finally {
         this.calculating = false;
       }
@@ -2342,6 +2716,116 @@ const App = {
       a.click();
       URL.revokeObjectURL(a.href);
     },
+    async copyVerificationCode() {
+      let tokens = (this.activeVerificationTokens || []).filter(Boolean);
+      // 兼容旧引擎：如果当前模式没有验证串，就退回另一种模式。
+      if (!tokens.length) {
+        const fallback = this.verificationMode === "full" ? this.verificationTokens : this.verificationTokensFull;
+        if ((fallback || []).length) {
+          this.verificationMode = this.verificationMode === "full" ? "repro" : "full";
+          tokens = fallback.filter(Boolean);
+        }
+      }
+      if (!tokens.length) return;
+      try {
+        // 如果一次计算还合并了保存的“完整预设种子队伍”，会包含多段；
+        // 每段一行，reproduce_verification.py 支持逐行解密复现。
+        await window.fgo.copyText(tokens.join("\n"));
+        this.verificationCopied = true;
+        setTimeout(() => { this.verificationCopied = false; }, 2500);
+      } catch (e) {
+        alert("复制失败：" + (e && e.message ? e.message : String(e)));
+      }
+    },
+    openVerificationModeMenu(e) {
+      if (e) e.preventDefault();
+      this.contextMenu = {
+        visible: true,
+        x: e ? e.clientX : 0,
+        y: e ? e.clientY : 0,
+        slotIndex: null,
+        target: "verification-mode",
+        result: null,
+        member: null,
+      };
+    },
+    setVerificationMode(mode) {
+      this.verificationMode = mode === "full" ? "full" : "repro";
+      this.verificationCopied = false;
+      this.closeContextMenu();
+    },
+    openFeedbackModeMenu(e) {
+      if (e) e.preventDefault();
+      this.contextMenu = {
+        visible: true,
+        x: e ? e.clientX : 0,
+        y: e ? e.clientY : 0,
+        slotIndex: null,
+        target: "feedback-mode",
+        result: null,
+        member: null,
+      };
+    },
+    setFeedbackMode(mode) {
+      this.resultSettings.feedbackMode = mode === "full" ? "full" : "brief";
+      this.persistResultSettings();
+      this.closeContextMenu();
+    },
+    participatingBox() {
+      const excluded = new Set([
+        ...(this.excludedServants || []),
+        ...(this.simpleExcludedServants || []),
+      ].map(Number));
+      return this.ownedServants
+        .filter((s) => !excluded.has(Number(s.id)))
+        .map((s) => {
+          const b = this.box[s.id] || {};
+          return {
+            id: s.id,
+            name: s.name,
+            class: s.class,
+            cost: s.cost,
+            rarity: s.rarity,
+            stage: b.stage || "fourth",
+            maxBond: !!b.maxBond,
+            switch1: !!b.switch1,
+            switch2: !!b.switch2,
+            personalBonus: Number(b.personalBonus || 0),
+            auraBonus: Number(b.auraBonus || 0),
+          };
+        });
+    },
+    feedbackCraftPool() {
+      const excluded = new Set((this.excludedCrafts || []).map(Number));
+      if (this.serverRegion === "cn") {
+        (this.cnUnavailableCraftIds || []).forEach((id) => excluded.add(Number(id)));
+      }
+      (this.nonParticipatingCraftIds || []).forEach((id) => excluded.add(Number(id)));
+      this.genericBondCrafts.forEach((c) => {
+        if (!this.isCraftParticipating(c)) excluded.add(Number(c.id));
+      });
+      return this.meaningfulBondCrafts
+        .filter((c) => !excluded.has(Number(c.id)))
+        .filter((c) => c && c.craftType === "bond")
+        .filter((c) => Number(c.supportBonus || 0) <= 0)
+        .sort((a, b) => {
+          const ua = a.bonusType === "universal" ? 0 : 1;
+          const ub = b.bonusType === "universal" ? 0 : 1;
+          return ua - ub || Number(b.bonusValue || 0) - Number(a.bonusValue || 0) || Number(a.id) - Number(b.id);
+        })
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          rarity: c.rarity,
+          cost: c.cost,
+          bonusType: c.bonusType,
+          bonusValue: Number(c.bonusValue || 0),
+          flatBonus: Number(c.flatBonus || 0),
+          repeatable: !!c.repeatable,
+          isCustom: !!c.isCustom,
+          trigger: c.bonusType === "trait" ? this.traitGroupsText(c) : "",
+        }));
+    },
   },
   template: `
   <div class="board-app" @click="closeContextMenu">
@@ -2391,9 +2875,14 @@ const App = {
         <div v-for="(slot, i) in slots" :key="i" class="slot-col" :class="{ 'slot-support': slot.isSupport, 'slot-crown': mode === 'crown' && slot.isCrown }">
           <div
             class="cell cell-servant"
-            :class="{ empty: !slot.servantId, support: slot.isSupport }"
+            :class="{ empty: !slot.servantId, support: slot.isSupport, 'drag-over': dragOverSlot === i && dragState.type === 'servant' }"
+            :draggable="!!slot.servantId"
             @click="openOverlay(i, 'servant')"
             @contextmenu="openContextMenu($event, i, 'servant')"
+            @dragstart="onServantDragStart($event, i)"
+            @dragend="clearDragState"
+            @dragover.prevent="onSlotDragOver($event, i)"
+            @drop.prevent="onSlotDrop($event, i)"
           >
             <template v-if="slot.servantId">
               <img
@@ -2421,9 +2910,14 @@ const App = {
               v-for="cs in slotCraftItems(slot)"
               :key="cs.index"
               class="cell cell-craft"
-              :class="{ empty: cs.craftId === null || cs.craftId === undefined, second: cs.index === 1 }"
+              :class="{ empty: cs.craftId === null || cs.craftId === undefined, second: cs.index === 1, 'drag-over': dragOverSlot === i && dragOverCraft === cs.index }"
+              :draggable="cs.craftId !== null && cs.craftId !== undefined && Number(cs.craftId) !== 0"
               @click="openOverlay(i, 'craft', cs.index)"
               @contextmenu="openContextMenu($event, i, 'craft', cs.index)"
+              @dragstart="onCraftDragStart($event, i, cs.index)"
+              @dragend="clearDragState"
+              @dragover.prevent="onCraftDragOver($event, i, cs.index)"
+              @drop.prevent="onCraftDrop($event, i, cs.index)"
             >
               <template v-if="cs.craftId !== null && cs.craftId !== undefined">
                 <img v-if="hasCraftImage(cs.craft)" :src="craftImagePath(cs.craft)" class="cell-craft-img" alt="" />
@@ -2511,6 +3005,29 @@ const App = {
       <div class="results-section panel">
         <div class="results-head">
           <h2>推荐结果（共 {{ totalCandidates }} 个，当前显示 {{ filteredResults.length }} 个）</h2>
+          <div class="verification-actions">
+            <button
+              v-if="results.length && (verificationTokens.length || verificationTokensFull.length)"
+              class="secondary"
+              @click="copyVerificationCode"
+              @contextmenu.prevent.stop="openVerificationModeMenu($event)"
+              :title="'左键复制验证串；右键切换复现/完整模式。当前：' + (verificationMode === 'full' ? '完整模式（全量静态数据）' : '复现模式（默认，串较短）')"
+            >
+              📋 复制验证串（{{ verificationMode === 'full' ? '完整' : '复现' }}）<span v-if="activeVerificationTokens.length > 1">（{{ activeVerificationTokens.length }}段）</span>
+            </button>
+            <span v-if="verificationCopied" class="text-muted verification-copied">已复制</span>
+            <button
+              v-if="results.length"
+              class="secondary"
+              @click="copyFeedbackSummary"
+              @contextmenu.prevent.stop="openFeedbackModeMenu($event)"
+              :title="'左键复制反馈摘要；右键切换简短/完整模式。当前：' + (resultSettings.feedbackMode === 'full' ? '完整模式（含 Box/礼装池）' : '简短模式')"
+            >
+              📝 复制反馈摘要（{{ resultSettings.feedbackMode === 'full' ? '完整' : '简短' }}）
+            </button>
+            <button v-if="resultSettings.compareMode && compareSelectedRanks.length >= 2" class="secondary" @click="openCompare">📊 对比已选（{{ compareSelectedRanks.length }}）</button>
+            <button v-if="compareSelectedRanks.length" class="secondary" @click="compareSelectedRanks = []">清空选择</button>
+          </div>
           <div v-if="simpleExcludedServants.length" class="simple-exclusions">
             <button class="secondary" :disabled="calculating" @click="calculate">🔁 重新计算</button>
             <span class="text-muted">简易排除：</span>
@@ -2526,6 +3043,15 @@ const App = {
             </span>
           </div>
         </div>
+        <div v-if="resultSettings.showSearchStats && lastSearchStats" class="search-stats text-muted">
+          本次搜索：{{ qualityModeText(lastSearchStats.qualityMode) }}
+          · 用时 {{ lastSearchStats.elapsed }}s
+          · 处理 {{ lastSearchStats.processed }} 个组合
+          · 候选队伍 {{ lastSearchStats.totalCandidates || 0 }}
+        </div>
+        <div v-if="resultSettings.showDataVersion" class="search-stats text-muted">
+          客户端 v{{ info && info.version ? info.version : '?' }} · 数据更新 {{ info && info.dataUpdatedAt ? info.dataUpdatedAt : '未知' }} · 数据区 {{ info && info.dataRegion ? info.dataRegion : 'JP' }}
+        </div>
         <div v-if="!results.length" class="empty">点击“开始计算”后结果会显示在这里</div>
         <div v-else-if="!filteredResults.length" class="empty">当前 Top 结果都包含被简易排除的从者，请点击上方“🔁 重新计算”搜索替代队伍</div>
         <div v-for="r in pagedResults" :key="r.rank" class="result-card">
@@ -2533,22 +3059,32 @@ const App = {
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
             <span v-if="r.totalBondPoints" class="text-muted"><template v-if="r.baseBond">基础 {{ formatBondNumber(r.baseBond) }} → </template>预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
             <span class="text-muted">Cost {{ r.costUsed }}/{{ costLimit }}</span>
+            <label class="compare-toggle" title="勾选后可多选方案用于“复制反馈摘要”或方案对比">
+              <input type="checkbox" :checked="compareSelectedRanks.includes(r.rank)" @change="toggleCompareResult(r)" />
+              选择
+            </label>
             <span style="flex:1"></span>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
             <button class="secondary" @click="exportJson(r)">导出JSON</button>
           </div>
           <div class="result-board">
-            <div v-for="m in r.team" :key="m.position" class="result-col">
+            <div v-for="m in visibleResultTeam(r)" :key="m.position" class="result-col">
               <div class="mini-cell mini-servant" :class="{ support: m.isSupport, fixed: m.isFixed, crown: m.isCrown }" @contextmenu="openResultContext($event, r, m, 'servant')">
                 <img v-if="!avatarMissingSet.has(String(m.servantId))" :src="avatarPath(m.servantId)" class="mini-avatar" alt="" @error="markAvatarBroken(m.servantId)" />
                 <div v-else class="mini-avatar fallback">{{ (m.name || '?').charAt(0) }}</div>
-                <div class="mini-stage">{{ stageNumber(m.stage) }}</div>
+                <div
+                  v-if="resultSettings.showResultBondBadge && resultBondInfo(m)"
+                  class="mini-stage bond-badge mini-bond-badge"
+                  :class="resultBondInfo(m).kind"
+                  :title="'牵绊 ' + resultBondInfo(m).text + '（阶段：' + resultMemberStage(m) + '）'"
+                >{{ resultBondInfo(m).text }}</div>
+                <div v-else class="mini-stage">{{ stageNumber(m.stage) }}</div>
                 <div v-if="m.isSupport" class="mini-support">助战</div>
                 <div v-if="m.isFixed" class="mini-fixed">🔒</div>
                 <div v-if="m.isCrown" class="mini-crown-star" title="冠位从者位">✴</div>
               </div>
               <div
-                v-for="cm in resultCraftItems(m)"
+                v-for="cm in visibleResultCraftItems(m)"
                 :key="'craft-' + cm.index"
                 class="mini-cell mini-craft"
                 :class="{ second: cm.index === 1 }"
@@ -2581,7 +3117,7 @@ const App = {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="m in r.team" :key="m.position" :class="{ 'support-row': m.isSupport }">
+                <tr v-for="m in visibleResultTeam(r)" :key="m.position" :class="{ 'support-row': m.isSupport }">
                   <td>
                     <div>{{ positionLabel(m.position) }}</div>
                     <div class="detail-meta">
@@ -2600,11 +3136,18 @@ const App = {
                       <span class="detail-craft-name">{{ cm.craftName || '无礼装' }}</span>
                       <span v-if="cm.index === 1" class="detail-tag">第二礼装</span>
                     </div>
+                    <div v-if="resultSettings.showCostBreakdown && !m.isSupport" class="text-muted detail-extra-line">{{ resultCostBreakdown(m) }}</div>
                   </td>
                   <td>
                     <div v-if="m.isSupport" class="text-muted">助战不参与个人收益</div>
                     <div v-else-if="m.bonusDetail" class="detail-bonus-chips">
                       <span v-for="bp in resultBonusParts(m)" :key="bp.label" class="chip">{{ bp.label }} {{ bp.value }}</span>
+                    </div>
+                    <div v-if="resultSettings.showBonusFormula && !m.isSupport && m.bonusDetail" class="formula-line">{{ resultBonusFormula(m) }}</div>
+                    <div v-if="!m.isSupport && m.craftBonusDetails && m.craftBonusDetails.length" class="craft-breakdown">
+                      <div v-for="(d, di) in m.craftBonusDetails" :key="'bd-' + di" class="craft-breakdown-item">
+                        {{ craftBonusDetailText(d) }}
+                      </div>
                     </div>
                   </td>
                   <td>
@@ -2627,7 +3170,8 @@ const App = {
               <div v-for="c in resultTeamCrafts(r)" :key="c.id" class="detail-craft-detail" style="margin-bottom:4px">
                 <span class="detail-craft-name">{{ c.name }}</span>
                 <span v-if="c.cost !== undefined" class="text-muted">（Cost {{ c.cost }}）</span>
-                <span v-if="c.bonusType === 'trait'" class="text-muted">：{{ traitGroupsText(c) }}</span>
+                <span v-if="resultSettings.showCraftTriggers && c.bonusType === 'trait'" class="text-muted">：{{ traitGroupsText(c) }}</span>
+                <div v-if="resultSettings.showCraftHits && c.bonusType === 'trait'" class="text-muted">命中：{{ craftHitMembers(r, c.id) }}</div>
                 <div class="text-muted">{{ c.detail || '' }}</div>
               </div>
             </div>
@@ -3149,6 +3693,132 @@ const App = {
       </div>
     </div>
 
+    <!-- 结果显示设置 -->
+    <div v-if="settingsVisible" class="modal-mask" @click.self="closeSettings">
+      <div class="modal-panel small">
+        <div class="overlay-head">
+          <h2>结果显示设置</h2>
+          <button class="secondary" @click="closeSettings">✕</button>
+        </div>
+        <div class="settings-list">
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.autoExpandFirst" @change="persistResultSettings" />
+            <span>计算完成后自动展开第 1 个方案详情</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showSearchStats" @change="persistResultSettings" />
+            <span>在结果区显示本次搜索统计（档位/耗时/处理组合数）</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showBonusFormula" @change="persistResultSettings" />
+            <span>在详情里显示成员加成计算式</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showCostBreakdown" @change="persistResultSettings" />
+            <span>在详情里显示成员 Cost 明细</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showCraftTriggers" @change="persistResultSettings" />
+            <span>显示特性礼装的触发条件</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showCraftHits" @change="persistResultSettings" />
+            <span>显示特性礼装的命中成员</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showDataVersion" @change="persistResultSettings" />
+            <span>显示客户端版本 / 数据更新时间 / 数据区</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.showResultBondBadge" @change="persistResultSettings" />
+            <span>在方案从者头像角标显示牵绊等级</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.hideEmptyCraftSlots" @change="persistResultSettings" />
+            <span>隐藏空礼装槽</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.hideSupport" @change="persistResultSettings" />
+            <span>隐藏助战位</span>
+          </label>
+          <label class="settings-row">
+            <input type="checkbox" v-model="resultSettings.compareMode" @change="persistResultSettings" />
+            <span>开启方案对比模式（结果卡出现勾选框）</span>
+          </label>
+          <label class="settings-row">
+            <span>每页显示数量</span>
+            <select v-model.number="resultSettings.pageSize" @change="persistResultSettings">
+              <option :value="20">20 条</option>
+              <option :value="50">50 条</option>
+              <option :value="100">100 条</option>
+            </select>
+          </label>
+          <label class="settings-row">
+            <span>结果最多计算数量</span>
+            <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
+              <option :value="100">100</option>
+              <option :value="300">300</option>
+              <option :value="1000">1000（默认）</option>
+            </select>
+          </label>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px">
+          <button class="primary" @click="closeSettings">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 方案对比 -->
+    <div v-if="compareVisible" class="modal-mask" @click.self="closeCompare">
+      <div class="modal-panel compare-panel">
+        <div class="overlay-head">
+          <h2>方案对比（{{ compareResults.length }}）</h2>
+          <button class="secondary" @click="closeCompare">✕</button>
+        </div>
+        <div class="compare-scroll">
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th>项目</th>
+                <th v-for="r in compareResults" :key="r.rank">方案 #{{ r.rank }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>总倍率</td>
+                <td v-for="r in compareResults" :key="'mult-' + r.rank">x{{ Number(r.totalMultiplier).toFixed(3) }}</td>
+              </tr>
+              <tr>
+                <td>预计牵绊</td>
+                <td v-for="r in compareResults" :key="'bp-' + r.rank">{{ r.totalBondPoints ? formatBondNumber(r.totalBondPoints) : "—" }}</td>
+              </tr>
+              <tr>
+                <td>Cost</td>
+                <td v-for="r in compareResults" :key="'cost-' + r.rank">{{ r.costUsed }}/{{ costLimit }}</td>
+              </tr>
+              <tr>
+                <td>队伍</td>
+                <td v-for="r in compareResults" :key="'team-' + r.rank">
+                  <div v-for="m in visibleResultTeam(r)" :key="m.position" class="compare-member">
+                    <div class="compare-member-name">{{ positionLabel(m.position) }}：{{ m.isSupport ? '助战 ' : '' }}{{ resultMemberName(m) }}</div>
+                    <div class="text-muted compare-member-craft">{{ memberCraftsText(m) }}</div>
+                    <div v-if="!m.isSupport" class="text-muted">x{{ Number(m.bonusDetail?.totalMultiplier || 0).toFixed(3) }}</div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td>特性覆盖</td>
+                <td v-for="r in compareResults" :key="'trait-' + r.rank">
+                  <span v-if="r.traitCoverage && r.traitCoverage.length">{{ traitCoverageText(r) }}</span>
+                  <span v-else class="text-muted">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- 悬停提示 -->
     <div v-if="hover.visible" class="hover-tip" :style="{ left: hover.x + 'px', top: hover.y + 'px' }">{{ hover.text }}</div>
 
@@ -3168,6 +3838,22 @@ const App = {
       </template>
       <template v-else-if="contextMenu.target === 'result-craft'">
         <div class="ctx-item" @click="ctxResultInfo">ℹ️ 查看信息</div>
+      </template>
+      <template v-else-if="contextMenu.target === 'verification-mode'">
+        <div class="ctx-item" @click="setVerificationMode('repro')">
+          {{ verificationMode === 'repro' ? '✅ ' : '' }}复现模式（默认，串较短）
+        </div>
+        <div class="ctx-item" @click="setVerificationMode('full')">
+          {{ verificationMode === 'full' ? '✅ ' : '' }}完整模式（全量静态数据）
+        </div>
+      </template>
+      <template v-else-if="contextMenu.target === 'feedback-mode'">
+        <div class="ctx-item" @click="setFeedbackMode('brief')">
+          {{ resultSettings.feedbackMode === 'brief' ? '✅ ' : '' }}简短模式（只含选中方案）
+        </div>
+        <div class="ctx-item" @click="setFeedbackMode('full')">
+          {{ resultSettings.feedbackMode === 'full' ? '✅ ' : '' }}完整模式（含 Box、礼装池、固定配置）
+        </div>
       </template>
       <template v-else>
         <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>

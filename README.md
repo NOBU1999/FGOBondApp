@@ -80,6 +80,12 @@ npm start
 python scripts/fetch_missing_avatars.py --region JP --db db/fgo_data.db
 ```
 
+## 反馈验证串
+
+计算完成后，可从结果区复制“验证串”用于向开发者反馈问题。该串包含本次计算参数、搜索所需数据快照和结果基线，使用 PPMd + Base64URL 编码，不加密。
+
+验证/复现工具仅开发者本地保留，不随公开仓库发布。验证串中可能包含个人 Box 数据，分享前请自行确认可以公开。
+
 ## 打包发布
 
 `release/`、`node_modules/`、数据库等运行产物不会进入源码仓库。

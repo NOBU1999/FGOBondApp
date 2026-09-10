@@ -1,6 +1,6 @@
 "use strict";
 
-const { ipcMain, BrowserWindow } = require("electron");
+const { ipcMain, BrowserWindow, clipboard } = require("electron");
 const database = require("./database");
 const { PythonProcess } = require("./python-process");
 const { getAppRoot, getDbPath } = require("./paths");
@@ -32,6 +32,8 @@ function registerIpcHandlers() {
         dbPath: getDbPath(),
         version: require("../package.json").version,
         platform: process.platform,
+        dataUpdatedAt: database.getMetaValue(db, "updated_at"),
+        dataRegion: database.getMetaValue(db, "data_region"),
         serverRegion: database.getServerRegion(db),
         cnUnavailableBondCeIds: database.getCnUnavailableBondCeIds(db),
         genericParticipatingCraftIds: database.getGenericBondParticipation(db),
@@ -40,6 +42,12 @@ function registerIpcHandlers() {
     } finally {
       db.close();
     }
+  });
+
+  // 剪贴板写入（复制验证串等）
+  ipcMain.handle("clipboard:write", (_e, text) => {
+    clipboard.writeText(String(text ?? ""));
+    return { ok: true };
   });
 
   // 服务器设置（日服/简中服）

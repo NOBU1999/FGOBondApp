@@ -63,6 +63,11 @@ scripts/privacy_clean.py
 *response_*.php
 *bilibiligame.net*
 FGO方案#*.json
+# 仅本机使用的验证串复现工具，不随公开仓库发布
+python-engine/reproduce_verification.py
+python-engine/verification_server.py
+python-engine/verification_ui.html
+python-engine/start_verification_server.bat
 
 # ---------- 临时/沙箱 ----------
 .pyinstaller-tmp/
