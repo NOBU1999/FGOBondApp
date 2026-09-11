@@ -2,7 +2,7 @@ name: Sync FGOBondApp to Gitee
 
 on:
   release:
-    types: [published]
+    types: []
   workflow_dispatch:
 
 jobs:
