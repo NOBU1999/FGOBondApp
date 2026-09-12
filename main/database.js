@@ -30,12 +30,23 @@ function open(dbPath) {
   const target = dbPath || getDbPath();
   if (BetterSqlite3) {
     const db = new BetterSqlite3(target);
-    db.pragma("journal_mode = WAL");
+    try {
+      db.pragma("journal_mode = WAL");
+    } catch (err) {
+      // 打不开（例如文件损坏）时必须释放句柄，否则文件会被锁住无法替换
+      try { db.close(); } catch (_) { /* ignore */ }
+      throw err;
+    }
     return db;
   }
   if (NodeSqlite) {
     const db = new NodeSqlite.DatabaseSync(target);
-    db.exec("PRAGMA journal_mode = WAL");
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+    } catch (err) {
+      try { db.close(); } catch (_) { /* ignore */ }
+      throw err;
+    }
     return db;
   }
   throw new Error("未找到可用的 SQLite 驱动：请安装 better-sqlite3 或使用新版 Node/Electron");
@@ -67,11 +78,18 @@ function ensureSchema(db) {
       trait_id INTEGER,
       PRIMARY KEY (servant_id, costume_id, trait)
     );
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS user_exclusions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL DEFAULT 1,
       target_type TEXT NOT NULL,
       target_id INTEGER NOT NULL,
-      UNIQUE(target_type, target_id)
+      UNIQUE(account_id, target_type, target_id)
     );
     CREATE TABLE IF NOT EXISTS custom_crafts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +105,8 @@ function ensureSchema(db) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS user_box (
-      servant_id INTEGER PRIMARY KEY,
+      account_id INTEGER NOT NULL DEFAULT 1,
+      servant_id INTEGER NOT NULL,
       stage TEXT DEFAULT 'fourth',
       is_max_bond INTEGER DEFAULT 0,
       bond_switch1 INTEGER DEFAULT 1,
@@ -95,7 +114,8 @@ function ensureSchema(db) {
       personal_bonus REAL DEFAULT 0,
       aura_bonus REAL DEFAULT 0,
       bond_rank INTEGER DEFAULT 0,
-      bond_max_rank INTEGER DEFAULT 0
+      bond_max_rank INTEGER DEFAULT 0,
+      PRIMARY KEY (account_id, servant_id)
     );
     CREATE TABLE IF NOT EXISTS user_teams (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +186,279 @@ function ensureSchema(db) {
   } catch (_) {
     // 列已存在
   }
+  ensureAccountSchema(db);
+}
+
+// ---------------------------------------------------------------------------
+// 多账号：一个账号 = 一套 Box + 一套排除列表
+// ---------------------------------------------------------------------------
+const DEFAULT_ACCOUNT_NAME = "默认账号";
+const USER_BOX_COLUMNS = [
+  "servant_id",
+  "stage",
+  "is_max_bond",
+  "bond_switch1",
+  "bond_switch2",
+  "personal_bonus",
+  "aura_bonus",
+  "bond_rank",
+  "bond_max_rank",
+];
+
+function tableColumns(db, table) {
+  try {
+    return db
+      .prepare("SELECT name FROM pragma_table_info(?)")
+      .all(table)
+      .map((r) => String(r.name));
+  } catch (_) {
+    return [];
+  }
+}
+
+function quoteIdent(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/**
+ * 建 accounts 表，并把旧版单账号数据迁移到账号 1。
+ * 幂等：已有 account_id 列时只做常量级检查。
+ */
+function ensureAccountSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // 先把默认账号建好，供旧数据挂靠（account_id=1）
+  db.prepare(
+    "INSERT INTO accounts (id, name) SELECT 1, ? WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE id = 1)"
+  ).run(DEFAULT_ACCOUNT_NAME);
+
+  migrateUserBoxAccounts(db);
+  migrateUserExclusionsAccounts(db);
+
+  // active_account_id 指向已删除账号时，回落到第一个账号
+  const active = Number(getMetaValue(db, "active_account_id"));
+  const hit = db.prepare("SELECT id FROM accounts WHERE id = ?").get(active || 0);
+  if (!hit) {
+    const first = db.prepare("SELECT id FROM accounts ORDER BY id LIMIT 1").get();
+    if (first) setMetaValue(db, "active_account_id", first.id);
+  }
+}
+
+function migrateUserBoxAccounts(db) {
+  const existing = tableColumns(db, "user_box");
+  if (!existing.length || existing.includes("account_id")) return;
+  const shared = USER_BOX_COLUMNS.filter((c) => existing.includes(c));
+  if (!shared.includes("servant_id")) return;
+  const cols = shared.map(quoteIdent).join(", ");
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE user_box_account_mig (
+        account_id INTEGER NOT NULL DEFAULT 1,
+        servant_id INTEGER NOT NULL,
+        stage TEXT DEFAULT 'fourth',
+        is_max_bond INTEGER DEFAULT 0,
+        bond_switch1 INTEGER DEFAULT 1,
+        bond_switch2 INTEGER DEFAULT 0,
+        personal_bonus REAL DEFAULT 0,
+        aura_bonus REAL DEFAULT 0,
+        bond_rank INTEGER DEFAULT 0,
+        bond_max_rank INTEGER DEFAULT 0,
+        PRIMARY KEY (account_id, servant_id)
+      );
+    `);
+    db.exec(
+      `INSERT INTO user_box_account_mig (account_id, ${cols}) SELECT 1, ${cols} FROM user_box`
+    );
+    db.exec("DROP TABLE user_box");
+    db.exec("ALTER TABLE user_box_account_mig RENAME TO user_box");
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function migrateUserExclusionsAccounts(db) {
+  const existing = tableColumns(db, "user_exclusions");
+  if (!existing.length || existing.includes("account_id")) return;
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE user_exclusions_account_mig (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL DEFAULT 1,
+        target_type TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        UNIQUE(account_id, target_type, target_id)
+      );
+    `);
+    db.exec(
+      `INSERT INTO user_exclusions_account_mig (id, account_id, target_type, target_id)
+       SELECT id, 1, target_type, target_id FROM user_exclusions`
+    );
+    db.exec("DROP TABLE user_exclusions");
+    db.exec("ALTER TABLE user_exclusions_account_mig RENAME TO user_exclusions");
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * 解析账号 id。
+ * - 读取（forWrite=false）：显式传入优先；非法/已删除则回落到当前激活账号。
+ * - 写入（forWrite=true）：显式传入但账号不存在时直接报错，
+ *   避免前端拿着过期 id 把数据写进别的账号。
+ */
+function resolveAccountId(db, accountId, options = {}) {
+  const wanted = Number(accountId);
+  if (Number.isFinite(wanted) && wanted > 0) {
+    const hit = db.prepare("SELECT id FROM accounts WHERE id = ?").get(wanted);
+    if (hit) return Number(hit.id);
+    if (options.forWrite) throw new Error("账号不存在或已被删除，请重新选择账号");
+  }
+  return getActiveAccountId(db);
+}
+
+function getActiveAccountId(db) {
+  const active = Number(getMetaValue(db, "active_account_id"));
+  const hit = db.prepare("SELECT id FROM accounts WHERE id = ?").get(active || 0);
+  if (hit) return Number(hit.id);
+  const first = db.prepare("SELECT id FROM accounts ORDER BY id LIMIT 1").get();
+  if (first) {
+    setMetaValue(db, "active_account_id", first.id);
+    return Number(first.id);
+  }
+  const info = run(db, "INSERT INTO accounts (name, note) VALUES (?, ?)", [
+    DEFAULT_ACCOUNT_NAME,
+    "",
+  ]);
+  setMetaValue(db, "active_account_id", info.lastInsertRowid);
+  return Number(info.lastInsertRowid);
+}
+
+function getActiveAccount(db) {
+  const id = getActiveAccountId(db);
+  const row = get(db, "SELECT id, name FROM accounts WHERE id = ?", [id]);
+  return row ? { id: Number(row.id), name: row.name } : { id, name: DEFAULT_ACCOUNT_NAME };
+}
+
+function listAccounts(db) {
+  const accounts = all(
+    db,
+    `SELECT a.id, a.name, a.note, a.created_at AS createdAt,
+            (SELECT COUNT(*) FROM user_box b WHERE b.account_id = a.id) AS servantCount,
+            (SELECT COUNT(*) FROM user_exclusions e WHERE e.account_id = a.id) AS exclusionCount
+     FROM accounts a
+     ORDER BY a.id`
+  ).map((r) => ({
+    id: Number(r.id),
+    name: r.name,
+    note: r.note || "",
+    createdAt: r.createdAt,
+    servantCount: Number(r.servantCount || 0),
+    exclusionCount: Number(r.exclusionCount || 0),
+  }));
+  const activeId = getActiveAccountId(db);
+  return { accounts, activeId };
+}
+
+function normalizeAccountName(name, fallback) {
+  const clean = String(name == null ? "" : name).trim().slice(0, 40);
+  return clean || fallback;
+}
+
+function copyAccountData(db, fromId, toId) {
+  const from = Number(fromId);
+  const to = Number(toId);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) return;
+  const cols = USER_BOX_COLUMNS.map(quoteIdent).join(", ");
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `INSERT OR REPLACE INTO user_box (account_id, ${cols})
+       SELECT ?, ${cols} FROM user_box WHERE account_id = ?`
+    ).run(to, from);
+    db.prepare(
+      `INSERT OR IGNORE INTO user_exclusions (account_id, target_type, target_id)
+       SELECT ?, target_type, target_id FROM user_exclusions WHERE account_id = ?`
+    ).run(to, from);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function createAccount(db, name, options = {}) {
+  const existing = all(db, "SELECT name FROM accounts").map((r) => r.name);
+  let candidate = normalizeAccountName(name, "");
+  if (!candidate) {
+    let n = existing.length + 1;
+    while (existing.includes(`账号 ${n}`)) n += 1;
+    candidate = `账号 ${n}`;
+  }
+  const info = run(db, "INSERT INTO accounts (name, note) VALUES (?, ?)", [candidate, ""]);
+  const id = Number(info.lastInsertRowid);
+  const copyFrom = Number(options && options.copyFromId);
+  if (Number.isFinite(copyFrom) && copyFrom > 0 && copyFrom !== id) {
+    copyAccountData(db, copyFrom, id);
+  }
+  return { id, ...listAccounts(db) };
+}
+
+function renameAccount(db, id, name) {
+  const target = Number(id);
+  const clean = normalizeAccountName(name, "");
+  if (!clean) throw new Error("账号名称不能为空");
+  const info = run(db, "UPDATE accounts SET name = ? WHERE id = ?", [clean, target]);
+  if (!info.changes) throw new Error("账号不存在");
+  return listAccounts(db);
+}
+
+function duplicateAccount(db, id, name) {
+  const source = Number(id);
+  const hit = get(db, "SELECT id, name FROM accounts WHERE id = ?", [source]);
+  if (!hit) throw new Error("账号不存在");
+  const fallback = `${hit.name} 副本`;
+  return createAccount(db, name || fallback, { copyFromId: source });
+}
+
+function deleteAccount(db, id) {
+  const target = Number(id);
+  const total = get(db, "SELECT COUNT(*) AS c FROM accounts");
+  if (!total || Number(total.c) <= 1) throw new Error("至少保留一个账号");
+  const hit = get(db, "SELECT id FROM accounts WHERE id = ?", [target]);
+  if (!hit) throw new Error("账号不存在");
+  db.exec("BEGIN");
+  try {
+    run(db, "DELETE FROM user_box WHERE account_id = ?", [target]);
+    run(db, "DELETE FROM user_exclusions WHERE account_id = ?", [target]);
+    run(db, "DELETE FROM accounts WHERE id = ?", [target]);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  const active = getActiveAccountId(db);
+  setMetaValue(db, "active_account_id", active);
+  return listAccounts(db);
+}
+
+function setActiveAccount(db, id) {
+  const target = Number(id);
+  const hit = get(db, "SELECT id FROM accounts WHERE id = ?", [target]);
+  if (!hit) throw new Error("账号不存在");
+  setMetaValue(db, "active_account_id", target);
+  return listAccounts(db);
 }
 
 function all(db, sql, params = []) {
@@ -300,19 +593,26 @@ function listCrafts(db, bondOnly = false) {
 // ---------------------------------------------------------------------------
 // 用户 Box / 队伍
 // ---------------------------------------------------------------------------
-function getUserBox(db) {
-  return all(db, "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus, bond_rank AS bondRank, bond_max_rank AS bondMaxRank FROM user_box");
+function getUserBox(db, accountId) {
+  const id = resolveAccountId(db, accountId);
+  return all(
+    db,
+    "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus, bond_rank AS bondRank, bond_max_rank AS bondMaxRank FROM user_box WHERE account_id = ?",
+    [id]
+  );
 }
 
-function saveUserBox(db, entries) {
+function saveUserBox(db, entries, accountId) {
+  const id = resolveAccountId(db, accountId, { forWrite: true });
   db.exec("BEGIN");
   try {
-    db.exec("DELETE FROM user_box");
+    db.prepare("DELETE FROM user_box WHERE account_id = ?").run(id);
     const stmt = db.prepare(
-      "INSERT INTO user_box (servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus, bond_rank, bond_max_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO user_box (account_id, servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus, bond_rank, bond_max_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     for (const e of entries || []) {
       stmt.run(
+        id,
         Number(e.servantId),
         e.stage || "fourth",
         e.isMaxBond ? 1 : 0,
@@ -325,18 +625,18 @@ function saveUserBox(db, entries) {
       );
     }
     db.exec("COMMIT");
-    return { ok: true, count: (entries || []).length };
+    return { ok: true, count: (entries || []).length, accountId: id };
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;
   }
 }
 
-function resetUserBox(db) {
-  return saveUserBox(db, []);
+function resetUserBox(db, accountId) {
+  return saveUserBox(db, [], accountId);
 }
 
-function importCaptureContent(db, content) {
+function importCaptureContent(db, content, accountId) {
   const raw = String(content || "").trim();
   let jsonText = raw;
   if (!raw.startsWith("{") && !raw.startsWith("[")) {
@@ -391,29 +691,39 @@ function importCaptureContent(db, content) {
       bondMaxRank: maxRank,
     });
   }
-  saveUserBox(db, entries);
+  saveUserBox(db, entries, accountId);
   return {
     servants: entries.length,
     maxBond: entries.filter((e) => e.isMaxBond).length,
   };
 }
 
-function getExclusions(db) {
-  const rows = all(db, "SELECT target_type AS targetType, target_id AS targetId FROM user_exclusions");
+function getExclusions(db, accountId) {
+  const id = resolveAccountId(db, accountId);
+  const rows = all(
+    db,
+    "SELECT target_type AS targetType, target_id AS targetId FROM user_exclusions WHERE account_id = ?",
+    [id]
+  );
   return {
     servants: rows.filter((r) => r.targetType === "servant").map((r) => Number(r.targetId)),
     crafts: rows.filter((r) => r.targetType === "craft").map((r) => Number(r.targetId)),
+    accountId: id,
   };
 }
 
-function saveExclusions(db, exclusions) {
+function saveExclusions(db, exclusions, accountId) {
+  const id = resolveAccountId(db, accountId, { forWrite: true });
   db.exec("BEGIN");
   try {
-    db.exec("DELETE FROM user_exclusions");
-    const stmt = db.prepare("INSERT INTO user_exclusions(target_type, target_id) VALUES (?, ?)");
-    for (const id of exclusions.servants || []) stmt.run("servant", Number(id));
-    for (const id of exclusions.crafts || []) stmt.run("craft", Number(id));
+    db.prepare("DELETE FROM user_exclusions WHERE account_id = ?").run(id);
+    const stmt = db.prepare(
+      "INSERT INTO user_exclusions(account_id, target_type, target_id) VALUES (?, ?, ?)"
+    );
+    for (const sid of exclusions.servants || []) stmt.run(id, "servant", Number(sid));
+    for (const cid of exclusions.crafts || []) stmt.run(id, "craft", Number(cid));
     db.exec("COMMIT");
+    return getExclusions(db, id);
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -632,6 +942,16 @@ module.exports = {
   saveUserBox,
   resetUserBox,
   importCaptureContent,
+  ensureAccountSchema,
+  listAccounts,
+  getActiveAccount,
+  getActiveAccountId,
+  createAccount,
+  renameAccount,
+  duplicateAccount,
+  deleteAccount,
+  setActiveAccount,
+  copyAccountData,
   saveUserTeam,
   listUserTeams,
   deleteUserTeam,

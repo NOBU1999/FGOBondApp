@@ -240,7 +240,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   left: 1px;
   font-size: 9px;
 }
-.mini-stage { bottom: 1px; right: 1px; font-size: 9px; line-height: 12px; padding: 0 2px; }
+.mini-stage {
+  position: absolute;
+  bottom: 1px;
+  right: 1px;
+  font-size: 9px;
+  line-height: 12px;
+  padding: 0 2px;
+}
 .cell[draggable="true"] { cursor: grab; }
 .cell[draggable="true"]:active { cursor: grabbing; }
 .cell.drag-over {
@@ -248,7 +255,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   outline-offset: -2px;
   box-shadow: 0 0 10px rgba(79, 124, 255, .55);
 }
-.mini-bond-badge { top: auto; left: auto; bottom: 1px; right: 1px; font-size: 9px; line-height: 12px; padding: 0 3px; }
+/* 结果头像角标 = 左下角小标签（灵基阶段数字固定在右下角，两者同时显示、互不遮挡）。
+   注意：.bond-badge 定义了 top/left，本规则必须比它更具体（.bond-badge.mini-bond-badge），
+   否则四边同时生效，元素会被拉伸成覆盖整个头像的灰块。 */
+.bond-badge.mini-bond-badge {
+  top: auto;
+  right: auto;
+  bottom: 1px;
+  left: 1px;
+  width: auto;
+  max-width: calc(100% - 18px); /* 给右下角的阶段数字留位置 */
+  font-size: 9px;
+  line-height: 12px;
+  padding: 0 3px;
+}
 
 /* Overlay */
 .overlay-mask, .modal-mask {
@@ -1183,3 +1203,62 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 0 5px;
   line-height: 16px;
 }
+
+/* ---------------------------------------------------------------------------
+   多账号：顶部切换器 + 账号管理弹窗
+   --------------------------------------------------------------------------- */
+.topbar-brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.account-switch { display: flex; align-items: center; gap: 8px; }
+.account-switch .server-label { font-size: 13px; color: var(--muted); margin-right: 2px; }
+.account-switch .account-select {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  max-width: 240px;
+}
+.account-switch button { margin-left: 0; padding: 6px 12px; font-size: 13px; }
+
+.account-modal { width: 560px; max-width: calc(100vw - 40px); }
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 44vh;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.account-row.active { border-color: var(--accent); background: rgba(122, 162, 247, 0.12); }
+.account-row-main { flex: 1 1 auto; min-width: 0; }
+.account-row-name { font-size: 14px; display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.account-row-main input {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.account-badge {
+  font-size: 11px;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.account-row-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.account-row-actions button { margin-left: 0; padding: 5px 10px; font-size: 12px; }
+.account-create { border-top: 1px solid var(--border); padding-top: 12px; }
+.account-create > button { width: 100%; }

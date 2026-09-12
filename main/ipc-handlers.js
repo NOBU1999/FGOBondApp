@@ -4,6 +4,7 @@ const { ipcMain, BrowserWindow, clipboard } = require("electron");
 const database = require("./database");
 const { PythonProcess } = require("./python-process");
 const { getAppRoot, getDbPath } = require("./paths");
+const { resetStaticData } = require("./db-reset");
 
 let activeEngine = null;
 
@@ -38,7 +39,69 @@ function registerIpcHandlers() {
         cnUnavailableBondCeIds: database.getCnUnavailableBondCeIds(db),
         genericParticipatingCraftIds: database.getGenericBondParticipation(db),
         nonParticipatingCraftIds: database.getNonParticipatingCraftIds(db),
+        activeAccount: database.getActiveAccount(db),
       };
+    } finally {
+      db.close();
+    }
+  });
+
+  // ---------------- 多账号（一个账号 = 一套 Box + 排除列表） ----------------
+  ipcMain.handle("account:list", () => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.listAccounts(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("account:create", (_e, payload = {}) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.createAccount(db, payload.name, { copyFromId: payload.copyFromId });
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("account:rename", (_e, payload = {}) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.renameAccount(db, payload.id, payload.name);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("account:duplicate", (_e, payload = {}) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.duplicateAccount(db, payload.id, payload.name);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("account:delete", (_e, id) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.deleteAccount(db, id);
+    } finally {
+      db.close();
+    }
+  });
+
+  ipcMain.handle("account:set-active", (_e, id) => {
+    const db = database.open();
+    try {
+      database.ensureSchema(db);
+      return database.setActiveAccount(db, id);
     } finally {
       db.close();
     }
@@ -133,20 +196,21 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle("exclusion:get", () => {
+  ipcMain.handle("exclusion:get", (_e, accountId) => {
     const db = database.open();
     try {
-      return database.getExclusions(db);
+      database.ensureSchema(db);
+      return database.getExclusions(db, accountId);
     } finally {
       db.close();
     }
   });
 
-  ipcMain.handle("exclusion:save", (_e, exclusions) => {
+  ipcMain.handle("exclusion:save", (_e, exclusions, accountId) => {
     const db = database.open();
     try {
-      database.saveExclusions(db, exclusions || {});
-      return database.getExclusions(db);
+      database.ensureSchema(db);
+      return database.saveExclusions(db, exclusions || {}, accountId);
     } finally {
       db.close();
     }
@@ -172,10 +236,11 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle("import:capture", (_e, content) => {
+  ipcMain.handle("import:capture", (_e, content, accountId) => {
     const db = database.open();
     try {
-      return database.importCaptureContent(db, content);
+      database.ensureSchema(db);
+      return database.importCaptureContent(db, content, accountId);
     } finally {
       db.close();
     }
@@ -200,31 +265,31 @@ function registerIpcHandlers() {
   });
 
   // ---------------- 用户 Box / 队伍 ----------------
-  ipcMain.handle("user:get-box", () => {
+  ipcMain.handle("user:get-box", (_e, accountId) => {
     const db = database.open();
     try {
       database.ensureSchema(db);
-      return database.getUserBox(db);
+      return database.getUserBox(db, accountId);
     } finally {
       db.close();
     }
   });
 
-  ipcMain.handle("user:save-box", (_e, entries) => {
+  ipcMain.handle("user:save-box", (_e, entries, accountId) => {
     const db = database.open();
     try {
       database.ensureSchema(db);
-      return database.saveUserBox(db, entries);
+      return database.saveUserBox(db, entries, accountId);
     } finally {
       db.close();
     }
   });
 
-  ipcMain.handle("user:reset-box", () => {
+  ipcMain.handle("user:reset-box", (_e, accountId) => {
     const db = database.open();
     try {
       database.ensureSchema(db);
-      return database.resetUserBox(db);
+      return database.resetUserBox(db, accountId);
     } finally {
       db.close();
     }
@@ -289,6 +354,18 @@ function registerIpcHandlers() {
       return result;
     } finally {
       if (activeEngine === engine) activeEngine = null;
+    }
+  });
+
+  // ---------------- 重置数据库（只重建静态数据，个人数据保留） ----------------
+  ipcMain.handle("db:reset-static", async (event) => {
+    stopActiveEngine();
+    try {
+      return await resetStaticData({
+        onProgress: (text) => sendProgress(event, text),
+      });
+    } finally {
+      stopActiveEngine();
     }
   });
 

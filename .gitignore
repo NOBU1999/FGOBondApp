@@ -36,6 +36,10 @@ db/*.db
 db/*.db-journal
 db/*.db-wal
 db/*.db-shm
+# 运行库自动备份 / 隔离目录
+db/backup/
+# privacy_clean 删除便携目录运行库前另存的备份（含真实个人数据，绝不提交）
+db/local-runtime-backup/
 *.sqlite
 *.sqlite3
 release/MyFGOApp/db/
@@ -59,6 +63,8 @@ out_engine.json
 CONTEXT_HANDOFF.md
 # 本机隐私清理脚本，含本地路径，不推送公开仓库
 scripts/privacy_clean.py
+# 本机开发回归脚本（迁移/种子库/模板编译），不推送公开仓库
+scripts/dev-tests/
 # 抓包/用户数据文件，禁止推送
 *response_*.php
 *bilibiligame.net*
@@ -71,7 +77,7 @@ python-engine/start_verification_server.bat
 
 # ---------- 临时/沙箱 ----------
 .pyinstaller-tmp/
-.smoke-user-data/
+.smoke-user-data*/
 .temp/
 tmp/
 *.tmp

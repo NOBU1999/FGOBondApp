@@ -25,13 +25,13 @@ contextBridge.exposeInMainWorld("fgo", {
   listBondCrafts: () => ipcRenderer.invoke("db:list-bond-crafts"),
   listAllCrafts: () => ipcRenderer.invoke("db:list-all-crafts"),
 
-  // 用户 Box / 队伍
-  getUserBox: () => ipcRenderer.invoke("user:get-box"),
-  saveUserBox: (entries) => ipcRenderer.invoke("user:save-box", toPlain(entries)),
-  resetUserBox: () => ipcRenderer.invoke("user:reset-box"),
-  importCapture: (content) => ipcRenderer.invoke("import:capture", toPlain(content)),
-  getExclusions: () => ipcRenderer.invoke("exclusion:get"),
-  saveExclusions: (exclusions) => ipcRenderer.invoke("exclusion:save", toPlain(exclusions)),
+  // 用户 Box / 队伍（个人数据按账号隔离）
+  getUserBox: (accountId) => ipcRenderer.invoke("user:get-box", toPlain(accountId)),
+  saveUserBox: (entries, accountId) => ipcRenderer.invoke("user:save-box", toPlain(entries), toPlain(accountId)),
+  resetUserBox: (accountId) => ipcRenderer.invoke("user:reset-box", toPlain(accountId)),
+  importCapture: (content, accountId) => ipcRenderer.invoke("import:capture", toPlain(content), toPlain(accountId)),
+  getExclusions: (accountId) => ipcRenderer.invoke("exclusion:get", toPlain(accountId)),
+  saveExclusions: (exclusions, accountId) => ipcRenderer.invoke("exclusion:save", toPlain(exclusions), toPlain(accountId)),
   listCustomCrafts: () => ipcRenderer.invoke("custom:list"),
   saveCustomCrafts: (items) => ipcRenderer.invoke("custom:save", toPlain(items)),
   listUserTeams: () => ipcRenderer.invoke("user:list-teams"),
@@ -39,9 +39,18 @@ contextBridge.exposeInMainWorld("fgo", {
   deleteUserTeam: (id) => ipcRenderer.invoke("user:delete-team", toPlain(id)),
   getEventBondBonuses: () => ipcRenderer.invoke("event:list"),
 
+  // 多账号（一个账号 = 一套 Box + 一套排除列表）
+  listAccounts: () => ipcRenderer.invoke("account:list"),
+  createAccount: (payload) => ipcRenderer.invoke("account:create", toPlain(payload || {})),
+  renameAccount: (payload) => ipcRenderer.invoke("account:rename", toPlain(payload || {})),
+  duplicateAccount: (payload) => ipcRenderer.invoke("account:duplicate", toPlain(payload || {})),
+  deleteAccount: (id) => ipcRenderer.invoke("account:delete", toPlain(id)),
+  setActiveAccount: (id) => ipcRenderer.invoke("account:set-active", toPlain(id)),
+
   // Python 引擎
   calculate: (payload) => ipcRenderer.invoke("engine:calculate", toPlain(payload)),
   updateData: (force = false) => ipcRenderer.invoke("engine:update", toPlain({ force })),
+  resetStaticData: () => ipcRenderer.invoke("db:reset-static"),
   cancelEngine: () => ipcRenderer.invoke("engine:cancel"),
   copyText: (text) => ipcRenderer.invoke("clipboard:write", toPlain(text)),
 

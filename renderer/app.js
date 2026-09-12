@@ -257,6 +257,16 @@ const App = {
       presetModalVisible: false,
       presetSaveVisible: false,
       presetName: "",
+      // 多账号（一个账号 = 一套 Box + 一套排除列表）
+      accounts: [],
+      activeAccountId: null,
+      accountBusy: false,
+      accountModalVisible: false,
+      accountError: "",
+      newAccountName: "",
+      newAccountCopyFromCurrent: false,
+      accountEditingId: null,
+      accountEditingName: "",
       calculating: false,
       progress: "",
       results: [],
@@ -292,6 +302,7 @@ const App = {
       resultInfo: { visible: false, mode: "", title: "", subtitle: "", rows: [] },
       updateModalVisible: false,
       updateRunning: false,
+      updateTitle: "更新数据",
       updateItems: [],
       updateResult: null,
       updateError: "",
@@ -524,7 +535,7 @@ const App = {
   },
   async created() {
     try {
-      const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions] = await Promise.all([
+      const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions, accountInfo] = await Promise.all([
         window.fgo.getAppInfo(),
         window.fgo.listServants(),
         window.fgo.listBondCrafts(),
@@ -534,8 +545,11 @@ const App = {
         window.fgo.listUserTeams(),
         window.fgo.getCostumeNames(),
         window.fgo.getExclusions(),
+        window.fgo.listAccounts(),
       ]);
       this.info = info;
+      this.accounts = (accountInfo && accountInfo.accounts) || [];
+      this.activeAccountId = (accountInfo && accountInfo.activeId) || null;
       this.serverRegion = (info && info.serverRegion) || "jp";
       this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
       this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || [];
@@ -550,26 +564,7 @@ const App = {
       this.presets = presets || [];
       this.otherCrafts = (allCrafts || []).filter((c) => c.craftType === "other");
 
-      const saved = {};
-      (userBox || []).forEach((e) => {
-        saved[e.servantId] = {
-          checked: true,
-          stage: e.stage || "fourth",
-          maxBond: !!e.isMaxBond,
-          switch1: e.bondSwitch1 !== 0,
-          switch2: !!e.bondSwitch2,
-          personalBonus: e.personalBonus || 0,
-          auraBonus: e.auraBonus || 0,
-          bondRank: e.bondRank || 0,
-          bondMaxRank: e.bondMaxRank || 0,
-        };
-      });
-      this.servants.forEach((s) => {
-        if (!saved[s.id]) {
-          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
-        }
-      });
-      this.box = saved;
+      this.applyBoxRows(userBox);
 
       try {
         const rawSettings = localStorage.getItem("fgoBondApp.resultSettings");
@@ -593,6 +588,7 @@ const App = {
         if (data && data.channel === "menu:settings") this.settingsVisible = true;
         if (data && data.channel === "menu:update-data") this.runUpdate(false);
         if (data && data.channel === "menu:update-data-force") this.runUpdate(true);
+        if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });
     } catch (e) {
       this.error = e.message || String(e);
@@ -1327,7 +1323,166 @@ const App = {
     },
 
     // ---------- Box ----------
+    // ---------- 多账号（一个账号 = 一套 Box + 一套排除列表） ----------
+    applyBoxRows(rows) {
+      const saved = {};
+      (rows || []).forEach((e) => {
+        saved[e.servantId] = {
+          checked: true,
+          stage: e.stage || "fourth",
+          maxBond: !!e.isMaxBond,
+          switch1: e.bondSwitch1 !== 0,
+          switch2: !!e.bondSwitch2,
+          personalBonus: e.personalBonus || 0,
+          auraBonus: e.auraBonus || 0,
+          bondRank: e.bondRank || 0,
+          bondMaxRank: e.bondMaxRank || 0,
+        };
+      });
+      this.servants.forEach((s) => {
+        if (!saved[s.id]) {
+          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
+        }
+      });
+      this.box = saved;
+    },
+    activeAccountName() {
+      const hit = this.accounts.find((a) => a.id === this.activeAccountId);
+      return hit ? hit.name : "账号";
+    },
+    applyAccountResult(res) {
+      if (!res) return;
+      if (Array.isArray(res.accounts)) this.accounts = res.accounts;
+      if (res.activeId) this.activeAccountId = Number(res.activeId);
+    },
+    openAccountManager() {
+      this.accountModalVisible = true;
+      this.accountError = "";
+      this.accountEditingId = null;
+      this.accountEditingName = "";
+      this.refreshAccounts();
+    },
+    async refreshAccounts() {
+      try {
+        this.applyAccountResult(await window.fgo.listAccounts());
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      }
+    },
+    /** 真正执行切换（无并发锁，供内部复用） */
+    async activateAccount(id) {
+      this.accountError = "";
+      const res = await window.fgo.setActiveAccount(id);
+      this.applyAccountResult(res);
+      await this.loadActiveAccountData();
+      // 结果属于上一个账号，清掉避免误读
+      this.results = [];
+      this.compareSelectedRanks = [];
+      this.simpleExcludedServants = [];
+      this.expandedResult = null;
+      this.lastSearchStats = null;
+      this.currentPage = 1;
+    },
+    async switchAccount(id) {
+      const target = Number(id);
+      if (!target || target === this.activeAccountId || this.accountBusy) return;
+      this.accountBusy = true;
+      try {
+        await this.activateAccount(target);
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      } finally {
+        this.accountBusy = false;
+      }
+    },
+    async loadActiveAccountData() {
+      const [userBox, exclusions] = await Promise.all([
+        window.fgo.getUserBox(this.activeAccountId),
+        window.fgo.getExclusions(this.activeAccountId),
+      ]);
+      this.applyBoxRows(userBox);
+      this.excludedServants = (exclusions && exclusions.servants) || [];
+      this.excludedCrafts = (exclusions && exclusions.crafts) || [];
+    },
+    async createAccount() {
+      if (this.accountBusy) return;
+      this.accountBusy = true;
+      this.accountError = "";
+      try {
+        const res = await window.fgo.createAccount({
+          name: this.newAccountName,
+          copyFromId: this.newAccountCopyFromCurrent ? this.activeAccountId : null,
+        });
+        this.newAccountName = "";
+        this.newAccountCopyFromCurrent = false;
+        this.applyAccountResult(res);
+        if (res && res.id) await this.activateAccount(res.id);
+        await this.refreshAccounts();
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      } finally {
+        this.accountBusy = false;
+      }
+    },
+    startRenameAccount(a) {
+      this.accountEditingId = a.id;
+      this.accountEditingName = a.name;
+      this.accountError = "";
+    },
+    cancelRenameAccount() {
+      this.accountEditingId = null;
+      this.accountEditingName = "";
+    },
+    async renameAccount(a) {
+      const name = String(this.accountEditingName || "").trim();
+      if (!name) {
+        this.accountError = "账号名称不能为空";
+        return;
+      }
+      try {
+        this.applyAccountResult(await window.fgo.renameAccount({ id: a.id, name }));
+        this.accountEditingId = null;
+        this.accountEditingName = "";
+        await this.refreshAccounts();
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      }
+    },
+    async duplicateAccount(a) {
+      if (this.accountBusy) return;
+      this.accountBusy = true;
+      this.accountError = "";
+      try {
+        this.applyAccountResult(await window.fgo.duplicateAccount({ id: a.id }));
+        await this.refreshAccounts();
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      } finally {
+        this.accountBusy = false;
+      }
+    },
+    async removeAccount(a) {
+      if (this.accounts.length <= 1) {
+        this.accountError = "至少保留一个账号";
+        return;
+      }
+      if (!confirm(`删除账号「${a.name}」及其 Box 与排除列表？此操作不可恢复。`)) return;
+      if (this.accountBusy) return;
+      this.accountBusy = true;
+      this.accountError = "";
+      try {
+        const wasActive = a.id === this.activeAccountId;
+        this.applyAccountResult(await window.fgo.deleteAccount(a.id));
+        if (wasActive) await this.loadActiveAccountData();
+        await this.refreshAccounts();
+      } catch (e) {
+        this.accountError = e.message || String(e);
+      } finally {
+        this.accountBusy = false;
+      }
+    },
     async persistBox() {
+      if (this.accountBusy) return;
       const entries = this.servants
         .filter((s) => this.box[s.id] && this.box[s.id].checked)
         .map((s) => ({
@@ -1341,7 +1496,8 @@ const App = {
           bondRank: Number(this.box[s.id].bondRank || 0),
           bondMaxRank: Number(this.box[s.id].bondMaxRank || 0),
         }));
-      try { await window.fgo.saveUserBox(plainClone(entries)); } catch (_) { /* ignore */ }
+      try { await window.fgo.saveUserBox(plainClone(entries), this.activeAccountId); } catch (_) { /* ignore */ }
+      this.refreshAccounts();
     },
     toggleOwned(id) {
       const b = this.box[id];
@@ -1538,27 +1694,8 @@ const App = {
       this.persistBox();
     },
     async reloadBoxFromServer() {
-      const userBox = await window.fgo.getUserBox();
-      const saved = {};
-      (userBox || []).forEach((e) => {
-        saved[e.servantId] = {
-          checked: true,
-          stage: e.stage || "fourth",
-          maxBond: !!e.isMaxBond,
-          switch1: e.bondSwitch1 !== 0,
-          switch2: !!e.bondSwitch2,
-          personalBonus: e.personalBonus || 0,
-          auraBonus: e.auraBonus || 0,
-          bondRank: e.bondRank || 0,
-          bondMaxRank: e.bondMaxRank || 0,
-        };
-      });
-      this.servants.forEach((s) => {
-        if (!saved[s.id]) {
-          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
-        }
-      });
-      this.box = saved;
+      const userBox = await window.fgo.getUserBox(this.activeAccountId);
+      this.applyBoxRows(userBox);
     },
     async reloadAllData() {
       const [info, servants, bondCrafts, allCrafts, customCrafts, costumeNames, exclusions, eventBonuses] = await Promise.all([
@@ -1568,7 +1705,7 @@ const App = {
         window.fgo.listAllCrafts(),
         window.fgo.listCustomCrafts(),
         window.fgo.getCostumeNames(),
-        window.fgo.getExclusions(),
+        window.fgo.getExclusions(this.activeAccountId),
         window.fgo.getEventBondBonuses(),
       ]);
       this.info = info || this.info;
@@ -1586,6 +1723,7 @@ const App = {
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
       this.eventBondBonuses = eventBonuses || [];
       await this.reloadBoxFromServer();
+      this.refreshAccounts();
     },
     isExcludedServant(id) {
       return this.excludedServantSet.has(Number(id));
@@ -1594,10 +1732,12 @@ const App = {
       return this.excludedCraftSet.has(Number(id));
     },
     async persistExclusions() {
+      if (this.accountBusy) return;
       await window.fgo.saveExclusions(plainClone({
         servants: this.excludedServants,
         crafts: this.excludedCrafts,
-      }));
+      }), this.activeAccountId);
+      this.refreshAccounts();
     },
     async toggleExcludeServant(id) {
       const nid = Number(id);
@@ -1647,9 +1787,10 @@ const App = {
       if (!file) return;
       try {
         const text = await file.text();
-        const result = await window.fgo.importCapture(text);
-        alert(`导入成功：持有从者 ${result.servants} 位，满绊 ${result.maxBond} 位`);
+        const result = await window.fgo.importCapture(text, this.activeAccountId);
+        alert(`已导入到账号「${this.activeAccountName()}」：持有从者 ${result.servants} 位，满绊 ${result.maxBond} 位`);
         await this.reloadBoxFromServer();
+        this.refreshAccounts();
       } catch (err) {
         alert("导入失败：" + (err && err.message ? err.message : String(err)));
       }
@@ -2668,6 +2809,7 @@ const App = {
       }
     },
     openUpdateModal() {
+      this.updateTitle = "更新数据";
       this.updateModalVisible = true;
       if (!this.updateRunning && !this.updateItems.length) {
         this.updateItems = this.initUpdateItems();
@@ -2678,6 +2820,7 @@ const App = {
     },
     async runUpdate(force) {
       this.updateModalVisible = true;
+      this.updateTitle = "更新数据";
       this.updateRunning = true;
       this.updateResult = null;
       this.updateError = "";
@@ -2706,6 +2849,46 @@ const App = {
         this.updateError = e.message || String(e);
         const active = this.updateItems.find((i) => i.status === "running");
         if (active) this.setUpdateItem(active.key, "error");
+      }
+    },
+    /**
+     * 重置数据库：清空静态数据（从者/礼装/特性/灵衣）后强制重建一次。
+     * 个人数据（账号/Box/排除/预设/自定义礼装）保留；失败会自动回滚。
+     */
+    async runDatabaseReset() {
+      if (this.calculating || this.updateRunning) return;
+      this.updateModalVisible = true;
+      this.updateTitle = "重置数据库";
+      this.updateRunning = true;
+      this.updateResult = null;
+      this.updateError = "";
+      this.updateItems = [
+        { key: "reset_clear", label: "清空本地静态数据", status: "running", detail: "正在清空从者/礼装/特性/灵衣表...", percent: null },
+        ...this.initUpdateItems(),
+      ];
+      try {
+        this.setUpdateItem("reset_clear", "done", "已清空（个人数据保留）");
+        const r = await window.fgo.resetStaticData();
+        const active = this.updateItems.find((i) => i.status === "running");
+        if (active) this.setUpdateItem(active.key, "done");
+        this.setUpdateItem("done", "done", "重建完成");
+        this.updateResult = r;
+        // 静态数据变了，旧结果作废
+        this.results = [];
+        this.compareSelectedRanks = [];
+        this.simpleExcludedServants = [];
+        this.expandedResult = null;
+        try {
+          await this.reloadAllData();
+        } catch (reloadErr) {
+          this.updateError = "刷新界面数据失败: " + (reloadErr.message || String(reloadErr));
+        }
+      } catch (e) {
+        this.updateError = e.message || String(e);
+        const active = this.updateItems.find((i) => i.status === "running");
+        if (active) this.setUpdateItem(active.key, "error");
+      } finally {
+        this.updateRunning = false;
       }
     },
     exportJson(result) {
@@ -2831,7 +3014,21 @@ const App = {
   <div class="board-app" @click="closeContextMenu">
     <!-- 顶部工具栏 -->
     <div class="topbar">
-      <h1>FGO牵绊推荐器</h1>
+      <div class="topbar-brand">
+        <h1>FGO牵绊推荐器</h1>
+        <div class="account-switch" @click.stop>
+          <span class="server-label">账号</span>
+          <select
+            class="account-select"
+            :value="activeAccountId"
+            :disabled="accountBusy || calculating"
+            @change="switchAccount($event.target.value)"
+          >
+            <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}（{{ a.servantCount }}）</option>
+          </select>
+          <button class="secondary" @click="openAccountManager">＋ 新建 / 管理</button>
+        </div>
+      </div>
       <div>
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
@@ -3072,13 +3269,13 @@ const App = {
               <div class="mini-cell mini-servant" :class="{ support: m.isSupport, fixed: m.isFixed, crown: m.isCrown }" @contextmenu="openResultContext($event, r, m, 'servant')">
                 <img v-if="!avatarMissingSet.has(String(m.servantId))" :src="avatarPath(m.servantId)" class="mini-avatar" alt="" @error="markAvatarBroken(m.servantId)" />
                 <div v-else class="mini-avatar fallback">{{ (m.name || '?').charAt(0) }}</div>
+                <div class="mini-stage">{{ stageNumber(m.stage) }}</div>
                 <div
                   v-if="resultSettings.showResultBondBadge && resultBondInfo(m)"
-                  class="mini-stage bond-badge mini-bond-badge"
+                  class="bond-badge mini-bond-badge"
                   :class="resultBondInfo(m).kind"
                   :title="'牵绊 ' + resultBondInfo(m).text + '（阶段：' + resultMemberStage(m) + '）'"
                 >{{ resultBondInfo(m).text }}</div>
-                <div v-else class="mini-stage">{{ stageNumber(m.stage) }}</div>
                 <div v-if="m.isSupport" class="mini-support">助战</div>
                 <div v-if="m.isFixed" class="mini-fixed">🔒</div>
                 <div v-if="m.isCrown" class="mini-crown-star" title="冠位从者位">✴</div>
@@ -3565,13 +3762,16 @@ const App = {
     <div v-if="updateModalVisible" class="modal-mask" @click.self="closeUpdateModal">
       <div class="modal-panel box-modal update-modal">
         <div class="overlay-head">
-          <h2>更新数据</h2>
+          <h2>{{ updateTitle }}</h2>
           <button class="secondary" :disabled="updateRunning" @click="closeUpdateModal">✕</button>
         </div>
-        <div class="filters">
+        <div v-if="updateTitle === '更新数据'" class="filters">
           <button class="secondary" :disabled="updateRunning" @click="runUpdate(false)">检查并更新</button>
           <button class="secondary" :disabled="updateRunning" @click="runUpdate(true)">强制更新</button>
           <span class="text-muted" style="align-self:center">{{ updateRunning ? '正在更新...' : '空闲' }}</span>
+        </div>
+        <div v-if="updateTitle !== '更新数据'" class="text-muted" style="margin-bottom:10px">
+          只重建静态数据（从者/礼装/特性/灵衣），账号 / Box / 排除 / 预设 / 自定义礼装都会保留；失败会自动回滚。
         </div>
         <div v-if="updateError" class="panel error" style="margin-bottom:10px">{{ updateError }}</div>
         <div class="update-items">
@@ -3689,6 +3889,68 @@ const App = {
             <div class="info-label">{{ row.label }}</div>
             <div class="info-value">{{ row.value }}</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 账号管理（多账号：每个账号独立 Box + 排除列表） -->
+    <div v-if="accountModalVisible" class="modal-mask" @click.self="accountModalVisible = false">
+      <div class="modal-panel small account-modal">
+        <div class="overlay-head">
+          <h2>账号管理</h2>
+          <button class="secondary" @click="accountModalVisible = false">✕</button>
+        </div>
+        <div class="text-muted" style="margin:2px 0 10px">
+          一个账号 = 一套「用于计算的 Box + 排除列表」。切换账号后结果需要重新计算；
+          固定队伍预设与自定义礼装为所有账号共享。
+        </div>
+
+        <div v-if="accountError" class="panel error" style="margin-bottom:8px">{{ accountError }}</div>
+
+        <div class="account-list">
+          <div
+            v-for="a in accounts"
+            :key="a.id"
+            class="account-row"
+            :class="{ active: a.id === activeAccountId }"
+          >
+            <div class="account-row-main">
+              <template v-if="accountEditingId === a.id">
+                <input v-model="accountEditingName" @keyup.enter="renameAccount(a)" @keyup.esc="cancelRenameAccount" />
+              </template>
+              <template v-else>
+                <div class="account-row-name">
+                  {{ a.name }}
+                  <span v-if="a.id === activeAccountId" class="account-badge">当前</span>
+                </div>
+              </template>
+              <div class="text-muted">{{ a.servantCount }} 名从者 · 排除 {{ a.exclusionCount }} 项</div>
+            </div>
+            <div class="account-row-actions">
+              <template v-if="accountEditingId === a.id">
+                <button class="secondary" @click="renameAccount(a)">保存</button>
+                <button class="secondary" @click="cancelRenameAccount">取消</button>
+              </template>
+              <template v-else>
+                <button v-if="a.id !== activeAccountId" class="secondary" @click="switchAccount(a.id)">切换</button>
+                <button class="secondary" @click="startRenameAccount(a)">重命名</button>
+              </template>
+              <button class="secondary" @click="duplicateAccount(a)" title="复制该账号的 Box 与排除列表">复制</button>
+              <button class="secondary" :disabled="accounts.length <= 1" @click="removeAccount(a)">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="account-create">
+          <div class="field">
+            <label>新建账号</label>
+            <input v-model="newAccountName" placeholder="账号名称（留空自动命名）" @keyup.enter="createAccount" />
+          </div>
+          <label class="settings-row">
+            <input type="checkbox" v-model="newAccountCopyFromCurrent" />
+            <span>复制当前账号「{{ activeAccountName() }}」的 Box 与排除列表</span>
+          </label>
+          <button :disabled="accountBusy" @click="createAccount">＋ 新建账号</button>
         </div>
       </div>
     </div>
