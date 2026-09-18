@@ -9,8 +9,8 @@ android {
         applicationId "com.nobu1999.fgobond"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode rootProject.ext.appVersionCode
+        versionName rootProject.ext.appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Chaquopy 要求显式声明 ABI。只保留 arm64-v8a：现代手机全覆盖，APK 最小
         // （将来若要支持 32 位老机或模拟器，这里加 "armeabi-v7a" / "x86_64"）
@@ -23,8 +23,28 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // 正式签名：从 android/keystore.properties 读取（该文件与 .jks 都不进版本库）
+    // 缺文件时 debug 照常可构建；release 会产出未签名包并给出提示（见 ANDROID-BUILD.md 第 4 节）
+    def keystorePropsFile = rootProject.file("keystore.properties")
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            release {
+                def props = new Properties()
+                keystorePropsFile.withInputStream { props.load(it) }
+                storeFile rootProject.file(props["storeFile"])
+                storePassword props["storePassword"]
+                keyAlias props["keyAlias"]
+                keyPassword props["keyPassword"]
+            }
+        }
+    }
     buildTypes {
         release {
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.lifecycle("WARNING: android/keystore.properties 不存在 → release 包未签名，只能自测、不要分发")
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

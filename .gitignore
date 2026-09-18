@@ -101,3 +101,6 @@ tests/.tmp/
 ANDROID-BUILD.md
 *.jks
 *.keystore
+
+# 安卓正式签名配置（含密码，绝不提交）
+android/keystore.properties

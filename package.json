@@ -17,7 +17,9 @@
     "android:release": "npm run android:sync && cd android && gradlew assembleRelease",
     "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
     "dist": "npm run build:engine && electron-builder --win dir",
-    "android:bundle": "node scripts/android/build-web-bundle.mjs"
+    "android:bundle": "node scripts/android/build-web-bundle.mjs",
+    "build:all": "node scripts/build_all.mjs",
+    "android:keystore": "node scripts/android/create_keystore.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
