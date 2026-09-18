@@ -42,7 +42,11 @@ def calculate_from_stdin(db_path: Optional[str] = None) -> Dict[str, Any]:
     return calculate(data, db_path=db_path)
 
 
-def calculate(data: Dict[str, Any], db_path: Optional[str] = None) -> Dict[str, Any]:
+def calculate(
+    data: Dict[str, Any],
+    db_path: Optional[str] = None,
+    should_cancel: Optional[Any] = None,
+) -> Dict[str, Any]:
     req = parse_request(data)
     _progress("正在加载本地数据...")
     ctx = calculator.load_context(db_path, region=req.server_region)
@@ -55,7 +59,7 @@ def calculate(data: Dict[str, Any], db_path: Optional[str] = None) -> Dict[str, 
         raise ValueError("指定从者最大化策略需要提供 targetServantId")
 
     _progress("正在准备队伍布局...")
-    result = search.search_top_teams(ctx, req, progress=_progress)
+    result = search.search_top_teams(ctx, req, progress=_progress, should_cancel=should_cancel)
     if not result.get("top20"):
         raise ValueError("当前配置下无法组成任何队伍，请提高Cost上限或调整Box/固定配置")
 

@@ -1659,18 +1659,41 @@ def _expand_reduced_for_trait_synergy(
     return list(additions) + [sid for sid in reduced if sid not in additions]
 
 
+class SearchCancelled(Exception):
+    """协作式取消：宿主通过 should_cancel 回调请求中止本次搜索。"""
+
+
 def search_top_teams(
     ctx: DataContext,
     req: CalculationRequest,
     progress: Optional[Any] = None,
+    should_cancel: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """执行搜索并返回 Top N。"""
+    """执行搜索并返回 Top N。
+
+    should_cancel：可选回调（返回 True 表示宿主请求取消）。
+    桌面宿主靠"杀子进程"取消；安卓（Chaquopy，进程内）必须用这个协作式取消 ——
+    检查挂在 report() 与精算循环上，粒度约为每 100 个候选一次。
+    """
     start = time.time()
     box = _box_map(req)
     if not req.box:
         raise ValueError("请至少勾选一位从者")
 
+    def cancel_requested() -> bool:
+        if should_cancel is None:
+            return False
+        try:
+            return bool(should_cancel())
+        except Exception:
+            return False
+
+    def check_cancel() -> None:
+        if cancel_requested():
+            raise SearchCancelled("已取消")
+
     def report(msg: str) -> None:
+        check_cancel()
         if progress:
             progress(msg)
         else:
@@ -2222,6 +2245,7 @@ def search_top_teams(
     refine_deadline = start + timeout_seconds
     refine_processed = 0
     for entry in refine_entries:
+        check_cancel()
         if phase_limits is not None:
             if refine_processed >= int(phase_limits.get("refineProcessed", 0)):
                 break

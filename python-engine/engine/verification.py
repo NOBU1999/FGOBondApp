@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover - 缺依赖时旧格式仍可解密
 _PREFIX_V1 = "FGOBONDV1."
 _PREFIX_V2 = "FGOBONDV2."
 _PREFIX_V3 = "FGOBONDV3."
+_PREFIX_V3_ZLIB = "FGOBONDV3Z."  # v3 的 zlib 变体（安卓无 pyppmd 时生成；桌面解码器同样支持）
 _PREFIX = _PREFIX_V1  # 兼容旧代码引用
 _FORMAT_VERSION = 1
 _APP_SECRET = "FGOBondApp-local-verification-v1"
@@ -321,7 +322,12 @@ def build_payload(
 
 
 def encrypt_payload(payload: Dict[str, Any]) -> str:
-    """把 payload 编码为验证串（函数名保留兼容；v3 起不再加密）。"""
+    """把 payload 编码为验证串（函数名保留兼容；v3 起不再加密）。
+
+    压缩方式两种，靠前缀自描述：
+      FGOBONDV3.  —— PPMd（桌面版，体积更小）
+      FGOBONDV3Z. —— zlib（安卓版没有 pyppmd 时的回退；桌面也能解码，因为解码器两种都认）
+    """
     raw = json.dumps(
         payload,
         ensure_ascii=False,
@@ -329,7 +335,9 @@ def encrypt_payload(payload: Dict[str, Any]) -> str:
         sort_keys=True,
     ).encode("utf-8")
     if pyppmd is None:
-        raise RuntimeError("缺少 pyppmd 依赖，无法生成验证串")
+        # 无 pyppmd（例如安卓 Chaquopy 环境）→ 用 zlib，并在前缀上标明，解码端按前缀选解压器
+        compressed = zlib.compress(raw, 9)
+        return _PREFIX_V3_ZLIB + _b64url_encode(compressed)
     compressed = pyppmd.compress(raw, max_order=_PPMD_ORDER, mem_size=_PPMD_MEM)
     return _PREFIX_V3 + _b64url_encode(compressed)
 
@@ -365,7 +373,10 @@ def make_verification_tokens(
 
 def decrypt_token(token: str) -> Dict[str, Any]:
     token = (token or "").strip()
-    if token.startswith(_PREFIX_V3):
+    if token.startswith(_PREFIX_V3_ZLIB):
+        # v3 的 zlib 变体（安卓无 pyppmd 时生成）—— 任何平台都能解
+        raw = zlib.decompress(_b64url_decode(token[len(_PREFIX_V3_ZLIB):]))
+    elif token.startswith(_PREFIX_V3):
         if pyppmd is None:
             raise ValueError("缺少 pyppmd 依赖，无法解码验证串")
         raw = pyppmd.decompress(
@@ -394,7 +405,7 @@ def decrypt_token(token: str) -> Dict[str, Any]:
             raise ValueError("验证串解密/校验失败，请确认复制完整") from exc
         raw = zlib.decompress(compressed)
     else:
-        raise ValueError("验证串格式不正确：缺少 FGOBONDV1./V2./V3. 前缀")
+        raise ValueError("验证串格式不正确：缺少 FGOBONDV1./V2./V3./V3Z. 前缀")
 
     payload = json.loads(raw)
     if int(payload.get("formatVersion") or 0) != _FORMAT_VERSION:

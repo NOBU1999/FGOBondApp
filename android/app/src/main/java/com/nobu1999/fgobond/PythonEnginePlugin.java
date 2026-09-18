@@ -98,10 +98,18 @@ public class PythonEnginePlugin extends Plugin {
         }, "fgo-engine").start();
     }
 
-    /** 取消：无法打断已在跑的 Python 调用，这里让界面立刻停等（结果被丢弃） */
+    /** 取消：通知 Python 侧协作式取消（引擎在搜索循环里读标志尽快返回），界面立刻停等 */
     @PluginMethod
     public void cancel(PluginCall call) {
         cancelled = true;
+        new Thread(() -> {
+            try {
+                ensurePythonStarted();
+                Python.getInstance().getModule("fgo_engine_bridge").callAttr("set_cancel", true);
+            } catch (Throwable ignored) {
+                // 取消失败不阻塞界面停止等待
+            }
+        }, "fgo-engine-cancel").start();
         JSObject ret = new JSObject();
         ret.put("ok", true);
         call.resolve(ret);
