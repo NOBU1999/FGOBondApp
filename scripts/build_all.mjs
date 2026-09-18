@@ -26,7 +26,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -155,7 +155,16 @@ function buildWindows() {
   const electronBuilder = path.join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
   run(electronBuilder, ["--win", "dir"]);
 
+  // electron-builder 的 dir 目标输出到 release/win-unpacked，
+  // 而既有流程（make_release_meta / privacy_clean / fetch_missing_avatars / 更新器）都约定
+  // 应用目录是 release/MyFGOApp → 这里改名到位。不这么做会打到上一次的旧目录里（实测踩过：
+  // 会产出"标签新版本、内容却是旧版本"的错包）。
+  const unpackedDir = path.join(RELEASE_DIR, "win-unpacked");
   const appDir = path.join(RELEASE_DIR, "MyFGOApp");
+  if (!existsSync(unpackedDir)) fatal("electron-builder 没有产出 release/win-unpacked");
+  rmSync(appDir, { recursive: true, force: true });
+  renameSync(unpackedDir, appDir);
+  log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
   if (!existsSync(appDir)) fatal("没有产出 release/MyFGOApp");
 
   const metaArgs = ["scripts/make_release_meta.py", "--version", VERSION];
