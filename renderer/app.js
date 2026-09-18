@@ -4148,4 +4148,64 @@ App.components = { ProgressBar };
 App.computed.stageOptions = () => STAGES;
 App.computed.classOptions = () => CLASSES;
 
-createApp(App).mount("#app");
+/**
+ * 触屏替代方案：手机上（MuMu 模拟器 / 真机 / 未来安卓版）没有鼠标悬停，
+ * 桌面端"指针停留 600ms 显示从者名字"的提示就看不到 → 这里补一个长按版本。
+ *
+ * 做法：长按头像 450ms 显示同一个 .hover-tip 提示（2.6 秒后自动消失）。
+ * 从者名字从头像路径里的 id 反查 servantMap，不需要改任何界面结构。
+ * 桌面端行为完全不变（只监听 touch 事件）。
+ */
+function setupTouchHover(vm) {
+  let armTimer = null;
+  let hideTimer = null;
+
+  const findAvatar = (e) => {
+    const el = e.target;
+    if (!el || typeof el.closest !== "function") return null;
+    return el.closest("img.box-avatar, img.cell-avatar, img.mini-avatar, .box-avatar.fallback, .cell-avatar.fallback");
+  };
+
+  const nameOf = (el) => {
+    if (!el) return "";
+    const src = typeof el.getAttribute === "function" ? el.getAttribute("src") : null;
+    if (!src) return "";
+    const m = /(\d{4,})\.(?:png|webp|jpg|jpeg)/i.exec(src);
+    if (!m) return "";
+    const info = vm.servantMap && vm.servantMap[m[1]];
+    return (info && info.name) || "";
+  };
+
+  document.addEventListener(
+    "touchstart",
+    (e) => {
+      const touch = e.touches && e.touches[0];
+      if (!touch) return;
+      clearTimeout(armTimer);
+      clearTimeout(hideTimer);
+      const name = nameOf(findAvatar(e));
+      if (!name) {
+        vm.hover.visible = false;
+        return;
+      }
+      armTimer = setTimeout(() => {
+        vm.hover.visible = true;
+        vm.hover.x = touch.clientX + 14;
+        vm.hover.y = touch.clientY + 14;
+        vm.hover.text = name;
+        hideTimer = setTimeout(() => {
+          vm.hover.visible = false;
+        }, 2600);
+      }, 450);
+    },
+    { passive: true }
+  );
+
+  const cancel = () => clearTimeout(armTimer);
+  document.addEventListener("touchend", cancel, { passive: true });
+  document.addEventListener("touchmove", cancel, { passive: true });
+  document.addEventListener("touchcancel", cancel, { passive: true });
+}
+
+const vm = createApp(App).mount("#app");
+setupTouchHover(vm);
