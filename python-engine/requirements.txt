@@ -1,9 +1,11 @@
-# Python 引擎依赖
-# 注意：numpy 不锁上限，保留后续升级/重新安装 numpy 后重新构建 engine.exe 的余地。
-numpy>=1.26
-scipy>=1.11
-# flask 仅调试用（可选）
-flask>=3.0
+# Python 引擎依赖（发布包只需要这些）
+#
+# 2026-09-19 瘦身：删掉 numpy>=1.26 / scipy>=1.11 / flask>=3.0
+#   原因：引擎 Python 代码 0 处使用它们（已全仓检索确认）。
+#   numpy 曾被 PyInstaller 打进 engine.exe，让体积从 17MB 涨到 32MB，
+#   等于每个下载 Windows 版的玩家多下 13~15MB。scipy / flask 实际从未安装过（僵尸依赖）。
+#   要做数值实验/调参，请单独放开发依赖（不进发布包）。
+#   若将来引擎真要向量化计算，先评估两端代价：安卓 Chaquopy 体积+ABI、桌面每个玩家 +15MB。
 
 # 打包工具（开发机已安装，这里保留声明以便新环境复现）
 pyinstaller>=6.0

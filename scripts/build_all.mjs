@@ -149,11 +149,18 @@ function buildWindows() {
   ]);
   const exeTime = existsSync(engineExe) ? statSync(engineExe).mtimeMs : 0;
   const stale = !existsSync(engineExe) || engineSrcNewest > exeTime;
+  const exeTimeBefore = existsSync(engineExe) ? statSync(engineExe).mtimeMs : 0;
   if (FORCE_ENGINE || stale) {
     log(stale && existsSync(engineExe) ? "引擎源码比 engine.exe 新 → 自动重建引擎" : "重建引擎（PyInstaller）");
     // 引擎重建要 pip 装依赖：默认给国内镜像，避免卡在默认源（实测曾被中断反复重试十几分钟）
     const pipEnv = { ...process.env, PIP_INDEX_URL: process.env.PIP_INDEX_URL || "https://pypi.tuna.tsinghua.edu.cn/simple" };
     run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:engine"], { env: pipEnv });
+    // 防呆：脚本静默失败时（例如 .ps1 编码问题把命令吃进注释、或 PyInstaller 报错被吞）
+    // 会出现"说重建了、其实还是旧 exe"，那就会把旧引擎打进包 → 这里必须挡住。
+    if (!existsSync(engineExe) || statSync(engineExe).mtimeMs <= exeTimeBefore) {
+      fatal("engine.exe 没有被更新 → 引擎构建静默失败了，别继续打包");
+    }
+    log(`engine.exe 已更新（${humanSize(statSync(engineExe).size)}）`);
   } else {
     log("engine.exe 已是最新（跳过 PyInstaller；要强制重建加 --force-engine）");
   }
@@ -199,6 +206,12 @@ function buildWindows() {
     run(process.platform === "win32" ? "python" : "python3", ["scripts/privacy_clean.py", "--check"]);
   } else {
     log("（本地没有 privacy_clean.py，跳过隐私检查）");
+  }
+
+  // 打包前最后一道卫生：清掉种子库的 SQLite 旁路文件。
+  // 只读打开 WAL 模式的库也会生成 -wal/-shm，之前就被带进过发布包（自检会拦，但别让它有机会）。
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    rmSync(path.join(appDir, "db", `fgo_data.seed.db${suffix}`), { force: true });
   }
 
   if (!existsSync(SEVEN_ZIP)) fatal("找不到 7-Zip：" + SEVEN_ZIP);

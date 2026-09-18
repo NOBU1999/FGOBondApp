@@ -1,8 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包脚本：python-engine/engine.exe
 
-构建前若已安装 NumPy，本 spec 会自动收集 NumPy 并打入 exe；
-若未安装，则构建不含 NumPy 的精简版。后续升级 NumPy 后重新执行本脚本即可。
+只收集引擎真正用到的依赖（cryptography / pyppmd）。
+2026-09-19 瘦身：原来这里有一段「若装了 numpy 就 collect_all 打进 exe」的逻辑，
+但引擎代码 0 处使用 numpy，白白让 engine.exe 从 17MB 涨到 32MB → 已删除。
+哪天真要向量化计算，先评估安卓端（Chaquopy）体积/ABI 代价，再决定是否加回来。
 """
 
 from PyInstaller.utils.hooks import collect_all
@@ -10,16 +12,6 @@ from PyInstaller.utils.hooks import collect_all
 datas = []
 binaries = []
 hiddenimports = []
-
-# 可选 NumPy：保留“升级安装 NumPy 后再打包”的能力
-try:
-    import numpy
-    numpy_datas, numpy_binaries, numpy_hidden = collect_all("numpy")
-    datas += numpy_datas
-    binaries += numpy_binaries
-    hiddenimports += numpy_hidden
-except ImportError:
-    pass
 
 # 验证串加密：cryptography 依赖（Fernet/AES）
 try:
