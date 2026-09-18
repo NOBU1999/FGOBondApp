@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FGO牵绊推荐器</string>
+    <string name="title_activity_main">FGO牵绊推荐器</string>
+    <string name="package_name">com.nobu1999.fgobond</string>
+    <string name="custom_url_scheme">com.nobu1999.fgobond</string>
+</resources>
