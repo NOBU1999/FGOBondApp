@@ -147,7 +147,9 @@ function buildWindows() {
   const stale = !existsSync(engineExe) || engineSrcNewest > exeTime;
   if (FORCE_ENGINE || stale) {
     log(stale && existsSync(engineExe) ? "引擎源码比 engine.exe 新 → 自动重建引擎" : "重建引擎（PyInstaller）");
-    npmRun("build:engine");
+    // 引擎重建要 pip 装依赖：默认给国内镜像，避免卡在默认源（实测曾被中断反复重试十几分钟）
+    const pipEnv = { ...process.env, PIP_INDEX_URL: process.env.PIP_INDEX_URL || "https://pypi.tuna.tsinghua.edu.cn/simple" };
+    run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:engine"], { env: pipEnv });
   } else {
     log("engine.exe 已是最新（跳过 PyInstaller；要强制重建加 --force-engine）");
   }
@@ -185,12 +187,18 @@ function buildWindows() {
   const zip = path.join(RELEASE_DIR, `${PRODUCT}-v${VERSION}.zip`);
   for (const f of [sevenz, zip]) rmSync(f, { force: true });
 
-  run(SEVEN_ZIP, ["a", "-t7z", "-mx=9", sevenz, appDir]);
-  run(SEVEN_ZIP, ["a", "-tzip", "-mx=9", zip, appDir]);
+  // -mx=5：压缩时间约为极限压缩(-mx=9)的一半，体积只大 3~5%（实测 484MB 目录 ~2 分钟 vs ~4 分钟）
+  const level = value("--level", "5");
+  run(SEVEN_ZIP, ["a", "-t7z", `-mx=${level}`, sevenz, appDir]);
+  log(`→ ${path.relative(ROOT, sevenz)}（${humanSize(statSync(sevenz).size)}）`);
+  artifacts.push(fileInfo(sevenz));
 
-  for (const f of [sevenz, zip]) {
-    log(`→ ${path.relative(ROOT, f)}（${humanSize(statSync(f).size)}）`);
-    artifacts.push(fileInfo(f));
+  if (has("--with-zip")) {
+    run(SEVEN_ZIP, ["a", "-tzip", `-mx=${level}`, zip, appDir]);
+    log(`→ ${path.relative(ROOT, zip)}（${humanSize(statSync(zip).size)}）`);
+    artifacts.push(fileInfo(zip));
+  } else {
+    log("（默认不出 zip；需要时加 --with-zip）");
   }
 }
 
