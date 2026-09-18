@@ -3097,7 +3097,7 @@ const App = {
               <div v-else class="fixed-mark">🔒</div>
             </template>
             <template v-else>
-              <span class="placeholder">{{ slot.isSupport ? '选择助战从者' : '从者' }}</span>
+              <span class="placeholder">{{ slot.isSupport ? '助战从者' : '从者' }}</span>
             </template>
             <div v-if="mode === 'crown' && slot.isCrown" class="crown-star" title="冠位从者位（允许两个加成礼装）">✴</div>
           </div>
@@ -3123,7 +3123,7 @@ const App = {
                 <div class="cell-effect">{{ craftEffect(cs.craft) }}</div>
               </template>
               <template v-else>
-                <span class="placeholder">{{ slot.isSupport ? '选择助战礼装' : (cs.index === 1 ? '第二礼装位' : '礼装') }}</span>
+                <span class="placeholder">{{ slot.isSupport ? '助战礼装' : (cs.index === 1 ? '第二礼装位' : '礼装') }}</span>
               </template>
             </div>
           </div>
