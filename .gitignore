@@ -93,3 +93,6 @@ desktop.ini
 *~
 
 PLATFORM-ROADMAP.md
+
+# 契约测试的临时库/中间文件（本地生成，不进版本库）
+tests/.tmp/

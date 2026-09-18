@@ -1,0 +1,313 @@
+{
+  "contractVersion": 1,
+  "suite": "bridge",
+  "note": "界面 ↔ 宿主（window.fgo.* / 共用领域层）的契约用例。任何新平台实现必须全部通过。用例在一个临时库上按顺序执行，所以断言里会出现账号 id / 数量这类顺序相关值。",
+  "startState": "以下用例从「全新库」开始：ensureSchema + ensureAccountSchema 之后自动存在 1 个默认账号（id=1）。",
+  "cases": [
+    {
+      "name": "accounts.list（全新库自动建默认账号）",
+      "method": "accounts.listAccounts",
+      "args": [],
+      "expect": [
+        { "path": "ok", "eq": true },
+        { "path": "result.accounts.length", "eq": 1 },
+        { "path": "result.accounts[0].name", "eq": "默认账号" },
+        { "path": "result.activeId", "gte": 1 }
+      ]
+    },
+    {
+      "name": "accounts.create（具名）",
+      "method": "accounts.createAccount",
+      "args": ["测试甲"],
+      "expect": [
+        { "path": "ok", "eq": true },
+        { "path": "result.accounts.length", "eq": 2 },
+        { "path": "result.accounts[1].name", "eq": "测试甲" },
+        { "path": "result.accounts[1].servantCount", "eq": 0 }
+      ]
+    },
+    {
+      "name": "accounts.create（空白名 → 自动命名「账号 N」）",
+      "method": "accounts.createAccount",
+      "args": ["   "],
+      "expect": [
+        { "path": "ok", "eq": true },
+        { "path": "result.accounts.length", "eq": 3 },
+        { "path": "result.accounts[2].name", "matches": "^账号 [0-9]+$" }
+      ]
+    },
+    {
+      "name": "accounts.rename（成功）",
+      "method": "accounts.renameAccount",
+      "args": [2, "甲改名"],
+      "expect": [{ "path": "result.accounts[1].name", "eq": "甲改名" }]
+    },
+    {
+      "name": "accounts.rename（空名报错）",
+      "method": "accounts.renameAccount",
+      "args": [2, "   "],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "eq": "账号名称不能为空" }
+      ]
+    },
+    {
+      "name": "accounts.rename（不存在的账号报错）",
+      "method": "accounts.renameAccount",
+      "args": [99999, "x"],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "eq": "账号不存在" }
+      ]
+    },
+    {
+      "name": "box.save（3 条，账号 2）",
+      "method": "box.saveUserBox",
+      "args": [
+        [
+          { "servantId": 100100, "isMaxBond": 1, "bondRank": 10, "bondMaxRank": 10 },
+          { "servantId": 100200, "stage": "second", "personalBonus": 0.05, "bondSwitch1": 1 },
+          { "servantId": 100300, "auraBonus": 0.02, "stage": "" }
+        ],
+        2
+      ],
+      "expect": [
+        { "path": "ok", "eq": true },
+        { "path": "result.count", "eq": 3 },
+        { "path": "result.accountId", "eq": 2 }
+      ]
+    },
+    {
+      "name": "box.get（字段归一化：空 stage→fourth、布尔转 0/1、数字保留）",
+      "method": "box.getUserBox",
+      "args": [2],
+      "expect": [
+        { "path": "result.length", "eq": 3 },
+        { "path": "result[0].servantId", "eq": 100100 },
+        { "path": "result[0].stage", "eq": "fourth" },
+        { "path": "result[0].isMaxBond", "eq": 1 },
+        { "path": "result[1].stage", "eq": "second" },
+        { "path": "result[1].bondSwitch1", "eq": 1 },
+        { "path": "result[1].personalBonus", "eq": 0.05 },
+        { "path": "result[2].auraBonus", "eq": 0.02 },
+        { "path": "result[2].stage", "eq": "fourth" }
+      ]
+    },
+    {
+      "name": "box.save（写入不存在的账号 → 拒绝）",
+      "method": "box.saveUserBox",
+      "args": [[{ "servantId": 100100 }], 99999],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "eq": "账号不存在或已被删除，请重新选择账号" }
+      ]
+    },
+    {
+      "name": "box.get（账号隔离：账号 3 应为空）",
+      "method": "box.getUserBox",
+      "args": [3],
+      "expect": [{ "path": "result.length", "eq": 0 }]
+    },
+    {
+      "name": "box.reset（清空）",
+      "method": "box.resetUserBox",
+      "args": [3],
+      "expect": [{ "path": "result.count", "eq": 0 }]
+    },
+    {
+      "name": "exclusions.save（往返 + 账号隔离）",
+      "method": "exclusions.saveExclusions",
+      "args": [{ "servants": [1, 2], "crafts": [10] }, 2],
+      "expect": [
+        { "path": "result.servants", "eq": [1, 2] },
+        { "path": "result.crafts", "eq": [10] },
+        { "path": "result.accountId", "eq": 2 }
+      ]
+    },
+    {
+      "name": "exclusions.get（另一个账号看不到）",
+      "method": "exclusions.getExclusions",
+      "args": [1],
+      "expect": [
+        { "path": "result.servants.length", "eq": 0 },
+        { "path": "result.crafts.length", "eq": 0 }
+      ]
+    },
+    {
+      "name": "customCrafts.save（字段归一化 + 解析 conditionGroups）",
+      "method": "customCrafts.saveCustomCrafts",
+      "args": [
+        [
+          {
+            "name": " 自定义甲 ",
+            "craftType": "other",
+            "cost": "12.7",
+            "rarity": 5.4,
+            "percentBonus": "0.05",
+            "conditionGroups": [["a"], ["b", "c"]],
+            "repeatable": true,
+            "enabled": false
+          },
+          { "name": "自定义乙" }
+        ]
+      ],
+      "expect": [
+        { "path": "result.length", "eq": 2 },
+        { "path": "result[0].name", "eq": "自定义甲" },
+        { "path": "result[0].craftType", "eq": "other" },
+        { "path": "result[0].cost", "eq": 13 },
+        { "path": "result[0].rarity", "eq": 5 },
+        { "path": "result[0].percentBonus", "eq": 0.05 },
+        { "path": "result[0].conditionGroups", "eq": [["a"], ["b", "c"]] },
+        { "path": "result[0].repeatable", "eq": true },
+        { "path": "result[0].enabled", "eq": false },
+        { "path": "result[1].craftType", "eq": "bond" },
+        { "path": "result[1].enabled", "eq": true },
+        { "path": "result[1].repeatable", "eq": false }
+      ]
+    },
+    {
+      "name": "customCrafts.save（空数组 → 全清）",
+      "method": "customCrafts.saveCustomCrafts",
+      "args": [[]],
+      "expect": [{ "path": "result.length", "eq": 0 }]
+    },
+    {
+      "name": "teams.save（默认值）",
+      "method": "teams.saveUserTeam",
+      "args": [{ "name": "队伍甲" }],
+      "expect": [{ "path": "result", "gte": 1 }]
+    },
+    {
+      "name": "teams.list（默认值补齐 + JSON 字段还原）",
+      "method": "teams.listUserTeams",
+      "args": [],
+      "expect": [
+        { "path": "result.length", "eq": 1 },
+        { "path": "result[0].name", "eq": "队伍甲" },
+        { "path": "result[0].costLimit", "eq": 116 },
+        { "path": "result[0].strategy", "eq": "total_max" },
+        { "path": "result[0].qualityMode", "eq": "balanced" },
+        { "path": "result[0].mode", "eq": "normal" },
+        { "path": "result[0].supportPosition", "eq": "front_right" },
+        { "path": "result[0].fixedServants", "eq": [] },
+        { "path": "result[0].crownPositions", "eq": [] }
+      ]
+    },
+    {
+      "name": "teams.delete（存在 / 不存在）",
+      "method": "teams.deleteUserTeam",
+      "args": [1],
+      "expect": [{ "path": "result.ok", "eq": true }]
+    },
+    {
+      "name": "teams.delete（不存在 → ok=false）",
+      "method": "teams.deleteUserTeam",
+      "args": [999],
+      "expect": [
+        { "path": "result.ok", "eq": false },
+        { "path": "result.changes", "eq": 0 }
+      ]
+    },
+    {
+      "name": "meta.region（非法值回落 jp）",
+      "method": "meta.setServerRegion",
+      "args": ["cn"],
+      "expect": [{ "path": "result", "eq": null }]
+    },
+    {
+      "name": "meta.region（读回 cn）",
+      "method": "meta.getServerRegion",
+      "args": [],
+      "expect": [{ "path": "result", "eq": "cn" }]
+    },
+    {
+      "name": "meta.region（非法值 → jp）",
+      "method": "meta.setServerRegion",
+      "args": ["xx"],
+      "expect": [{ "path": "result", "eq": null }]
+    },
+    {
+      "name": "meta.region（确认回落）",
+      "method": "meta.getServerRegion",
+      "args": [],
+      "expect": [{ "path": "result", "eq": "jp" }]
+    },
+    {
+      "name": "meta.generic（去重 + 过滤非法值）",
+      "method": "meta.setGenericBondParticipation",
+      "args": [[1, 1, 2, "x", 3]],
+      "expect": [{ "path": "result", "eq": [1, 2, 3] }]
+    },
+    {
+      "name": "staticData.getServant（真实数据可读）",
+      "method": "staticData.getServant",
+      "args": ["$firstServantId"],
+      "expect": [
+        { "path": "result.id", "eq": "$firstServantId" },
+        { "path": "result.name", "matches": ".+" }
+      ]
+    },
+    {
+      "name": "staticData.listCrafts（牵绊礼装可读）",
+      "method": "staticData.listCrafts",
+      "args": [true],
+      "expect": [
+        { "path": "result.length", "gte": 10 },
+        { "path": "result[0].craftType", "eq": "bond" }
+      ]
+    },
+    {
+      "name": "staticData.getStageTraits（真实特性可读）",
+      "method": "staticData.getStageTraits",
+      "args": ["$servantWithTraits", "fourth", "jp"],
+      "expect": [{ "path": "result.length", "gte": 1 }]
+    },
+    {
+      "name": "box.importCaptureContent（抓包 → Box：满绊按「当前上限」判定）",
+      "method": "box.importCaptureContent",
+      "args": ["$captureJson", 2],
+      "expect": [
+        { "path": "result.servants", "eq": 3 },
+        { "path": "result.maxBond", "eq": 3 }
+      ]
+    },
+    {
+      "name": "accounts.copy（复制账号带走 Box + 排除）",
+      "method": "accounts.createAccount",
+      "args": ["复制自甲", { "copyFromId": 2 }],
+      "expect": [
+        { "path": "result.accounts.length", "eq": 4 },
+        { "path": "result.accounts[3].servantCount", "eq": 3 },
+        { "path": "result.accounts[3].exclusionCount", "eq": 3 }
+      ]
+    },
+    {
+      "name": "accounts.delete（删到只剩一个 → 报错）",
+      "method": "accounts.deleteAccount",
+      "args": [2],
+      "expect": [{ "path": "ok", "eq": true }]
+    },
+    {
+      "name": "accounts.delete（继续删 3）",
+      "method": "accounts.deleteAccount",
+      "args": [3],
+      "expect": [{ "path": "ok", "eq": true }]
+    },
+    {
+      "name": "accounts.delete（继续删 4）",
+      "method": "accounts.deleteAccount",
+      "args": [4],
+      "expect": [{ "path": "ok", "eq": true }]
+    },
+    {
+      "name": "accounts.delete（最后一个不可删）",
+      "method": "accounts.deleteAccount",
+      "args": [1],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "eq": "至少保留一个账号" }
+      ]
+    }
+  ]
+}

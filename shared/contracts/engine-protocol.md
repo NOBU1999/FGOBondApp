@@ -1,9 +1,28 @@
-# 宿主 ↔ 计算引擎 协议（v0 初稿）
+# 宿主 ↔ 计算引擎 协议 · v1
 
-> 阶段 0 产物。事实来源：`python-engine/engine/main.py`（引擎侧）、`main/python-process.js`（宿主侧）。
+> **契约版本：1**（2026-09-18 阶段 3 固化）。破坏性变更 → 版本 +1，并同步三端宿主。
+> 事实来源：`python-engine/engine/main.py`（引擎侧）、`main/python-process.js`（宿主侧）。
 > 目标：**任何平台用同一份请求 JSON、同一份结果 JSON** ——
 > 桌面（Electron + 子进程）与网页 / 安卓（Worker + WASM）只是"传输方式"不同，协议不变。
-> 阶段 3 会把本文件固化成带版本号的正式契约 + 一致性测试夹具。
+
+## 0. 怎么验证这份协议
+
+```bash
+npm run test:contracts -- --suite engine     # 6 条用例：错误路径 + 结构不变量 + 可复现
+```
+
+- 用例文件：`tests/contracts/engine-cases.json`；运行器：`tests/run-contracts.mjs`
+- 已验证的不变量：
+  1. `costLimit` 越界 → 报错含 `Cost上限`
+  2. `strategy=target_max` 缺 `targetServantId` → 报错含 `targetServantId`
+  3. 空 Box → 报错含 `请至少勾选一位从者`
+  4. 小 Box 出解：`top20` 非空、每队 6 人、位置集合 = 6 个标准位置、`costUsed ≤ costLimit`、`totalMultiplier > 0`
+  5. **未知字段必须被忽略**（传 `protocolVersion` / 垃圾字段不影响结果）
+  6. **同一请求重复执行结果一致**（`_` 前缀诊断字段与验证串不参与比较）
+- `protocolVersion` 现状：宿主**可以**传（引擎忽略未知字段）；引擎**暂不返回**它。
+  阶段 4 起由宿主校验版本，届时此条升级并同步 +1。
+- 传输方式：生产宿主用管道（stdin/stdout）。测试在受限环境（沙箱 / CI 禁止管道）下会改用
+  **文件描述符**当 stdin/stdout，协议本身不变 —— 见 `tests/README.md`。
 
 ## 1. 传输形态
 

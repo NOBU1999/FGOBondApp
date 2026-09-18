@@ -1,0 +1,79 @@
+{
+  "contractVersion": 1,
+  "suite": "engine",
+  "note": "宿主 ↔ 计算引擎的协议用例。任何宿主（桌面子进程 / 网页 WASM / 安卓原生）都必须满足这些不变量。",
+  "howToFeed": "每条用例的 request 通过 stdin 以单行 JSON 交给引擎：engine_launcher.py --mode calculate --db <库路径>",
+  "expansions": {
+    "$boxRefs": "展开成 N 个 Box 条目，servant id 取库里 collection_no>0 的前 N 个（形状与界面 buildPayload 一致：{id, stage, maxBond, bondSwitch1, bondSwitch2, personalBonus, auraBonus}）"
+  },
+  "cases": [
+    {
+      "name": "错误：costLimit 越界（<50）",
+      "request": { "costLimit": 10, "$boxRefs": 3 },
+      "expect": { "errorContains": "Cost上限" }
+    },
+    {
+      "name": "错误：指定从者最大化却没给目标",
+      "request": { "strategy": "target_max", "costLimit": 120, "$boxRefs": 3 },
+      "expect": { "errorContains": "targetServantId" }
+    },
+    {
+      "name": "错误：空 Box 被拒绝（真实提示以引擎为准）",
+      "request": { "costLimit": 120, "box": [] },
+      "expect": { "errorContains": "请至少勾选一位从者" }
+    },
+    {
+      "name": "小 Box：结构不变量（6 个位置齐全、Cost 不超、倍率为正）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "top20LengthGte": 1,
+        "teamSizeEq": 6,
+        "positionsSetEq": [
+          "front_left",
+          "front_middle",
+          "front_right",
+          "back_left",
+          "back_middle",
+          "back_right"
+        ],
+        "top20CostUsedLte": 120,
+        "top20MultiplierGt": 0,
+        "tokenMatches": "^(FGOBONDV3\\..+|)$"
+      }
+    },
+    {
+      "name": "前向兼容：未知字段必须被忽略（protocolVersion / 垃圾字段）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "$boxRefs": 8,
+        "protocolVersion": 1,
+        "__junk": { "a": [1, 2, 3], "b": "忽略我" }
+      },
+      "expect": { "sameAsPrevious": true }
+    },
+    {
+      "name": "可复现：同一请求再跑一次，结果一致",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "$boxRefs": 8
+      },
+      "expect": { "sameAsPrevious": true }
+    }
+  ]
+}
