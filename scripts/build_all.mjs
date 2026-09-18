@@ -21,6 +21,10 @@
  * 说明：
  *   - 版本号**唯一来源** = package.json（Windows 与安卓同一版本号；安卓 versionCode 由它换算）
  *   - Windows 侧沿用既有流程：electron-builder --win dir → make_release_meta.py → 7z 打包
+ *   - 种子库：打包前跑 scripts/make_seed.cjs —— 由开发库**复制一份再清空用户表**，
+ *     绝不直接用开发库当种子库（v0.1.11 真实事故：包里带上了开发者的账号 / Box / 队伍）
+ *   - 发出前自检：scripts/verify_package.cjs 检查便携目录与压缩包（种子库无个人数据、
+ *     无 node_modules 构建垃圾、语言包已精简）
  *   - 隐私检查：若本地存在 scripts/privacy_clean.py，打包前会跑 --check（发现个人数据即中止）
  */
 
@@ -154,8 +158,21 @@ function buildWindows() {
     log("engine.exe 已是最新（跳过 PyInstaller；要强制重建加 --force-engine）");
   }
 
+  // 种子库：db/fgo_data.seed.db 是玩家首次运行时复制成运行库的模板，必须「复制一份再清空用户表」。
+  // 不能像以前那样直接把开发机工作库 db/fgo_data.db 当种子库（v0.1.11 真实事故：
+  // Windows 包里带上了开发者的 2 个账号 / 7 个从者 / 1 支队伍 / 4 条排除）。
+  npmRun("make:seed");
+
   const electronBuilder = path.join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
-  run(electronBuilder, ["--win", "dir"]);
+  // 离线/加速兜底：electron 二进制默认从网上下（国内直连 github 会超时，已在 package.json 里
+  // 配了 npmmirror 镜像）。若本地已有下载好的 electron zip，可用环境变量直接指定，完全不联网：
+  //   $env:FGO_ELECTRON_DIST = "$env:LOCALAPPDATA\electron\Cache\electron-v44.1.1-win32-x64.zip"
+  const electronArgs = ["--win", "dir"];
+  if (process.env.FGO_ELECTRON_DIST) {
+    log(`使用本地 electron 发行包：${process.env.FGO_ELECTRON_DIST}`);
+    electronArgs.push(`--config.electronDist=${process.env.FGO_ELECTRON_DIST}`);
+  }
+  run(electronBuilder, electronArgs);
 
   // electron-builder 的 dir 目标输出到 release/win-unpacked，
   // 而既有流程（make_release_meta / privacy_clean / fetch_missing_avatars / 更新器）都约定
@@ -168,6 +185,9 @@ function buildWindows() {
   renameSync(unpackedDir, appDir);
   log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
   if (!existsSync(appDir)) fatal("没有产出 release/MyFGOApp");
+
+  // 打包完立刻自检：种子库是否干净、有没有混入 node_modules / 安卓构建垃圾、语言包是否精简
+  run(process.execPath, ["scripts/verify_package.cjs", "--app-dir", appDir]);
 
   const metaArgs = ["scripts/make_release_meta.py", "--version", VERSION];
   if (COMPAT_FROM) metaArgs.push("--compatible-from", COMPAT_FROM);
@@ -192,11 +212,13 @@ function buildWindows() {
   run(SEVEN_ZIP, ["a", "-t7z", `-mx=${level}`, sevenz, appDir]);
   log(`→ ${path.relative(ROOT, sevenz)}（${humanSize(statSync(sevenz).size)}）`);
   artifacts.push(fileInfo(sevenz));
+  run(process.execPath, ["scripts/verify_package.cjs", "--archive", sevenz]);
 
   if (has("--with-zip")) {
     run(SEVEN_ZIP, ["a", "-tzip", `-mx=${level}`, zip, appDir]);
     log(`→ ${path.relative(ROOT, zip)}（${humanSize(statSync(zip).size)}）`);
     artifacts.push(fileInfo(zip));
+    run(process.execPath, ["scripts/verify_package.cjs", "--archive", zip]);
   } else {
     log("（默认不出 zip；需要时加 --with-zip）");
   }

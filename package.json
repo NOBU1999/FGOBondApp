@@ -16,26 +16,31 @@
     "android:debug": "npm run android:sync && cd android && gradlew assembleDebug",
     "android:release": "npm run android:sync && cd android && gradlew assembleRelease",
     "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
-    "dist": "npm run build:engine && electron-builder --win dir",
+    "dist": "npm run build:engine && npm run make:seed && electron-builder --win dir",
+    "make:seed": "node scripts/make_seed.cjs",
+    "verify:package": "node scripts/verify_package.cjs",
     "android:bundle": "node scripts/android/build-web-bundle.mjs",
     "build:all": "node scripts/build_all.mjs",
     "android:keystore": "node scripts/android/create_keystore.cjs"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
     "@capacitor/filesystem": "^8.1.0",
-    "sql.js": "^1.13.0"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^8.5.2",
     "electron": "latest",
     "electron-builder": "latest",
+    "sql.js": "^1.13.0",
     "vue": "^3.5.42"
   },
   "build": {
     "appId": "com.fgobond.recommender",
     "productName": "FGO牵绊推荐器",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
@@ -44,8 +49,14 @@
       "preload.js",
       "renderer/**/*",
       "shared/**/*",
-      "!shared/**/*.md"
+      "!shared/**/*.md",
+      "!node_modules/**"
     ],
+    "npmRebuild": false,
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/",
+      "customDir": "{{ version }}"
+    },
     "win": {
       "target": [
         {
@@ -62,7 +73,7 @@
         "to": "python-engine/engine.exe"
       },
       {
-        "from": "db/fgo_data.db",
+        "from": "db/fgo_data.seed.db",
         "to": "db/fgo_data.seed.db"
       },
       {
