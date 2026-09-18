@@ -24,7 +24,7 @@
 import { existsSync, mkdirSync, copyFileSync, rmSync, readFileSync, writeFileSync, openSync, closeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -185,7 +185,20 @@ async function runBridgeSuite() {
   // 宿主接口：新平台只需提供等价的 call(group, fn, args)
   let host;
   if (HOST_MODULE) {
-    const mod = await import(path.resolve(ROOT, HOST_MODULE));
+    // 关键：自定义宿主（如 sql.js）读的是主库文件，而桌面驱动处于 WAL 模式，
+    // 上面清空个人数据的改动可能还在 -wal 里 → 先 checkpoint 并释放句柄，宿主才能看到最新状态。
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch (_) {
+      /* 非 WAL 模式忽略 */
+    }
+    try {
+      db.close();
+    } catch (_) {
+      /* ignore */
+    }
+    // Windows 上必须用 file:// URL 加载绝对路径（Node 的 ESM 加载器限制）
+    const mod = await import(pathToFileURL(path.resolve(ROOT, HOST_MODULE)).href);
     host = await mod.createHost({ dbPath: tmpDb });
   } else {
     host = {

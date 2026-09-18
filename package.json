@@ -12,15 +12,18 @@
     "check:platform": "node scripts/check_platform_leaks.mjs",
     "test:contracts": "node tests/run-contracts.mjs",
     "android:copy": "cap copy android",
-    "android:sync": "cap sync android",
-    "android:debug": "cd android && gradlew assembleDebug",
-    "android:release": "cd android && gradlew assembleRelease",
+    "android:sync": "npm run android:bundle && cap sync android",
+    "android:debug": "npm run android:sync && cd android && gradlew assembleDebug",
+    "android:release": "npm run android:sync && cd android && gradlew assembleRelease",
     "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
-    "dist": "npm run build:engine && electron-builder --win dir"
+    "dist": "npm run build:engine && electron-builder --win dir",
+    "android:bundle": "node scripts/android/build-web-bundle.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
-    "@capacitor/core": "^8.5.2"
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.0",
+    "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",
