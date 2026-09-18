@@ -1,6 +1,6 @@
 # shared/domain/ —— 共用业务逻辑
 
-> 阶段 1 启用（目前是占位目录，**没有任何代码被调用**）。
+> 阶段 1 进行中：`meta` / `accounts` / `box` / `exclusions` 已迁入（`main/database.js` 里只留同名薄包装）。
 
 ## 放什么
 
@@ -40,6 +40,24 @@ export function createAccountService(storage) {
 ```
 
 - 单元测试与回归脚本放本地（不进版本库），改动前后各跑一次。
+
+## 注入的能力（ports）
+
+共用层**不许直接调用** Node / 浏览器 API（`fs`、`Buffer`、`process`、`localStorage`…），
+需要什么就由宿主注入进来。目前清单：
+
+| 端口 | 形状 | 谁提供 | 现状 |
+|---|---|---|---|
+| `sql` | `all / get / run / exec / tx` | 平台适配器 | ✅ 桌面（`main/database.js` 的 `createSqlPort`）；契约见 `shared/storage/sql-port.md` |
+| `codec` | `decodeBase64ToUtf8(text) → string` | 平台适配器 | ✅ 桌面用 `Buffer.from(text, "base64").toString("utf8")`（与旧实现逐字节一致）；网页/安卓将来用 `atob` + `TextDecoder` |
+
+将来会加的端口（现阶段**不要**提前实现）：
+
+- `clipboard.writeText(text)` —— 复制验证串 / 队伍（现在走桥接的 `copyText`，阶段 4 归位）
+- `clock.now()` —— 需要时间戳时（避免 `Date.now()` 直接进共用层，便于测试与跨平台一致）
+- `notify.something` —— 进度/日志上报（现在由宿主自己往 stderr / UI 推）
+
+新增端口时：**先更新本表 + 在 `index.mjs` 里校验**（缺端口就启动即报错，不要留到运行时才炸）。
 
 ## 相关文档
 

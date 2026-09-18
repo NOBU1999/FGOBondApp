@@ -567,7 +567,7 @@ const App = {
       this.applyBoxRows(userBox);
 
       try {
-        const rawSettings = localStorage.getItem("fgoBondApp.resultSettings");
+        const rawSettings = localStorage.getItem("fgoBondApp.resultSettings"); // platform-ok 纯 UI 偏好：Electron 与安卓 WebView 都支持 localStorage，且已 try/catch 兜底
         if (rawSettings) {
           this.resultSettings = Object.assign({}, this.resultSettings, JSON.parse(rawSettings));
         }
@@ -601,7 +601,7 @@ const App = {
     formatBondNumber(v) { return formatBondNumber(v); },
     persistResultSettings() {
       try {
-        localStorage.setItem("fgoBondApp.resultSettings", JSON.stringify(this.resultSettings));
+        localStorage.setItem("fgoBondApp.resultSettings", JSON.stringify(this.resultSettings)); // platform-ok 纯 UI 偏好，各平台宿主都支持，见上
       } catch (_) {
         // 本地存储不可用时忽略
       }

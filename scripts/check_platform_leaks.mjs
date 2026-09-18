@@ -66,6 +66,17 @@ const SKIP_DIRS = new Set([
 const SKIP_SUFFIX = [".min.js", ".bundle.js"];
 const ALLOW_MARK = "platform-ok";
 
+/**
+ * 已知的平台专属文件：整文件豁免，但会在报告里单独列出来（保持可见，不静默忽略）。
+ * 目标是逐步把这些文件挪出共用/核心目录，而不是永久豁免。
+ */
+const EXEMPT_FILES = new Map([
+  [
+    "python-engine/engine/data_fetcher.py",
+    "引擎侧联网下载层：只在「更新数据」时用，属平台专属能力；待在阶段 3/4 挪出引擎核心",
+  ],
+]);
+
 /** level: error = 必须修；warn = 可以先放着，属于「该走适配器」的提醒 */
 const RULES = [
   // ---------- JS / 前端 ----------
@@ -145,6 +156,13 @@ const RULES = [
     name: "CommonJS require",
     re: /\brequire\s*\(/,
     hint: "共用区用 ESM（import）；CJS 只属于平台层。",
+  },
+  {
+    lang: "js",
+    level: "error",
+    name: "Node 专有全局 Buffer",
+    re: /\bBuffer\b/,
+    hint: "浏览器 / 安卓 WebView 没有 Buffer；base64 等编解码走注入的能力（见 shared/domain/README.md）。",
   },
   {
     lang: "js",
@@ -266,6 +284,7 @@ function walk(dir, exts, out = []) {
 
 const findings = [];
 const scanReport = [];
+const exempted = [];
 
 for (const target of TARGETS) {
   const absDir = join(ROOT, target.dir);
@@ -274,6 +293,11 @@ for (const target of TARGETS) {
   scanReport.push({ dir: target.dir, label: target.label, files: files.length, exists });
 
   for (const file of files) {
+    const rel = file.slice(ROOT.length).split("\\").join("/");
+    if (EXEMPT_FILES.has(rel)) {
+      exempted.push({ file: rel, reason: EXEMPT_FILES.get(rel) });
+      continue;
+    }
     const raw = readFileSync(file, "utf8");
     const lines = raw.split(/\r?\n/);
     lines.forEach((line, index) => {
@@ -303,9 +327,10 @@ if (AS_JSON) {
       {
         status: failed ? "fail" : "pass",
         scanned: scanReport,
+        exempted,
         errors,
         warnings,
-        counts: { errors: errors.length, warnings: warnings.length },
+        counts: { errors: errors.length, warnings: warnings.length, exempted: exempted.length },
       },
       null,
       2
@@ -356,7 +381,15 @@ function printGroup(title, list) {
 
 if (errors.length) printGroup("✗ 错误", errors);
 if (warnings.length) printGroup("⚠ 警告（可以先放着，阶段 1 / 4 处理）", warnings);
-if (!findings.length) console.log("✅ 没有发现问题。\n");
+if (exempted.length) {
+  console.log(`已豁免的平台专属文件（${exempted.length}）`);
+  for (const item of exempted) {
+    console.log(`  ${item.file}`);
+    console.log(`      → ${item.reason}`);
+  }
+  console.log("");
+}
+if (!findings.length && !exempted.length) console.log("✅ 没有发现问题。\n");
 
 console.log(
   failed

@@ -28,7 +28,9 @@
     "files": [
       "main/**/*",
       "preload.js",
-      "renderer/**/*"
+      "renderer/**/*",
+      "shared/**/*",
+      "!shared/**/*.md"
     ],
     "win": {
       "target": [
