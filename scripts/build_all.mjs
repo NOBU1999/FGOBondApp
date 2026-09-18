@@ -26,7 +26,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -116,13 +116,40 @@ function buildAndroid() {
 }
 
 // ---------------------------------------------------------------- Windows 便携版
+function newestMtime(targets) {
+  let newest = 0;
+  const walk = (p) => {
+    if (!existsSync(p)) return;
+    const st = statSync(p);
+    if (st.isDirectory()) {
+      for (const entry of readdirSync(p, { withFileTypes: true })) {
+        if (entry.name === "__pycache__") continue;
+        walk(path.join(p, entry.name));
+      }
+      return;
+    }
+    if (p.endsWith(".py")) newest = Math.max(newest, st.mtimeMs);
+  };
+  for (const t of targets) walk(t);
+  return newest;
+}
+
 function buildWindows() {
   step("Windows 便携版");
   const engineExe = path.join(ROOT, "python-engine", "engine.exe");
-  if (FORCE_ENGINE || !existsSync(engineExe)) {
+  // 关键：engine.exe 是预编译产物（PyInstaller）。只要引擎源码比它新就必须重建，
+  // 否则打出来的 Windows 包装的是旧引擎（实测踩过：解不了安卓版验证串）。
+  const engineSrcNewest = newestMtime([
+    path.join(ROOT, "python-engine", "engine"),
+    path.join(ROOT, "python-engine", "engine_launcher.py"),
+  ]);
+  const exeTime = existsSync(engineExe) ? statSync(engineExe).mtimeMs : 0;
+  const stale = !existsSync(engineExe) || engineSrcNewest > exeTime;
+  if (FORCE_ENGINE || stale) {
+    log(stale && existsSync(engineExe) ? "引擎源码比 engine.exe 新 → 自动重建引擎" : "重建引擎（PyInstaller）");
     npmRun("build:engine");
   } else {
-    log("engine.exe 已存在（跳过 PyInstaller；要强制重建加 --force-engine）");
+    log("engine.exe 已是最新（跳过 PyInstaller；要强制重建加 --force-engine）");
   }
 
   const electronBuilder = path.join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
