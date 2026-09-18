@@ -1,8 +1,13 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
+// 国内网络加速（2026-09-18 加）：优先走阿里云镜像，官方仓库保留作为回退。
+// google() 的原始域名 dl.google.com/dl/android/maven2 在国内经常很慢/不可达。
 
 buildscript {
     
     repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
         google()
         mavenCentral()
     }
@@ -19,6 +24,8 @@ apply from: "variables.gradle"
 
 allprojects {
     repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
         mavenCentral()
     }
