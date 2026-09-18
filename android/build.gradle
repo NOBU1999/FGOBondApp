@@ -14,6 +14,8 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'com.google.gms:google-services:4.4.4'
+        // Chaquopy：在 APK 里打包真 CPython 计算引擎（16.1.0 对应 AGP 8.9~8.13）
+        classpath 'com.chaquo.python:gradle:16.1.0'
 
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files

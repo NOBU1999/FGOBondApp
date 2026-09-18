@@ -1,4 +1,6 @@
 apply plugin: 'com.android.application'
+// Chaquopy：把真 CPython 与我们的计算引擎打进 APK（协议仍是 engine-protocol.md 的那一份 JSON）
+apply plugin: 'com.chaquo.python'
 
 android {
     namespace = "com.nobu1999.fgobond"
@@ -10,6 +12,11 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Chaquopy 要求显式声明 ABI。只保留 arm64-v8a：现代手机全覆盖，APK 最小
+        // （将来若要支持 32 位老机或模拟器，这里加 "armeabi-v7a" / "x86_64"）
+        ndk {
+            abiFilters "arm64-v8a"
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -43,6 +50,21 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// Chaquopy 配置：Python 版本 + 引擎源码目录
+//   ../../dist/android/python 由 scripts/android/build-web-bundle.mjs 暂存，
+//   只含 engine 包的 .py / data/*.json 与安卓入口（**不要**指向 python-engine 根目录：
+//   那里有 .cache 抓包缓存 200MB 与 engine.exe，会让 APK 暴涨到 116MB）
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+    }
+    sourceSets {
+        main {
+            srcDir "../../dist/android/python"
+        }
+    }
+}
 
 try {
     def servicesJSON = file('google-services.json')

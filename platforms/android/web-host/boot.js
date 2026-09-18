@@ -91,7 +91,14 @@
 
   // 平台能力：安卓版暂不支持的部分给出明确提示（而不是静默失败）
   api.calculate = makeDeferred("calculate");
-  api.cancelEngine = () => Promise.resolve({ ok: true });
+  api.cancelEngine = () => {
+    const cap = window.Capacitor;
+    const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
+    if (plugin && typeof plugin.cancel === "function") {
+      return plugin.cancel().catch(() => ({ ok: true }));
+    }
+    return Promise.resolve({ ok: true });
+  };
   api.updateData = () =>
     Promise.reject(new Error("安卓版不支持联网更新数据；数据随安装包发布（更新请下载新版 APK）"));
   api.resetStaticData = () =>
@@ -243,9 +250,17 @@
       },
     });
 
-    // 引擎：阶段 5.4 接入 Chaquopy 后替换这里
-    bridge.calculate = () =>
-      Promise.reject(new Error("计算引擎尚未接入（下一步：Chaquopy）"));
+    // 引擎：经 Chaquopy 跑真 CPython；协议与桌面一致（一份请求 JSON → 一份结果 JSON）
+    bridge.calculate = async (payload) => {
+      const cap = window.Capacitor;
+      const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
+      if (!plugin) throw new Error("Python 引擎插件未注册（请重新安装 APK）");
+      emitProgress("正在计算...");
+      const res = await plugin.calculate({ requestJson: JSON.stringify(payload) });
+      const out = JSON.parse((res && res.resultJson) || "{}");
+      if (out && out.status === "error") throw new Error(out.message || "计算失败");
+      return out;
+    };
 
     // 写操作后持久化
     const wrapped = {};

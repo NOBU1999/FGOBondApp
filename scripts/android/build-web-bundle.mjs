@@ -156,6 +156,33 @@ if (existsSync(eventFile)) {
   log("event_bond_bonus.json 一并打包");
 }
 
+// ---------------------------------------------------------------- 暂存 Python 源码（给 Chaquopy 用）
+// 只挑真正需要的：engine 包的 .py 与 data/*.json（name_translations）+ 安卓入口。
+// 千万别把整个 python-engine/ 交给 Chaquopy —— 那里有 .cache/raw（200MB 数据抓取缓存）、
+// engine.exe / dist/ / build/（PyInstaller 产物），打进去会让 APK 暴涨到 116MB（实测）。
+const PY_OUT = path.join(ROOT, "dist", "android", "python");
+rmSync(PY_OUT, { recursive: true, force: true });
+mkdirSync(PY_OUT, { recursive: true });
+
+let pyCount = 0;
+function stagePython(srcDir, destDir) {
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.name === "__pycache__") continue;
+    const src = path.join(srcDir, entry.name);
+    const dest = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      stagePython(src, dest);
+    } else if (entry.name.endsWith(".py") || entry.name.endsWith(".json")) {
+      mkdirSync(path.dirname(dest), { recursive: true });
+      cpSync(src, dest);
+      pyCount += 1;
+    }
+  }
+}
+stagePython(path.join(ROOT, "python-engine", "engine"), path.join(PY_OUT, "engine"));
+stagePython(path.join(ROOT, "platforms", "android", "python"), PY_OUT);
+log(`Python 源码已暂存：${path.relative(ROOT, PY_OUT)}（${pyCount} 个文件，${(dirSize(PY_OUT) / 1048576).toFixed(2)} MB）`);
+
 // ---------------------------------------------------------------- 注入启动脚本
 const indexPath = path.join(OUT, "index.html");
 let html = readFileSync(indexPath, "utf8");
