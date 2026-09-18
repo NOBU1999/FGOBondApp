@@ -2167,12 +2167,16 @@ def search_top_teams(
             evaluate_extras(extras_tuple, craft_combos, use_dp=use_dp)
             processed += 1
             processed_total += 1
-            if progress and (processed % 100 == 0 or processed == 1):
-                elapsed = time.time() - start
-                report(
-                    f"已评估 {evaluated_total:,} 个队伍配置"
-                    f"（时间预算 {timeout_seconds:.0f}s，当前 {elapsed:.1f}s）"
-                )
+            if processed % 10 == 0 or processed == 1:
+                # 取消检查必须与 progress 无关，且要足够勤（每 10 个候选一次 ≈ 几十~几百毫秒）：
+                # 安卓宿主（Chaquopy）不传 progress，若挂在 `if progress` 里，取消只在阶段边界生效
+                check_cancel()
+                if progress and (processed % 100 == 0 or processed == 1):
+                    elapsed = time.time() - start
+                    report(
+                        f"已评估 {evaluated_total:,} 个队伍配置"
+                        f"（时间预算 {timeout_seconds:.0f}s，当前 {elapsed:.1f}s）"
+                    )
 
     # 复现模式：用原计算的“分阶段处理数量”代替墙钟时间作为停止条件。
     # 这样即使短验证串搜索更快，也会在完全相同的进度点停下，结果可精确复现。
