@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "check:platform": "node scripts/check_platform_leaks.mjs",
     "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
     "dist": "npm run build:engine && electron-builder --win dir"
   },
