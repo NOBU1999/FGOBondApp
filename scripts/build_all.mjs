@@ -33,6 +33,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import toolchain from "./lib/toolchain.cjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -52,10 +53,12 @@ const SKIP_ANDROID = has("--skip-android");
 const FORCE_ENGINE = has("--force-engine");
 
 const RELEASE_DIR = path.join(ROOT, "release");
-const SEVEN_ZIP = "C:/Program Files/7-Zip/7z.exe";
-const JAVA_HOME = "C:/Users/25679/AppData/Roaming/.minecraft/runtime/java-runtime-delta";
-const ANDROID_HOME = "D:/Android/Sdk";
-const GRADLE_USER_HOME = "D:/dsh-agent/.gradle-home";
+// 为什么这些不是写死的绝对路径：这是公开仓库，脚本里不该出现某个人的用户名/盘符/本地目录。
+// 全部通过 scripts/lib/toolchain.cjs 解析（环境变量 → 常见安装位置）。
+const SEVEN_ZIP = process.env.SEVEN_ZIP || "C:/Program Files/7-Zip/7z.exe";
+const JAVA_HOME = toolchain.resolveJavaHome({ required: false });
+const ANDROID_HOME = toolchain.resolveAndroidHome();
+const GRADLE_USER_HOME = toolchain.resolveGradleUserHome();
 
 const log = (...a) => console.log("[build]", ...a);
 const step = (t) => console.log(`\n=== ${t} ===`);
@@ -95,6 +98,22 @@ const artifacts = [];
 // ---------------------------------------------------------------- 安卓 APK
 function buildAndroid() {
   step("安卓 APK（Capacitor + Chaquopy，正式签名）");
+  if (!JAVA_HOME) {
+    fatal(
+      "安卓构建需要 JDK 21，但没找到 JDK。请设置环境变量 JAVA_HOME，例如：\n" +
+        '  PowerShell:  $env:JAVA_HOME = "C:\\Program Files\\Java\\jdk-21"\n' +
+        "  bash:        export JAVA_HOME=/usr/lib/jvm/jdk-21\n" +
+        "（解析逻辑见 scripts/lib/toolchain.cjs）"
+    );
+  }
+  if (!ANDROID_HOME) {
+    fatal(
+      "安卓构建需要 Android SDK，但没找到。请设置环境变量 ANDROID_HOME（或 ANDROID_SDK_ROOT），例如：\n" +
+        '  PowerShell:  $env:ANDROID_HOME = "C:\\Users\\<你>\\AppData\\Local\\Android\\Sdk"\n' +
+        "（解析逻辑见 scripts/lib/toolchain.cjs）"
+    );
+  }
+  log(`工具链：JDK=${JAVA_HOME}｜SDK=${ANDROID_HOME}｜Gradle=${GRADLE_USER_HOME}`);
   if (!existsSync(path.join(ROOT, "android", "keystore.properties"))) {
     fatal("缺少 android/keystore.properties（正式签名配置）→ 先跑：node scripts/android/create_keystore.cjs");
   }

@@ -2,7 +2,8 @@
 /**
  * 一次性：生成安卓正式签名密钥（keystore）并写出 android/keystore.properties
  *
- * - 密钥放在**仓库外**：D:\dsh-agent\android-keys\fgobond-release.jks（不会被 git 看到）
+ * - 密钥默认放在**仓库外**的 `../android-keys/fgobond-release.jks`（可用环境变量
+ *   FGO_KEYSTORE_DIR 改到别处）；仓库外 → 不会被 git 看到
  * - 密码随机生成，写进 android/keystore.properties（该文件已 gitignore）
  * - 两者都要**双备份**；丢失后老用户无法覆盖升级（只能卸载重装、数据会丢）
  *
@@ -12,12 +13,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
+const toolchain = require("../lib/toolchain.cjs");
 
 const ROOT = path.resolve(__dirname, "..", "..");
-const KEY_DIR = "D:/dsh-agent/android-keys";
+const KEY_DIR = process.env.FGO_KEYSTORE_DIR || path.resolve(ROOT, "..", "android-keys");
 const JKS = path.join(KEY_DIR, "fgobond-release.jks");
 const PROPS = path.join(ROOT, "android", "keystore.properties");
-const KEYTOOL = "C:/Users/25679/AppData/Roaming/.minecraft/runtime/java-runtime-delta/bin/keytool.exe";
+const KEYTOOL = toolchain.resolveKeytool();
 const ALIAS = "fgobond";
 
 if (fs.existsSync(JKS)) {
@@ -51,11 +53,13 @@ execFileSync(
   { stdio: "inherit" }
 );
 
-// Gradle 的 rootProject.file(...) 相对于 android/ 解析 → ../../ 指到 D:\dsh-agent
+// Gradle 的 rootProject.file(...) 是相对 android/ 解析的 → 按 KEY_DIR 实际位置算相对路径，
+// 这样即使用 FGO_KEYSTORE_DIR 换目录也不会写错。
+const storeFileRel = path.relative(path.join(ROOT, "android"), JKS).split(path.sep).join("/");
 const props = [
   "# 安卓正式签名配置（本地文件，不进版本库；与 .jks 一起双备份）",
   "# 生成脚本：node scripts/android/create_keystore.cjs",
-  "storeFile=../../android-keys/fgobond-release.jks",
+  "storeFile=" + storeFileRel,
   "storePassword=" + password,
   "keyAlias=" + ALIAS,
   "keyPassword=" + password,
