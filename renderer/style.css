@@ -304,11 +304,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .overlay-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* 随窗口宽度自动增减列数（阶段 2：用户要求头像/礼装网格动态列数） */
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 10px;
 }
 .overlay-grid.servant-grid {
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 6px;
 }
 .pick-card {
@@ -552,7 +553,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 排除管理网格 */
 .exclusion-grid {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  /* 随窗口宽度自动增减列数（阶段 2） */
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   grid-auto-rows: 64px;
   gap: 6px;
   max-height: 60vh;
@@ -562,7 +564,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: stretch;
 }
 .exclusion-grid.craft-exclusion-grid {
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   grid-auto-rows: 64px;
 }
 .exclusion-cell {
@@ -1262,3 +1264,146 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .account-row-actions button { margin-left: 0; padding: 5px 10px; font-size: 12px; }
 .account-create { border-top: 1px solid var(--border); padding-top: 12px; }
 .account-create > button { width: 100%; }
+
+/* ==========================================================================
+   窄屏 / 触屏适配（全平台化 · 阶段 2）
+   原则（按用户口径）：
+   1) 界面结构与信息保持原样，不重新设计；
+   2) 不为了塞下而缩小字号，放不下就换行（宁可让页面变长）；
+   3) 触控目标不小于 44px；只靠鼠标 hover 的交互，触屏上也要能点到。
+   桌面（> 1024px）完全不受影响。
+   ========================================================================== */
+
+/* ---------- 平板 / 窄窗口 ---------- */
+@media (max-width: 1024px) {
+  .board-app { padding: 0 16px 32px; }
+  .custom-manager-layout { grid-template-columns: 1fr; }
+  .custom-list { max-height: none; }
+  .overlay-panel { width: auto; max-width: calc(100vw - 24px); max-height: 88vh; }
+  .overlay-panel.servant-overlay-panel { width: auto; }
+}
+
+/* ---------- 手机（竖屏为主；横屏落入这一档也能自适应） ---------- */
+@media (max-width: 640px) {
+  /* 顶栏：标题与按钮换行排，不互相挤压 */
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .topbar h1 { font-size: 18px; }
+  .topbar button { margin-left: 0; }
+
+  /* 一级界面 / 结果方案板：保持一行 6 格（用户要求 6×1，不要 3×2 重排）；格子变窄，靠换行撑开 */
+  .board-area { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .result-board { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+
+  /* 方格必须"真方"：高度只跟宽度走，不被内容顶破。两个元凶：
+       1) 礼装格有固定 min-height（主面板 92px / 方案板 52px）→ 列宽小于它就卡住不再变矮；
+       2) 从者格的头像 height:100% 会按图片固有高度把格子顶高（flex 项的自动最小尺寸）
+          → 列宽变小时同样"突然变高并卡住"。
+     做法：格子统一 aspect-ratio + min-height:0 + flex:0 0 auto；
+          头像改为绝对定位铺满，不再参与高度计算。桌面（>640px）不受影响。 */
+  .slot-col { min-height: 0; }
+  .cell-servant,
+  .cell-craft {
+    aspect-ratio: 1 / 1;
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    overflow: hidden;
+  }
+  .cell-craft { padding: 4px; }
+  .cell-servant .cell-avatar {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    /* 注意：img 是替换元素，width/height:auto 会按图片原始尺寸渲染（会溢出被裁成只剩左上角），
+       所以这里必须给显式尺寸 */
+    width: calc(100% - 12px);
+    height: calc(100% - 12px);
+    border-radius: 6px;
+  }
+  /* 礼装格：只显示礼装图；名字 / Cost / 效果点开弹层看（用户要求，窄屏才生效） */
+  .cell-craft .cell-name,
+  .cell-craft .cell-meta,
+  .cell-craft .cell-effect { display: none; }
+  .cell-craft { justify-content: center; }
+  .cell-craft-img {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+    max-width: 100%;
+    margin-bottom: 0;
+  }
+  .mini-servant,
+  .mini-craft {
+    aspect-ratio: 1 / 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .mini-servant .mini-avatar {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    /* 同上：img 必须给显式尺寸，不能用 auto */
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    border-radius: 4px;
+  }
+  .mini-craft { padding: 3px 1px; }
+  .mini-craft-img { width: 26px; height: 26px; }
+
+  /* 触控目标：按钮 / 输入框放大到手指能点 */
+  button { min-height: 44px; padding: 10px 14px; font-size: 14px; }
+  select,
+  input[type="text"],
+  input[type="number"],
+  input[type="search"] { min-height: 40px; font-size: 14px; }
+
+  /* 字号兜底：原本 9～11px 的说明文字提到可读尺寸（不为塞下而缩字） */
+  .cell-name { font-size: 13px; overflow-wrap: anywhere; }
+  .cell-name.small,
+  .cell-meta,
+  .cell .placeholder,
+  .text-muted { font-size: 12px; }
+  .mini-mult,
+  .cell-effect { font-size: 11px; }
+  .mini-craft-name {
+    font-size: 10px;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.25;
+  }
+
+  /* 头像网格：全局已是 auto-fill（随宽度动态列数），这里只把最小格宽调大一点，手指更好点 */
+  .box-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+  .overlay-grid.servant-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+
+  /* 结果明细表：6 列在手机上塞不下 → 每行变成「字段名 + 值」的竖排块
+     信息一条不少，靠换行与纵向排列撑开，字号不缩 */
+  .detail-table { font-size: 13px; }
+  .detail-table thead { display: none; }
+  .detail-table,
+  .detail-table tbody,
+  .detail-table tr,
+  .detail-table td { display: block; width: auto; }
+  .detail-table tr {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .detail-table td { border: 0; padding: 3px 0; overflow-wrap: anywhere; }
+  .detail-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .detail-table tr.support-row { background: rgba(255, 159, 26, 0.08); }
+
+  /* 长文本一律换行，不横向溢出 */
+  .detail-craft-name,
+  .craft-breakdown-item,
+  .formula-line { overflow-wrap: anywhere; }
+}

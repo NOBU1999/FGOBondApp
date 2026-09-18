@@ -101,8 +101,9 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    // 窄屏适配（阶段 2）：允许把窗口拉窄到手机宽度，方便在桌面上验证窄屏布局
+    minWidth: 360,
+    minHeight: 480,
     title: "FGO牵绊推荐器",
     backgroundColor: "#1e1e2e",
     webPreferences: {

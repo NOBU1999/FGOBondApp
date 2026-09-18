@@ -3097,7 +3097,7 @@ const App = {
               <div v-else class="fixed-mark">🔒</div>
             </template>
             <template v-else>
-              <span class="placeholder">{{ slot.isSupport ? '选择助战从者' : '点击选择从者' }}</span>
+              <span class="placeholder">{{ slot.isSupport ? '选择助战从者' : '从者' }}</span>
             </template>
             <div v-if="mode === 'crown' && slot.isCrown" class="crown-star" title="冠位从者位（允许两个加成礼装）">✴</div>
           </div>
@@ -3123,7 +3123,7 @@ const App = {
                 <div class="cell-effect">{{ craftEffect(cs.craft) }}</div>
               </template>
               <template v-else>
-                <span class="placeholder">{{ slot.isSupport ? '选择助战礼装' : (cs.index === 1 ? '第二礼装位' : '点击选择礼装') }}</span>
+                <span class="placeholder">{{ slot.isSupport ? '选择助战礼装' : (cs.index === 1 ? '第二礼装位' : '礼装') }}</span>
               </template>
             </div>
           </div>
@@ -3315,7 +3315,7 @@ const App = {
               </thead>
               <tbody>
                 <tr v-for="m in visibleResultTeam(r)" :key="m.position" :class="{ 'support-row': m.isSupport }">
-                  <td>
+                  <td data-label="位置">
                     <div>{{ positionLabel(m.position) }}</div>
                     <div class="detail-meta">
                       <span v-if="m.isSupport" class="detail-tag" style="color:var(--support);border-color:var(--support)">助战</span>
@@ -3323,19 +3323,19 @@ const App = {
                       <span v-if="m.isFixed" class="detail-tag" style="color:var(--danger);border-color:var(--danger)">固定</span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="从者">
                     <div class="detail-craft-name">{{ m.name || (servantMap[m.servantId] ? servantMap[m.servantId].name : '') || m.servantId }}</div>
                     <div class="text-muted">{{ resultMemberClass(m) }}</div>
                   </td>
-                  <td>{{ resultMemberStage(m) }}</td>
-                  <td>
+                  <td data-label="阶段">{{ resultMemberStage(m) }}</td>
+                  <td data-label="礼装">
                     <div v-for="cm in resultCraftItems(m)" :key="cm.index" class="detail-craft-detail">
                       <span class="detail-craft-name">{{ cm.craftName || '无礼装' }}</span>
                       <span v-if="cm.index === 1" class="detail-tag">第二礼装</span>
                     </div>
                     <div v-if="resultSettings.showCostBreakdown && !m.isSupport" class="text-muted detail-extra-line">{{ resultCostBreakdown(m) }}</div>
                   </td>
-                  <td>
+                  <td data-label="加成明细">
                     <div v-if="m.isSupport" class="text-muted">助战不参与个人收益</div>
                     <div v-else-if="m.bonusDetail" class="detail-bonus-chips">
                       <span v-for="bp in resultBonusParts(m)" :key="bp.label" class="chip">{{ bp.label }} {{ bp.value }}</span>
@@ -3347,7 +3347,7 @@ const App = {
                       </div>
                     </div>
                   </td>
-                  <td>
+                  <td data-label="个人倍率">
                     <template v-if="!m.isSupport && m.bonusDetail">
                       <div style="font-weight:700;color:var(--ok)">x{{ m.bonusDetail.totalMultiplier.toFixed(3) }}</div>
                       <div v-if="r.totalBondPoints" class="text-muted">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</div>
