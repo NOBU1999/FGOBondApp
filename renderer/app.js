@@ -2941,7 +2941,7 @@ const App = {
       if (!tokens.length) return;
       try {
         // 如果一次计算还合并了保存的“完整预设种子队伍”，会包含多段；
-        // 每段一行，reproduce_verification.py 支持逐行解密复现。
+        // 每段一行，便于逐行复制与核对。
         await window.fgo.copyText(tokens.join("\n"));
         this.verificationCopied = true;
         setTimeout(() => { this.verificationCopied = false; }, 2500);
