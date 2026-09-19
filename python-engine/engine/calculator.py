@@ -17,6 +17,43 @@ from .models import FRONT_POSITIONS, POSITIONS
 
 
 # ---------------------------------------------------------------------------
+# 特性匹配加速：位掩码
+# ---------------------------------------------------------------------------
+# 「某从者是否满足某礼装的触发条件」是搜索里最热的判断（一次搜索可达数百万次）。
+# 条件语义是「这一组特性名全都出现在该从者身上」；若给每个特性名分配一个二进制位，
+# 判断就退化成一次整数按位与：
+#     (traits_mask & group_mask) == group_mask
+# 空条件组（[]）在 all() 语义下恒成立，其掩码为 0，(x & 0) == 0 恒真，语义一致。
+_TRAIT_BITS: Dict[str, int] = {}
+
+
+def trait_bit(name: str) -> int:
+    """特性名 -> 二进制位（同名恒定，进程内单调分配）。"""
+    bit = _TRAIT_BITS.get(name)
+    if bit is None:
+        bit = 1 << len(_TRAIT_BITS)
+        _TRAIT_BITS[name] = bit
+    return bit
+
+
+def trait_mask_of(traits: Iterable[str]) -> int:
+    """把一组特性名编码成位掩码。"""
+    mask = 0
+    for name in traits:
+        mask |= trait_bit(name)
+    return mask
+
+
+def trait_group_masks(groups: Iterable[Iterable[str]]) -> Tuple[int, ...]:
+    """把「若干条件组」各自编码成掩码。"""
+    return tuple(trait_mask_of(g) for g in groups)
+
+
+# 阶段顺序（低 -> 高），避免在热路径里反复构造
+_STAGE_ORDER: Dict[str, int] = {s: i for i, s in enumerate(STAGES)}
+
+
+# ---------------------------------------------------------------------------
 # 运行时数据上下文
 # ---------------------------------------------------------------------------
 @dataclass
@@ -27,6 +64,16 @@ class ServantInfo:
     cost: int
     rarity: int
     traits: Dict[str, Set[str]] = field(default_factory=dict)  # stage -> trait names
+    # 阶段/灵衣 -> 特性掩码。惰性计算并缓存；traits 在载入后不再变化。
+    trait_masks: Dict[str, int] = field(default_factory=dict, compare=False, repr=False)
+
+    def mask_for(self, stage: str) -> int:
+        """该从者在指定阶段/灵衣下的特性掩码（阶段不存在时为 0 = 空特性集）。"""
+        mask = self.trait_masks.get(stage)
+        if mask is None:
+            mask = trait_mask_of(self.traits.get(stage, ()))
+            self.trait_masks[stage] = mask
+        return mask
 
 
 @dataclass
@@ -45,6 +92,11 @@ class CraftInfo:
     flat_bonus: float = 0.0
     repeatable: bool = False
     is_custom: bool = False
+    # 触发条件组 -> 掩码（由 __post_init__ 自动派生，任何构造路径都覆盖）
+    trigger_masks: Tuple[int, ...] = field(default=(), compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.trigger_masks = trait_group_masks(self.trigger_traits or ())
 
 
 @dataclass
@@ -57,6 +109,13 @@ class DataContext:
         if not servant:
             return set()
         return servant.traits.get(stage, set())
+
+    def servant_mask(self, servant_id: int, stage: str) -> int:
+        """该从者在指定阶段/灵衣下的特性掩码（从者不存在 = 0）。"""
+        servant = self.servants.get(servant_id)
+        if not servant:
+            return 0
+        return servant.mask_for(stage)
 
 
 def _load_all_servants(conn: sqlite3.Connection) -> Dict[int, ServantInfo]:
@@ -342,24 +401,29 @@ def match_trait_group(traits: Set[str], group: List[str]) -> bool:
     return all(t in traits for t in group)
 
 
-def trait_bonus_for_servant(
-    servant_traits: Set[str], crafts: Iterable[CraftInfo]
-) -> float:
-    """统计特性礼装中该从者满足的加成总和。"""
+def trait_bonus_for_mask(mask: int, crafts: Iterable[CraftInfo]) -> float:
+    """统计特性礼装中该从者满足的加成总和（位掩码版 = 逐个特性名判断的等价写法）。"""
     total = 0.0
     for craft in crafts:
         if craft.bonus_type != "trait" or not craft.is_bond_ce:
             continue
         # 每组条件都表示 AND；当前数据通常只有一组。若多组存在，按“满足任意一组”处理。
-        if any(match_trait_group(servant_traits, g) for g in craft.trigger_traits):
-            total += craft.bonus_value
+        for group_mask in craft.trigger_masks:
+            if (mask & group_mask) == group_mask:
+                total += craft.bonus_value
+                break
     return total
 
 
-def flat_bonus_for_servant(
+def trait_bonus_for_servant(
     servant_traits: Set[str], crafts: Iterable[CraftInfo]
 ) -> float:
-    """统计当前队伍中该从者能获得的“固定数值加成”总和。
+    """兼容入口：按特性名集合计算（内部转位掩码）。"""
+    return trait_bonus_for_mask(trait_mask_of(servant_traits), crafts)
+
+
+def flat_bonus_for_mask(mask: int, crafts: Iterable[CraftInfo]) -> float:
+    """统计当前队伍中该从者能获得的“固定数值加成”总和（位掩码版）。
 
     只统计自定义牵绊礼装里设置了 flat_bonus 的礼装。
     - 无条件礼装（bonus_type == universal）对所有非助战从者生效；
@@ -370,14 +434,22 @@ def flat_bonus_for_servant(
         if not craft.is_bond_ce or craft.flat_bonus <= 0:
             continue
         if craft.bonus_type == "trait":
-            if not any(match_trait_group(servant_traits, g) for g in craft.trigger_traits):
+            for group_mask in craft.trigger_masks:
+                if (mask & group_mask) == group_mask:
+                    break
+            else:
                 continue
-        elif craft.bonus_type == "universal":
-            pass
-        else:
+        elif craft.bonus_type != "universal":
             continue
         total += craft.flat_bonus
     return total
+
+
+def flat_bonus_for_servant(
+    servant_traits: Set[str], crafts: Iterable[CraftInfo]
+) -> float:
+    """兼容入口：按特性名集合计算（内部转位掩码）。"""
+    return flat_bonus_for_mask(trait_mask_of(servant_traits), crafts)
 
 
 def _state_score(
@@ -390,8 +462,7 @@ def _state_score(
     servant = ctx.servants.get(servant_id)
     if not servant:
         return 0.0
-    traits = servant.traits.get(state_key, set())
-    return trait_bonus_for_servant(traits, player_crafts)
+    return trait_bonus_for_mask(servant.mask_for(state_key), player_crafts)
 
 
 def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
@@ -417,8 +488,13 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
     support_second_craft = (
         ctx.crafts.get(team.support_second_craft_id) if team.support_second_craft_id is not None else None
     )
-    player_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
-    stage_order = {s: i for i, s in enumerate(STAGES)}
+    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
+    # 只有特性礼装才影响阶段选择；先把它们挑出来，避免每个阶段都遍历整份礼装表
+    # （本函数在一次搜索里会被调用几十万次，是最大的热点）。
+    trait_crafts = [
+        craft for craft in effect_crafts
+        if craft.bonus_type == "trait" and craft.is_bond_ce
+    ]
 
     for p in team.players:
         if p.stage_locked:
@@ -432,25 +508,28 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
         if not candidates:
             continue
 
-        max_score = max(
-            _state_score(ctx, p.servant_id, key, player_crafts)
+        if not trait_crafts:
+            # 没有任何特性礼装 → 每个阶段收益都是 0：优先取最高普通再临阶段，
+            # 若该从者没有普通再临数据再退到灵衣（与逐个比分的原逻辑等价）。
+            if asc_keys:
+                p.stage = asc_keys[-1]
+            elif costume_keys:
+                p.stage = min(costume_keys, key=lambda key: int(key.split("_", 1)[1]))
+            continue
+
+        # 每个阶段只算一次（原实现 max() 与列表推导各算一遍，等于算两次）
+        scores = {
+            key: trait_bonus_for_mask(servant.mask_for(key), trait_crafts)
             for key in candidates
-        )
-        best_asc = [
-            key
-            for key in asc_keys
-            if _state_score(ctx, p.servant_id, key, player_crafts) == max_score
-        ]
+        }
+        max_score = max(scores.values())
+        best_asc = [key for key in asc_keys if scores[key] == max_score]
         if best_asc:
-            p.stage = max(best_asc, key=lambda key: stage_order.get(key, -1))
+            p.stage = max(best_asc, key=lambda key: _STAGE_ORDER.get(key, -1))
             continue
 
         # 普通再临阶段达不到最高收益，才使用灵衣状态
-        best_costume = [
-            key
-            for key in costume_keys
-            if _state_score(ctx, p.servant_id, key, player_crafts) == max_score
-        ]
+        best_costume = [key for key in costume_keys if scores[key] == max_score]
         if best_costume:
             # 多个灵衣收益相同时取 costume_id 较小的一个，保持稳定
             p.stage = min(
@@ -536,6 +615,7 @@ def calculate_member_multiplier(
     support_craft: Optional[CraftInfo] = None,
     support_second_craft: Optional[CraftInfo] = None,
     support_in_front: bool = False,
+    trait_mask: Optional[int] = None,
 ) -> float:
     """计算单个非助战从者的最终倍率。
 
@@ -550,7 +630,11 @@ def calculate_member_multiplier(
     effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
     uni = universal_bonus(effect_crafts)
     sc = support_crafts_bonus(support_craft, support_second_craft)
-    tr = trait_bonus_for_servant(servant_traits, effect_crafts)
+    tr = (
+        trait_bonus_for_mask(trait_mask, effect_crafts)
+        if trait_mask is not None
+        else trait_bonus_for_servant(servant_traits, effect_crafts)
+    )
     max_bond_bonus = max_bond_count * 0.25
     return (
         (1.0 + front)
@@ -649,6 +733,7 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
             flat_bonuses.append(0.0)
             continue
         traits = ctx.servant_traits(p.servant_id, p.stage)
+        servant_mask = ctx.servant_mask(p.servant_id, p.stage)
         multipliers.append(
             calculate_member_multiplier(
                 servant_traits=traits,
@@ -661,9 +746,10 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
                 support_craft=support_craft,
                 support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
+                trait_mask=servant_mask,
             )
         )
-        flat_bonuses.append(flat_bonus_for_servant(traits, effect_crafts))
+        flat_bonuses.append(flat_bonus_for_mask(servant_mask, effect_crafts))
 
     total_flat = sum(flat_bonuses)
     return {

@@ -27,6 +27,7 @@ from .models import (
     CLASS_GROUPS,
     FRONT_POSITIONS,
     POSITIONS,
+    SORT_POINTS,
     STRATEGY_BALANCED,
     STRATEGY_TARGET_MAX,
     BoxServant,
@@ -46,12 +47,19 @@ GENERIC_BOND_CRAFT_IDS = frozenset({-20, -21, -22})
 
 
 def _repeatable_craft_ids(ctx: DataContext) -> Set[int]:
-    """返回引擎中允许重复布置的礼装 ID（内置通用5% + 用户标记可重复的礼装）。"""
-    ids = set(REPEATABLE_BOND_IDS)
-    for cid, craft in ctx.crafts.items():
-        if craft.repeatable:
-            ids.add(cid)
-    return ids
+    """返回引擎中允许重复布置的礼装 ID（内置通用5% + 用户标记可重复的礼装）。
+
+    该集合只取决于静态数据（每次计算都会新建 ctx），因此在 ctx 上缓存一次：
+    搜索内层会反复调用它，重复全表扫描是纯浪费。
+    """
+    cached = getattr(ctx, "_repeatable_ids_cache", None)
+    if cached is None:
+        cached = set(REPEATABLE_BOND_IDS)
+        for cid, craft in ctx.crafts.items():
+            if craft.repeatable:
+                cached.add(cid)
+        ctx._repeatable_ids_cache = cached
+    return cached
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +103,12 @@ class Blueprint:
 
 
 def _box_map(req: CalculationRequest) -> Dict[int, BoxServant]:
-    return {b.servant_id: b for b in req.box}
+    """Box 的索引视图。内层会反复调用，这里按请求缓存一份（只读使用）。"""
+    cached = getattr(req, "_box_map_cache", None)
+    if cached is None:
+        cached = {b.servant_id: b for b in req.box}
+        req._box_map_cache = cached
+    return cached
 
 
 def _choose_support_position(
@@ -318,15 +331,17 @@ def _max_possible_trait_bonus(
     if not info or not info.traits:
         return 0.0
     best = 0.0
-    for traits in info.traits.values():
+    for state_key in info.traits:
+        mask = info.mask_for(state_key)
         total = 0.0
         for cid in trait_craft_ids:
             craft = ctx.crafts.get(cid)
-            if craft and any(
-                calculator.match_trait_group(traits, g)
-                for g in craft.trigger_traits
-            ):
-                total += craft.bonus_value
+            if craft is None:
+                continue
+            for group_mask in craft.trigger_masks:
+                if (mask & group_mask) == group_mask:
+                    total += craft.bonus_value
+                    break
         if total > best:
             best = total
     return best
@@ -566,6 +581,35 @@ def _default_craft_combo_limit(req: CalculationRequest) -> int:
     """
     dynamic = int(_time_budget_seconds(req) * 200)
     return max(4000, min(12000, dynamic))
+
+
+def _default_sweep_limit(req: CalculationRequest) -> int:
+    """每轮粗搜评估多少个从者组合（从者组合等距抽样的上限）。
+
+    与 `_default_servant_combo_limit` 配合：后者决定候选池有多大，
+    这里决定实际跑多少个组合。上限越高覆盖越全，代价是线性变慢。
+
+    ⚠️ 实测（2026-09）：把这个上限从 1500 提到 3100（全枚举基础候选池）会让
+    部分玩法的最优分**下降**（crown_mode 10.72 → 10.24）——粗筛与精算共用同一个
+    去重集合，粗筛铺得越宽，精算阶段反而会跳过更多组合。扩大精算覆盖也补不回来。
+    所以在那个交互被修掉之前，这里保持 1500，不追求"全枚举"。
+    """
+    return max(200, min(1500, int(_time_budget_seconds(req) * 40)))
+
+
+def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
+    """用完整礼装组合精算多少个高分阵容（粗搜用的是每阵容专属 DP 近似解）。
+
+    预算越小能精算的就越少：每个阵容的精算成本约 0.35s（礼装组合上限全开时），
+    这里按“精算阶段最多占预算 30%”反推，上限 15。
+    """
+    by_budget = max(2, int(_time_budget_seconds(req) * 0.3 / 0.35))
+    return max(2, min(15, pool_size, by_budget))
+
+
+def _optimize_free_positions_enabled(req: CalculationRequest) -> bool:
+    """是否对精算阵容再做一次自由位全排列优化（只在算力最充足的两档开启）。"""
+    return req.timeout_ms >= 135000
 
 
 
@@ -962,9 +1006,11 @@ def _servant_can_match_craft_any_stage(
     info = ctx.servants.get(servant_id)
     if not info or not info.traits:
         return False
-    for traits in info.traits.values():
-        if any(calculator.match_trait_group(traits, g) for g in craft.trigger_traits):
-            return True
+    for state_key in info.traits:
+        mask = info.mask_for(state_key)
+        for group_mask in craft.trigger_masks:
+            if (mask & group_mask) == group_mask:
+                return True
     return False
 
 
@@ -994,10 +1040,10 @@ def _free_craft_benefits_team(
             return True
         if craft.bonus_type == "trait":
             if p.stage_locked:
-                traits = ctx.servant_traits(p.servant_id, p.stage)
+                mask = ctx.servant_mask(p.servant_id, p.stage)
                 if any(
-                    calculator.match_trait_group(traits, g)
-                    for g in (craft.trigger_traits or [])
+                    (mask & group_mask) == group_mask
+                    for group_mask in craft.trigger_masks
                 ):
                     return True
             elif _servant_can_match_craft_any_stage(ctx, p.servant_id, craft):
@@ -1194,13 +1240,25 @@ def _relaxed_team_constants(players: Sequence[_RelaxedPlayer]) -> Tuple[int, flo
     return max_bond_count, aura_total
 
 
+def _uses_points_scoring(req: CalculationRequest) -> bool:
+    """当前排序口径是否为「按点数」。
+
+    按点数必须要有基础牵绊数值；没填（0）时退回按倍率——否则“倍率×0+固定加成”
+    会让所有队伍同分，排序退化成枚举顺序、礼装优化失效。
+    """
+    return req.sort_mode == SORT_POINTS and float(req.base_bond or 0.0) > 0
+
+
 def _relaxed_percent_weight(req: CalculationRequest) -> float:
     """百分比加成折算成最终分数的权重。
 
-    有 base_bond 时走“点数 = 倍率 * base_bond”；没有 base_bond 且通常没有
-    自定义固定值时，搜索排序直接使用总倍率，因此权重为 1。
+    必须与 `_score_from_metrics` 的口径保持一致：
+    - 按点数：权重 = 基础牵绊（点数 = 倍率 × 基础牵绊 + 固定加成）；
+    - 按倍率：权重 = 1（搜索排序直接用总倍率）。
     """
-    return req.base_bond if req.base_bond else 1.0
+    if _uses_points_scoring(req):
+        return float(req.base_bond)
+    return 1.0
 
 
 def _relaxed_base_score(
@@ -1254,7 +1312,12 @@ def _relaxed_craft_score(
             continue
         percent_score += float(craft.bonus_value) * p.front_factor
         flat_score += float(craft.flat_bonus or 0.0)
-    return weight * percent_score + flat_score
+    score = weight * percent_score
+    if _uses_points_scoring(req):
+        # 只有点数口径才把「固定数值加成」计入分数；倍率口径下它不参与排序，
+        # 上界里也不该算（排除后上界依然只高不低，剪枝仍然安全）。
+        score += flat_score
+    return score
 
 
 def _make_craft_score_map(
@@ -1867,17 +1930,27 @@ def search_top_teams(
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
     seen: Set[Tuple[Any, ...]] = set()
     global_best_score: Optional[float] = None
+    # 是否因墙钟兜底而提前结束（正常情况为 False：工作量是确定性的，同样的请求结果一致）
+    truncated = [False]
     processed_total = 0
     evaluated_total = 0
     timeout_seconds = req.timeout_ms / 1000.0
 
     def _score_from_metrics(metrics, team, multipliers):
+        """返回 (排序分数, 稳定排序键)。
+
+        - 排序口径由 req.sort_mode 决定（倍率 / 点数）：这是**搜索目标**，不只是展示顺序；
+        - 排序键 = (分数, 另一口径的值)：同分时不再取决于枚举顺序，结果可复现。
+        """
         flat_bonuses = metrics.get("flatBonuses", [0.0] * len(multipliers))
         total_flat = metrics.get("totalFlatBonus", 0.0)
         total_mult = metrics["totalMultiplier"]
         base_bond = float(team.base_bond or 0.0)
-        use_points = bool(base_bond or total_flat)
-        total_score = (total_mult * base_bond + total_flat) if use_points else total_mult
+        # 点数口径需要基础牵绊；没填（0）时退回倍率，避免“只有固定加成时全体同分”
+        use_points = _uses_points_scoring(req)
+        points_value = total_mult * base_bond + total_flat
+        primary = points_value if use_points else total_mult
+        secondary = total_mult if use_points else points_value
 
         if req.strategy == STRATEGY_TARGET_MAX:
             target_id = req.target_servant_id
@@ -1891,8 +1964,8 @@ def search_top_teams(
                 target_value = multipliers[target_idx] * base_bond + flat_bonuses[target_idx]
             else:
                 target_value = multipliers[target_idx]
-            return target_value * 10000 + total_score
-        if req.strategy == STRATEGY_BALANCED:
+            score = target_value * 10000 + primary
+        elif req.strategy == STRATEGY_BALANCED:
             vals = (
                 [m * base_bond + f for m, f in zip(multipliers, flat_bonuses)]
                 if use_points
@@ -1900,8 +1973,11 @@ def search_top_teams(
             )
             avg = (sum(vals) / len(vals)) if vals else 0
             variance = sum((v - avg) ** 2 for v in vals) / len(vals) if vals else 0
-            return total_score * 0.85 - variance * 2.0
-        return total_score
+            score = primary * 0.85 - variance * 2.0
+        else:
+            score = primary
+        # 分数取 9 位小数再比较：等价于原来的 1e-9 容差，避免浮点噪声来回抖
+        return score, (round(score, 9), round(secondary, 9))
 
     def _optimize_free_positions(team):
         """对自由位从者做小规模全排列优化，避免启发式放位漏掉明显更好的交换。
@@ -1970,12 +2046,12 @@ def search_top_teams(
 
         best_team = team
         initial_metrics = calculator.calculate_team_metrics(ctx, team)
-        best_score = _score_from_metrics(initial_metrics, team, initial_metrics["multipliers"])
+        best_score, _ = _score_from_metrics(initial_metrics, team, initial_metrics["multipliers"])
         for perm in set(itertools.permutations(current_sids)):
             candidate = build_candidate(perm)
             candidate = calculator.optimize_team_stages(ctx, candidate)
             metrics = calculator.calculate_team_metrics(ctx, candidate)
-            score = _score_from_metrics(metrics, candidate, metrics["multipliers"])
+            score, _ = _score_from_metrics(metrics, candidate, metrics["multipliers"])
             if score > best_score + 1e-9:
                 best_score = score
                 best_team = candidate
@@ -2121,12 +2197,13 @@ def search_top_teams(
 
                     metrics = calculator.calculate_team_metrics(ctx, team)
                     evaluated_total += 1
-                    score = _score_from_metrics(metrics, team, metrics["multipliers"])
+                    score, rank_key = _score_from_metrics(metrics, team, metrics["multipliers"])
 
                     old = best_by_set.get(servant_set)
-                    if old is None or score > old["score"] + 1e-9:
+                    if old is None or rank_key > old["rank_key"]:
                         best_by_set[servant_set] = {
                             "score": score,
+                            "rank_key": rank_key,
                             "team": team,
                             "servant_set": servant_set,
                         }
@@ -2151,10 +2228,12 @@ def search_top_teams(
             else _generate_servant_combinations(candidate_ids, choose_count)
         )
         for extras_tuple in combos_iter:
-            if max_processed is not None:
-                if processed >= max_processed:
-                    break
-            elif time.time() >= deadline:
+            # 工作量优先：先按确定性数量跑（同样的请求 → 同样的搜索量 → 同样的结果），
+            # 墙钟只作为兜底安全网（真机上机器特别慢时才会触发，此时结果会标 truncated）。
+            if max_processed is not None and processed >= max_processed:
+                break
+            if time.time() >= deadline:
+                truncated[0] = True
                 report("达到时间预算，提前结束当前轮搜索")
                 break
             used_players = set(bp.fixed_servant_ids) | set(extras_tuple)
@@ -2187,11 +2266,11 @@ def search_top_teams(
     # 粗搜：只对每个被抽到的从者阵容跑“该阵容专属 DP 礼装组合”，
     # 尽量覆盖更多从者组合；完整礼装组合留给少量 Top 精算。
     full_combos = list(craft_combos_with_cost)
-    servant_sweep_limit = max(200, min(1500, int(timeout_seconds * 40)))
+    servant_sweep_limit = _default_sweep_limit(req)
 
     # 第一轮：用静态分候选池快速建立 Top 基线（对从者组合等距抽样，覆盖更广）。
     first_deadline = start + min(timeout_seconds, max(5.0, timeout_seconds * 0.5))
-    first_limit = int(phase_limits.get("firstProcessed", 0)) if phase_limits else None
+    first_limit = int(phase_limits.get("firstProcessed", 0)) if phase_limits else servant_sweep_limit
     before_first = processed_total
     run_with_craft_combos(
         reduced,
@@ -2209,7 +2288,8 @@ def search_top_teams(
     if phase_limits is not None:
         should_run_second = bool(phase_limits.get("secondRan"))
     else:
-        should_run_second = time.time() < start + timeout_seconds - 3 and bool(best_by_set)
+        # 确定性：只要第一轮有结果、且没有触发墙钟兜底，就跑第二轮（不再看剩余时间）
+        should_run_second = bool(best_by_set) and not truncated[0]
     if should_run_second:
         used_trait_craft_ids = _collect_used_trait_craft_ids(ctx, best_by_set)
         expanded = _expand_reduced_for_trait_synergy(
@@ -2226,7 +2306,7 @@ def search_top_teams(
             added = len(expanded) - len(reduced)
             report(f"第二轮补入 {added} 名协同候选，继续搜索...")
             second_deadline = start + min(timeout_seconds, max(5.0, timeout_seconds * 0.75))
-            second_limit = int(phase_limits.get("secondProcessed", 0)) if phase_limits else None
+            second_limit = int(phase_limits.get("secondProcessed", 0)) if phase_limits else servant_sweep_limit
             before_second = processed_total
             run_with_craft_combos(
                 expanded,
@@ -2240,10 +2320,10 @@ def search_top_teams(
             second_ran = True
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
-    refine_count = max(5, min(15, len(best_by_set)))
+    refine_count = _default_refine_count(req, len(best_by_set))
     refine_entries = sorted(
         best_by_set.values(),
-        key=lambda x: x["score"],
+        key=lambda x: x["rank_key"],
         reverse=True,
     )[:refine_count]
     refine_deadline = start + timeout_seconds
@@ -2253,7 +2333,9 @@ def search_top_teams(
         if phase_limits is not None:
             if refine_processed >= int(phase_limits.get("refineProcessed", 0)):
                 break
-        elif time.time() >= refine_deadline:
+        # 精算数量是确定性的（refine_entries 已按预算截断）；墙钟只作兜底
+        if time.time() >= refine_deadline:
+            truncated[0] = True
             break
         refine_processed += 1
         servant_set = entry.get("servant_set")
@@ -2265,12 +2347,14 @@ def search_top_teams(
     # 精算后对每个进入精算的从者阵容做一次自由位排列优化，修正启发式放位漏掉的交换。
     # 该兜底有额外算力成本，只保留在最后两个高算力档位（高质量/极限精算）。
     optimize_processed = 0
-    if req.timeout_ms >= 135000:
+    if _optimize_free_positions_enabled(req):
         for entry in refine_entries:
             if phase_limits is not None:
                 if optimize_processed >= int(phase_limits.get("optimizeProcessed", 0)):
                     break
-            elif time.time() >= refine_deadline:
+            # 同样是确定性数量；墙钟只作兜底
+            if time.time() >= refine_deadline:
+                truncated[0] = True
                 break
             optimize_processed += 1
             servant_set = entry.get("servant_set")
@@ -2281,17 +2365,18 @@ def search_top_teams(
                 continue
             optimized = _optimize_free_positions(current["team"])
             metrics = calculator.calculate_team_metrics(ctx, optimized)
-            score = _score_from_metrics(metrics, optimized, metrics["multipliers"])
-            if score > current["score"] + 1e-9:
+            score, rank_key = _score_from_metrics(metrics, optimized, metrics["multipliers"])
+            if rank_key > current["rank_key"]:
                 current["team"] = optimized
                 current["score"] = score
+                current["rank_key"] = rank_key
                 if global_best_score is None or score > global_best_score:
                     global_best_score = score
 
     report("排序输出...")
     best_items = sorted(
         best_by_set.values(),
-        key=lambda x: x["score"],
+        key=lambda x: x["rank_key"],
         reverse=True,
     )[: req.top_n]
     top = []
@@ -2305,6 +2390,9 @@ def search_top_teams(
         "status": "success",
         "totalCandidates": total_candidates,
         "top20": top,
+        "sortMode": req.sort_mode,
+        # 是否因时间兜底提前结束：False = 本次结果是"跑完确定工作量"得到的，可复现
+        "truncated": truncated[0],
         "_elapsed": round(time.time() - start, 3),
         "_processed": processed_total,
         "_verifyPhase": {

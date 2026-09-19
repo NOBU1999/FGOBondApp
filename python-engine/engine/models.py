@@ -44,6 +44,10 @@ STRATEGY_TOTAL_MAX = "total_max"
 STRATEGY_TARGET_MAX = "target_max"
 STRATEGY_BALANCED = "balanced"
 
+# 结果排序口径（搜索目标，不只是展示顺序）
+SORT_MULTIPLIER = "multiplier"  # 按总倍率（默认）
+SORT_POINTS = "points"          # 按总牵绊点数（倍率 × 基础牵绊 + 固定数值加成）
+
 # 策略中“指定从者”的字段名
 TARGET_SERVANT_KEY = "targetServantId"
 
@@ -124,6 +128,8 @@ class CalculationRequest:
     class_group: Optional[str] = None  # saber/ex1/ex2...；None=不限
     crown_positions: Set[str] = field(default_factory=set)
     base_bond: float = 0.0  # 基础牵绊获取数值（默认0）
+    # 排序口径：默认按倍率；"points" 时按 倍率×基础牵绊 + 固定数值加成
+    sort_mode: str = SORT_MULTIPLIER
     # 算法参数
     candidate_pool_size: int = 30
     craft_pool_size: int = 50
@@ -250,6 +256,17 @@ def parse_support(raw: Any) -> Optional[SupportConfig]:
 def parse_request(data: Dict[str, Any]) -> CalculationRequest:
     """把输入 JSON 转为 CalculationRequest。"""
     strategy = data.get("strategy") or STRATEGY_TOTAL_MAX
+    base_bond = float(data.get("baseBond", 0) or 0)
+    # 排序口径：显式给了就用它；没给（老客户端 / 老预设 / 旧验证串）时保持旧行为——
+    # 填了基础牵绊按点数，没填按倍率（按倍率可避免“只有固定加成时全体并列”）。
+    raw_sort = str(data.get("sortMode") or "").strip().lower()
+    if raw_sort in (SORT_MULTIPLIER, SORT_POINTS):
+        sort_mode = raw_sort
+    else:
+        sort_mode = SORT_POINTS if base_bond > 0 else SORT_MULTIPLIER
+    # 按点数需要基础牵绊；没填时退回按倍率（保证返回的 sortMode 与实际口径一致）
+    if sort_mode == SORT_POINTS and base_bond <= 0:
+        sort_mode = SORT_MULTIPLIER
     req = CalculationRequest(
         box=parse_box(data.get("box") or []),
         fixed_servants=parse_fixed_servants(data.get("fixedServants") or []),
@@ -268,7 +285,8 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         crown_positions={
             str(x) for x in (data.get("crownPositions") or [])
         },
-        base_bond=float(data.get("baseBond", 0) or 0),
+        base_bond=base_bond,
+        sort_mode=sort_mode,
         top_n=int(data.get("topN", 20) or 20),
         timeout_ms=int(data.get("timeoutMs", 10000) or 10000),
     )
