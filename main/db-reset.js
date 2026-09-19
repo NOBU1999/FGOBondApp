@@ -68,14 +68,20 @@ function countStatic(dbPath) {
   }
 }
 
+// 仅允许字母、数字、下划线，防止表名被篡改后拼接进 SQL 造成注入
+const SAFE_TABLE_NAME = /^[A-Za-z0-9_]+$/;
+
 function clearStaticTables(dbPath) {
   const db = database.open(dbPath);
   try {
     database.ensureSchema(db);
     const cleared = {};
     for (const table of STATIC_TABLES) {
+      if (!SAFE_TABLE_NAME.test(table)) {
+        throw new Error("非法表名：" + table);
+      }
       try {
-        cleared[table] = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c || 0);
+        cleared[table] = Number(db.prepare('SELECT COUNT(*) AS c FROM "' + table + '"').get().c || 0);
       } catch (_) {
         cleared[table] = -1; // 表不存在
       }
@@ -83,7 +89,7 @@ function clearStaticTables(dbPath) {
     db.exec("BEGIN");
     try {
       for (const table of STATIC_TABLES) {
-        if (cleared[table] >= 0) db.exec(`DELETE FROM "${table}"`);
+        if (cleared[table] >= 0) db.exec('DELETE FROM "' + table + '"');
       }
       db.exec("COMMIT");
     } catch (err) {
