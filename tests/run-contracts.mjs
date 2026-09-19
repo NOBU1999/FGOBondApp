@@ -480,6 +480,20 @@ async function runEngineSuite() {
           problems.push(`验证串应匹配 /${exp.tokenMatches}/，实际 ${JSON.stringify(token.slice(0, 24))}`);
         }
       }
+      if (exp.sortModeEq !== undefined && result.sortMode !== exp.sortModeEq) {
+        problems.push(`sortMode 应为 ${exp.sortModeEq}，实际 ${JSON.stringify(result.sortMode)}`);
+      }
+      if (exp.top20MonotonicBy !== undefined) {
+        const key = exp.top20MonotonicBy === "points" ? "totalBondPoints" : "totalMultiplier";
+        for (let i = 1; i < top.length; i += 1) {
+          const prev = Number(top[i - 1][key] || 0);
+          const cur = Number(top[i][key] || 0);
+          if (cur > prev + 1e-9) {
+            problems.push(`Top20 未按 ${exp.top20MonotonicBy} 单调不增（第 ${i + 1} 名大于第 ${i} 名）`);
+            break;
+          }
+        }
+      }
       if (exp.sameAsPrevious) {
         if (!previous) problems.push("没有上一条结果可供比较");
         else if (!same(normalizeEngineResult(result), normalizeEngineResult(previous))) {

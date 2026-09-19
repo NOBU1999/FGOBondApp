@@ -224,6 +224,8 @@ const App = {
       customTraitInputs: [],
       crownClass: "all",
       baseBond: 0,
+      // 排序口径（= 搜索目标）：默认按倍率；选了"按点数"且填了基础牵绊才按点数
+      sortMode: "multiplier",
       costLimit: 116,
       strategy: "total_max",
       qualityMode: "balanced",
@@ -797,7 +799,7 @@ const App = {
       lines.push("");
       lines.push("【选中的方案】");
       for (const r of selected) {
-        lines.push(`方案 #${r.rank}：x${Number(r.totalMultiplier).toFixed(3)}｜Cost ${r.costUsed}/${this.costLimit}${r.totalBondPoints ? `｜预计牵绊 ${this.formatBondNumber(r.totalBondPoints)}` : ""}`);
+        lines.push(`方案 #${r.rank}：x${Number(r.totalMultiplier).toFixed(3)}｜Cost ${r.costUsed}/${this.costLimit}${this.showsBondPoints(r) ? `｜预计牵绊 ${this.formatBondNumber(r.totalBondPoints)}` : ""}`);
         for (const m of r.team || []) {
           const name = m.isSupport ? `助战 ${this.resultMemberName(m)}` : this.resultMemberName(m);
           const crafts = this.resultCraftItems(m)
@@ -2130,6 +2132,7 @@ const App = {
       this.targetServantId = null;
       this.targetServantKeyword = "";
       this.baseBond = 0;
+      this.sortMode = "multiplier";
       this.mode = "normal";
       this.crownClass = "all";
       this.results = [];
@@ -2212,6 +2215,7 @@ const App = {
         crownClass: this.crownClass,
         crownPositions,
         baseBond: Number(this.baseBond || 0),
+        sortMode: this.sortMode === "points" ? "points" : "multiplier",
         fixedServants,
         fixedCrafts,
         supportId: support.servantId,
@@ -2282,6 +2286,7 @@ const App = {
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
       this.baseBond = Number(preset.baseBond || 0);
+      this.sortMode = preset.sortMode === "points" ? "points" : "multiplier";
       this.presetModalVisible = false;
     },
     async deletePreset(preset) {
@@ -2560,6 +2565,7 @@ const App = {
         classGroup: this.mode === "crown" && this.crownClass && this.crownClass !== "all" ? this.crownClass : null,
         crownPositions: this.mode === "crown" ? crownPositions : [],
         baseBond: Number(this.baseBond || 0),
+        sortMode: this.sortMode === "points" && Number(this.baseBond || 0) > 0 ? "points" : "multiplier",
         fixedServants,
         fixedCrafts,
         support,
@@ -2612,6 +2618,7 @@ const App = {
         classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
         crownPositions,
         baseBond: Number(preset.baseBond !== undefined ? preset.baseBond : this.baseBond || 0),
+        sortMode: preset.sortMode === "points" ? "points" : "multiplier",
         fixedServants: preset.fixedServants || [],
         fixedCrafts: preset.fixedCrafts || [],
         support,
@@ -2640,8 +2647,15 @@ const App = {
       });
     },
     resultSortValue(r) {
-      if (r.totalBondPoints) return Number(r.totalBondPoints);
+      // 排序口径跟搜索口径一致：默认按倍率；只有选了"按点数"且填了基础牵绊时才按点数
+      if (this.sortMode === "points" && Number(r.baseBond || 0) > 0) {
+        return Number(r.totalBondPoints || 0);
+      }
       return Number(r.totalMultiplier || 0);
+    },
+    /** 是否展示"预计牵绊点数"：没填基础牵绊时那个数只是固定加成部分，容易误导 */
+    showsBondPoints(r) {
+      return !!r && Number(r.baseBond || 0) > 0 && Number(r.totalBondPoints || 0) !== 0;
     },
     resultTeamKey(r) {
       return JSON.stringify((r.team || []).map((m) => [m.position, m.servantId, m.craftId, m.secondCraftId]));
@@ -3164,16 +3178,29 @@ const App = {
           <div class="field">
             <label>计算质量 / 等待时间</label>
             <select v-model="qualityMode">
-              <option value="fast">快速（约 35 秒）</option>
-              <option value="balanced">平衡（约 60 秒）</option>
-              <option value="high">高质量（约 135 秒）</option>
-              <option value="extreme">极限精算（约 300 秒）</option>
+              <option value="fast">快速（通常 2 秒，最多 35 秒）</option>
+              <option value="balanced">平衡（通常 3 秒，最多 60 秒）</option>
+              <option value="high">高质量（通常 3 秒，最多 135 秒）</option>
+              <option value="extreme">极限精算（通常 3 秒，最多 300 秒）</option>
             </select>
+            <div class="text-muted">
+              引擎已提速：各档都在几秒内出结果（算完就返回）；档位越高探索越全，结果通常相同。
+            </div>
           </div>
           <div class="field">
             <label>基础牵绊获取数值（默认0）</label>
             <input type="number" min="0" step="1" v-model.number="baseBond" placeholder="0" />
             <div class="text-muted">填 0 时结果只显示倍率；填实际基础值后显示预计牵绊数。</div>
+          </div>
+          <div v-if="Number(baseBond) > 0" class="field">
+            <label>结果排序（也是搜索目标）</label>
+            <select v-model="sortMode">
+              <option value="multiplier">按倍率（默认）</option>
+              <option value="points">按牵绊点数</option>
+            </select>
+            <div class="text-muted">
+              按倍率：排"加成百分比"最高的队伍；按牵绊点数：按"倍率 × 基础牵绊 + 固定数值加成"排。
+            </div>
           </div>
           <div v-if="strategy === 'target_max'" class="field target-field">
             <label>指定从者</label>
@@ -3269,7 +3296,7 @@ const App = {
         <div v-for="r in pagedResults" :key="r.rank" class="result-card">
           <div class="head">
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
-            <span v-if="r.totalBondPoints" class="text-muted"><template v-if="r.baseBond">基础 {{ formatBondNumber(r.baseBond) }} → </template>预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
+            <span v-if="showsBondPoints(r)" class="text-muted"><template v-if="r.baseBond">基础 {{ formatBondNumber(r.baseBond) }} → </template>预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
             <span class="text-muted">Cost {{ r.costUsed }}/{{ costLimit }}</span>
             <label class="compare-toggle" title="勾选后可多选方案用于“复制反馈摘要”或方案对比">
               <input type="checkbox" :checked="compareSelectedRanks.includes(r.rank)" @change="toggleCompareResult(r)" />
@@ -3305,14 +3332,14 @@ const App = {
                 <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
                 <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
                 <span v-if="!m.isSupport" class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
-                <span v-if="r.totalBondPoints && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
+                <span v-if="showsBondPoints(r) && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
               </div>
             </div>
           </div>
           <div v-if="expandedResult === r" class="result-detail">
             <div class="detail-summary">
               <div class="summary-item"><span class="label">总倍率</span><span class="value">x{{ Number(r.totalMultiplier).toFixed(3) }}</span></div>
-              <div v-if="r.totalBondPoints" class="summary-item"><span class="label">预计总牵绊</span><span class="value">{{ formatBondNumber(r.totalBondPoints) }}</span></div>
+              <div v-if="showsBondPoints(r)" class="summary-item"><span class="label">预计总牵绊</span><span class="value">{{ formatBondNumber(r.totalBondPoints) }}</span></div>
               <div class="summary-item"><span class="label">Cost 使用</span><span class="value">{{ r.costUsed }}/{{ costLimit }}</span></div>
               <div class="summary-item"><span class="label">基础牵绊</span><span class="value">{{ formatBondNumber(r.baseBond || 0) }}</span></div>
               <div v-if="r.maxBondStats && r.maxBondStats.count" class="summary-item"><span class="label">满绊共享加成</span><span class="value">{{ r.maxBondStats.count }} 人 × 25%</span></div>
@@ -3365,7 +3392,7 @@ const App = {
                   <td data-label="个人倍率">
                     <template v-if="!m.isSupport && m.bonusDetail">
                       <div style="font-weight:700;color:var(--ok)">x{{ m.bonusDetail.totalMultiplier.toFixed(3) }}</div>
-                      <div v-if="r.totalBondPoints" class="text-muted">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</div>
+                      <div v-if="showsBondPoints(r)" class="text-muted">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</div>
                     </template>
                   </td>
                 </tr>
@@ -3714,11 +3741,12 @@ const App = {
         <div class="field">
           <label>计算质量 / 等待时间</label>
           <select v-model="qualityMode">
-            <option value="fast">快速（约 35 秒）</option>
-            <option value="balanced">平衡（约 60 秒）</option>
-            <option value="high">高质量（约 135 秒）</option>
-            <option value="extreme">极限精算（约 300 秒）</option>
+            <option value="fast">快速（通常 2 秒，最多 35 秒）</option>
+            <option value="balanced">平衡（通常 3 秒，最多 60 秒）</option>
+            <option value="high">高质量（通常 3 秒，最多 135 秒）</option>
+            <option value="extreme">极限精算（通常 3 秒，最多 300 秒）</option>
           </select>
+          <div class="text-muted">引擎已提速：各档都在几秒内出结果；档位越高探索越全。</div>
         </div>
         <div v-if="strategy === 'target_max'" class="field">
           <label>指定从者</label>

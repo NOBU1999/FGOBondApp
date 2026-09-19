@@ -74,6 +74,92 @@
         "$boxRefs": 8
       },
       "expect": { "sameAsPrevious": true }
+    },
+    {
+      "name": "排序口径：没填基础牵绊 → 按倍率，且列表按倍率单调不增",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "sortModeEq": "multiplier",
+        "top20MonotonicBy": "multiplier"
+      }
+    },
+    {
+      "name": "排序口径：填了基础牵绊 + 显式按点数 → 按点数单调不增",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "baseBond": 1200,
+        "sortMode": "points",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "sortModeEq": "points",
+        "top20MonotonicBy": "points"
+      }
+    },
+    {
+      "name": "排序口径：填了基础牵绊但没指定 → 保持旧行为（按点数）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "baseBond": 1200,
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "sortModeEq": "points",
+        "top20MonotonicBy": "points"
+      }
+    },
+    {
+      "name": "排序口径：按点数但没填基础牵绊 → 退回按倍率（不再全体同分）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "sortMode": "points",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "sortModeEq": "multiplier",
+        "top20MonotonicBy": "multiplier"
+      }
+    },
+    {
+      "name": "排序口径：填了基础牵绊但显式按倍率 → 按倍率单调不增",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "baseBond": 1200,
+        "sortMode": "multiplier",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "sortModeEq": "multiplier",
+        "top20MonotonicBy": "multiplier"
+      }
     }
   ]
 }

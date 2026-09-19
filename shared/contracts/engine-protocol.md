@@ -19,6 +19,8 @@ npm run test:contracts -- --suite engine     # 6 条用例：错误路径 + 结�
   4. 小 Box 出解：`top20` 非空、每队 6 人、位置集合 = 6 个标准位置、`costUsed ≤ costLimit`、`totalMultiplier > 0`
   5. **未知字段必须被忽略**（传 `protocolVersion` / 垃圾字段不影响结果）
   6. **同一请求重复执行结果一致**（`_` 前缀诊断字段与验证串不参与比较）
+  7. **排序口径**：`sortMode` 缺省时按旧行为（有 `baseBond` → 点数，否则倍率）；
+     `"points"` 但 `baseBond = 0` 时退回 `"multiplier"`；返回的 `top20` 必按生效口径单调不增
 - `protocolVersion` 现状：宿主**可以**传（引擎忽略未知字段）；引擎**暂不返回**它。
   阶段 4 起由宿主校验版本，届时此条升级并同步 +1。
 - 传输方式：生产宿主用管道（stdin/stdout）。测试在受限环境（沙箱 / CI 禁止管道）下会改用
@@ -80,11 +82,27 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `classGroup` | `string`（别名 `classFilter`） | `null` | 限定职阶组；`all` / 空 = 不限 |
 | `crownPositions` | `string[]` | `[]` | 启用冠位第二礼装位的位置 |
 | `baseBond` | `float` | `0` | 基础牵绊值 |
+| `sortMode` | `"multiplier" \| "points"` | 见下 | **排序口径 = 搜索目标**（不只是展示顺序） |
 | `candidatePoolSize` | `int` | `30` | 候选从者池大小 |
 | `craftPoolSize` | `int` | `10` | 候选礼装池大小 |
 | `topN` | `int` | `20` | 返回前几名 |
-| `timeoutMs` | `int` | `10000` | 计算时限（**墙钟**，会影响结果条数 / 名次稳定性） |
+| `timeoutMs` | `int` | `10000` | 计算时限（墙钟兜底；实际工作量按它标定成**确定性**数量） |
 | `targetServantId` | `int \| null` | `null` | 指定从者最大化策略必填 |
+
+**`sortMode` 口径（v1 起）**
+
+| 取值 | 目标 | 说明 |
+|---|---|---|
+| `"multiplier"` | 总分 = 总倍率 | 默认口径；固定数值加成**不参与排序**（仍照常显示） |
+| `"points"` | 总分 = 总倍率 × `baseBond` + 固定数值加成 | 需要 `baseBond > 0`；否则自动退回 `multiplier` |
+
+缺省（老客户端 / 老预设 / 旧验证串不带该字段）时保持 v0 的旧行为：
+`baseBond > 0` → `points`，否则 → `multiplier`。返回结果里的 `sortMode` 一定是**实际生效**的口径。
+
+> ⚠️ 为什么必须显式区分：早期实现按「有基础牵绊 **或** 有固定数值加成」就切点数口径，
+> 于是 `baseBond = 0` + 任意「固定 +N 牵绊」礼装（如通用英灵肖像）时，
+> 所有队伍的总分都等于同一份固定加成 → **全体同分**，排序退化成枚举顺序、礼装优化失效。
+> 现在口径由 `sortMode` 明确指定，且与剪枝上界的口径保持一致。
 
 > 说明：请求里所有"个人数值"（`personalBonus` / `auraBonus` / `traits` 等）由界面侧的 Box 携带，
 > 引擎不读玩家的个人数据 → 这也是"验证串能复现"的基础（复现模式把 Box 快照塞进验证串）。
@@ -97,6 +115,9 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 |---|---|
 | `status` | `"success"` |
 | `topN`（如 `top20`） | `TeamSolution[]`，按分数降序 |
+| `sortMode` | 本次**实际生效**的排序口径（`multiplier` / `points`） |
+| `totalCandidates` | 入榜的从者阵容数 |
+| `truncated` | `true` = 因时间兜底提前结束（结果随机器速度可能不同）；正常为 `false` |
 | `verificationToken` | 复现模式验证串（`FGOBONDV3.` 开头，PPMd + Base64URL） |
 | `verificationTokenFull` | 完整模式验证串（含全部游戏数据，体积约为复现模式的 1.5 倍） |
 
@@ -120,5 +141,6 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 - [ ] 加 `protocolVersion`，引擎与宿主各自校验，版本不匹配直接报错
 - [ ] 每个字段的取值约束与错误文案表（现在散在 `models.py` / `calculator.py` 里）
 - [ ] 固定测试用例：同一请求 → 结果快照，三平台共用（放 `tests/`）
-- [ ] 明确"墙钟超时"的语义：`timeoutMs` 到点即返回已找到的解，还是必须凑满 `topN`
+- [x] 明确"墙钟超时"的语义：工作量按 `timeoutMs` 标定为**确定性数量**（同样的请求 → 同样的搜索量 → 同样的结果）；
+      `timeoutMs` 只作兜底，触发时结果里 `truncated = true`（宿主可据此提示"机器太慢，本次结果可能偏少"）
 - [ ] WASM 可行性实测：`sqlite3`（浏览器虚拟 FS）+ 数据落盘的启动耗时与内存占用
