@@ -108,6 +108,10 @@ function ensureMissingAvatars() {
     log("跳过：找不到 scripts/fetch_missing_avatars.py");
     return;
   }
+  const bonusFile = path.join(ROOT, "db", "event_bond_bonus.json");
+  if (!existsSync(bonusFile)) {
+    log("⚠️ 缺少 db/event_bond_bonus.json（先跑一次「更新数据」；本次包内将没有活动牵绊表）");
+  }
   const python = process.env.PYTHON || "python";
   try {
     run(python, [script, "--no-repack", "--db", path.join(ROOT, "db", "fgo_data.db")]);

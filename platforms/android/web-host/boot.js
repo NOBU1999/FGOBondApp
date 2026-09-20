@@ -246,7 +246,19 @@
         dbPath: DB_FILE_IN_APP,
         version: window.__FGO_APP_VERSION || "",
         platformName: "android",
-        getEventBondBonuses: () => [],
+        getEventBondBonuses: async () => {
+          // 安卓端：活动牵绊表随包发布，直接从 www 根目录取（桌面端由主进程读 db 目录）
+          try {
+            const resp = await fetch("./db/event_bond_bonus.json", { cache: "no-store" });
+            if (!resp.ok) return [];
+            const data = await resp.json();
+            if (Array.isArray(data)) return data;
+            if (data && Array.isArray(data.events)) return data.events;
+            return [];
+          } catch (_) {
+            return [];
+          }
+        },
       },
     });
 

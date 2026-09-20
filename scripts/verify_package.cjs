@@ -189,6 +189,20 @@ function verifyAppDir(appDir) {
     else fail(`缺少必需文件 ${must}`);
   }
   checkSeed("种子库", path.join(appDir, "db", "fgo_data.seed.db"));
+  // 活动牵绊表随包发布：存在则必须是合法 JSON；缺失只警告（它由「更新数据」生成）
+  {
+    const bonusPath = path.join(appDir, "db", "event_bond_bonus.json");
+    if (fs.existsSync(bonusPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(bonusPath, "utf8"));
+        ok(`活动牵绊表 ${Array.isArray(parsed) ? parsed.length + " 条" : "（非数组结构）"}`);
+      } catch (err) {
+        fail("活动牵绊表不是合法 JSON：" + err.message);
+      }
+    } else {
+      log("包内没有 db/event_bond_bonus.json（出包前先跑一次「更新数据」）");
+    }
+  }
 
   // app.asar 内部（代码主体）也扫一遍
   let asar = null;

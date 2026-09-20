@@ -77,6 +77,10 @@
         "to": "db/fgo_data.seed.db"
       },
       {
+        "from": "db/event_bond_bonus.json",
+        "to": "db/event_bond_bonus.json"
+      },
+      {
         "from": "使用说明.txt",
         "to": "使用说明.txt"
       }
