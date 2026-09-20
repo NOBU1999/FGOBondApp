@@ -292,7 +292,8 @@ const App = {
         compareMode: false,
         feedbackMode: "brief",
         pageSize: 50,
-        resultTopN: 1000,
+        // 结果条数同时也是引擎的"搜索止损线"：条数越多，剪枝越晚生效、算得越慢 → 默认 200
+        resultTopN: 200,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -2577,7 +2578,7 @@ const App = {
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
-        topN: Number(this.resultSettings.resultTopN) || 1000,
+        topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
         timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
       };
@@ -2630,7 +2631,7 @@ const App = {
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
-        topN: Number(this.resultSettings.resultTopN) || 1000,
+        topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
         timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
       };
@@ -4061,11 +4062,19 @@ const App = {
           <label class="settings-row">
             <span>结果最多计算数量</span>
             <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
-              <option :value="100">100</option>
-              <option :value="300">300</option>
-              <option :value="1000">1000（默认）</option>
+              <option :value="20">20 条（最快）</option>
+              <option :value="50">50 条（快）</option>
+              <option :value="100">100 条</option>
+              <option :value="200">200 条（默认）</option>
+              <option :value="500">500 条（慢）</option>
+              <option :value="1000">1000 条（最慢）</option>
             </select>
           </label>
+          <div class="text-muted" style="margin:-4px 0 10px">
+            这个数字同时也是引擎的"搜索止损线"：条数越多，剪枝生效得越晚 → 算得越慢（最多能差十几倍）。
+            一般 20~50 条几秒就出结果；200 条约三十秒（戴冠战这类配置还会更久）；500/1000 条可能被时间预算截断，
+            结果的稳定性也会变差。只想要快就选 20~50。
+          </div>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:14px">
           <button class="primary" @click="closeSettings">完成</button>
