@@ -3179,13 +3179,28 @@ const App = {
           <div class="field">
             <label>计算质量 / 等待时间</label>
             <select v-model="qualityMode">
-              <option value="fast">快速（通常 2 秒，最多 35 秒）</option>
-              <option value="balanced">平衡（通常 3 秒，最多 60 秒）</option>
-              <option value="high">高质量（通常 3 秒，最多 135 秒）</option>
-              <option value="extreme">极限精算（通常 3 秒，最多 300 秒）</option>
+              <option value="fast">快速（搜索量略少）</option>
+              <option value="balanced">平衡（默认）</option>
+              <option value="high">高质量（多一步「自由位排列优化」）</option>
+              <option value="extreme">极限精算（同高质量，等待上限更宽）</option>
             </select>
             <div class="text-muted">
-              引擎已提速：各档都在几秒内出结果（算完就返回）；档位越高探索越全，结果通常相同。
+              实际耗时主要看下面的「结果最多计算数量」；档位只决定引擎的搜索量和等待上限（算完就返回，不会等满）。
+            </div>
+          </div>
+          <div class="field">
+            <label>结果最多计算数量</label>
+            <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
+              <option :value="20">20 条（最快）</option>
+              <option :value="50">50 条（快）</option>
+              <option :value="100">100 条</option>
+              <option :value="200">200 条（默认）</option>
+              <option :value="500">500 条（慢）</option>
+              <option :value="1000">1000 条（最慢）</option>
+            </select>
+            <div class="text-muted">
+              这个数字也是引擎的"搜索止损线"：条数越多，剪枝生效得越晚 → 算得越慢（最多能差十几倍）。
+              20~50 条几秒出结果；200 条约半分钟；500/1000 可能被时间预算截断，结果稳定性也会变差。
             </div>
           </div>
           <div class="field">
@@ -3742,12 +3757,29 @@ const App = {
         <div class="field">
           <label>计算质量 / 等待时间</label>
           <select v-model="qualityMode">
-            <option value="fast">快速（通常 2 秒，最多 35 秒）</option>
-            <option value="balanced">平衡（通常 3 秒，最多 60 秒）</option>
-            <option value="high">高质量（通常 3 秒，最多 135 秒）</option>
-            <option value="extreme">极限精算（通常 3 秒，最多 300 秒）</option>
+            <option value="fast">快速（搜索量略少）</option>
+            <option value="balanced">平衡（默认）</option>
+            <option value="high">高质量（多一步「自由位排列优化」）</option>
+            <option value="extreme">极限精算（同高质量，等待上限更宽）</option>
           </select>
-          <div class="text-muted">引擎已提速：各档都在几秒内出结果；档位越高探索越全。</div>
+          <div class="text-muted">
+            实际耗时主要看下面的「结果最多计算数量」；档位只决定引擎的搜索量和等待上限（算完就返回）。
+          </div>
+        </div>
+        <div class="field">
+          <label>结果最多计算数量</label>
+          <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
+            <option :value="20">20 条（最快）</option>
+            <option :value="50">50 条（快）</option>
+            <option :value="100">100 条</option>
+            <option :value="200">200 条（默认）</option>
+            <option :value="500">500 条（慢）</option>
+            <option :value="1000">1000 条（最慢）</option>
+          </select>
+          <div class="text-muted">
+            这个数字也是引擎的"搜索止损线"：条数越多，剪枝生效得越晚 → 算得越慢（最多能差十几倍）。
+            20~50 条几秒出结果；200 条约半分钟；500/1000 可能被时间预算截断。
+          </div>
         </div>
         <div v-if="strategy === 'target_max'" class="field">
           <label>指定从者</label>
@@ -4059,22 +4091,6 @@ const App = {
               <option :value="100">100 条</option>
             </select>
           </label>
-          <label class="settings-row">
-            <span>结果最多计算数量</span>
-            <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
-              <option :value="20">20 条（最快）</option>
-              <option :value="50">50 条（快）</option>
-              <option :value="100">100 条</option>
-              <option :value="200">200 条（默认）</option>
-              <option :value="500">500 条（慢）</option>
-              <option :value="1000">1000 条（最慢）</option>
-            </select>
-          </label>
-          <div class="text-muted" style="margin:-4px 0 10px">
-            这个数字同时也是引擎的"搜索止损线"：条数越多，剪枝生效得越晚 → 算得越慢（最多能差十几倍）。
-            一般 20~50 条几秒就出结果；200 条约三十秒（戴冠战这类配置还会更久）；500/1000 条可能被时间预算截断，
-            结果的稳定性也会变差。只想要快就选 20~50。
-          </div>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:14px">
           <button class="primary" @click="closeSettings">完成</button>
