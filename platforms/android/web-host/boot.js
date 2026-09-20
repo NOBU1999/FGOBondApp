@@ -55,6 +55,58 @@
   let realBridge = null;
   let initError = null;
 
+  // -------------------------------------------------------------------------
+  // 诊断日志（本地文件 + 内存环形缓冲，界面设置里可读取/复制）
+  //   记：脚本报错、未处理的 Promise、初始化失败、引擎报错、头像下载失败、保存失败
+  //   注意：安卓没有"程序目录"给用户翻，所以不做成文件给用户找，而是让界面能直接复制
+  // -------------------------------------------------------------------------
+  const DIAG_FILE = "fgobond-log.txt";
+  const DIAG_MAX_LINES = 200;
+  const diagLines = [];
+  let diagSaveTimer = null;
+
+  function pushDiag(level, message) {
+    let line;
+    try {
+      line = `[${new Date().toISOString()}] ${level}: ${message}`;
+      diagLines.push(line);
+      if (diagLines.length > DIAG_MAX_LINES) diagLines.splice(0, diagLines.length - DIAG_MAX_LINES);
+      console.log("[diag]", line);
+    } catch (_) {
+      return;
+    }
+    scheduleDiagSave();
+  }
+
+  function scheduleDiagSave() {
+    if (diagSaveTimer) return;
+    diagSaveTimer = setTimeout(() => {
+      diagSaveTimer = null;
+      const fs = getFilesystem();
+      if (!fs) return;
+      try {
+        const p = fs.writeFile({
+          path: DIAG_FILE,
+          directory: "DATA",
+          data: diagLines.join("\n"),
+          recursive: true,
+        });
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      } catch (_) {
+        /* ignore */
+      }
+    }, 800);
+  }
+
+  window.addEventListener("error", (event) => {
+    const where = event && event.filename ? ` @ ${event.filename}:${event.lineno}` : "";
+    pushDiag("error", `${(event && event.message) || "脚本错误"}${where}`);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event && event.reason;
+    pushDiag("rejection", (reason && (reason.message || reason)) || "未处理的 Promise 拒绝");
+  });
+
   function emitProgress(text) {
     for (const cb of progressCallbacks) {
       try {
@@ -125,6 +177,125 @@
       }
     }
   };
+  // ---- 头像：包内没有时按需下载（只下公开图片，不上传任何数据） ----
+  //   包内的头像与随包数据库同一次构建产出，正常不会缺；缺了（例如出包时没网）
+  //   就在这里补一张，写到应用数据目录，下次还在。
+  const AVATAR_CDN = "https://static.atlasacademy.io/{region}/Faces/f_{id}0.png";
+  const AVATAR_REGIONS = ["JP", "CN"];
+
+  function isPngBytes(bytes) {
+    return !!bytes && bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  }
+
+  async function readAvatarFromDataDir(id) {
+    const fs = getFilesystem();
+    if (!fs) return null;
+    try {
+      const res = await fs.readFile({ path: `avatars/${id}.png`, directory: "DATA" });
+      const data = res && res.data;
+      if (typeof data === "string" && data) return `data:image/png;base64,${data}`;
+    } catch (_) {
+      /* 还没下载过，属正常 */
+    }
+    return null;
+  }
+
+  async function downloadAvatar(id) {
+    let lastError = null;
+    for (const region of AVATAR_REGIONS) {
+      const url = AVATAR_CDN.replace("{region}", region).replace("{id}", String(id));
+      try {
+        const resp = await fetch(url, { cache: "no-store" });
+        if (!resp.ok) {
+          lastError = new Error(`${region} HTTP ${resp.status}`);
+          continue;
+        }
+        const bytes = new Uint8Array(await resp.arrayBuffer());
+        if (!isPngBytes(bytes)) {
+          lastError = new Error(`${region} 返回的不是 PNG`);
+          continue;
+        }
+        const fs = getFilesystem();
+        if (fs) {
+          try {
+            await fs.writeFile({
+              path: `avatars/${id}.png`,
+              directory: "DATA",
+              data: bytesToBase64(bytes),
+              recursive: true,
+            });
+          } catch (err) {
+            pushDiag("warn", `头像落盘失败 ${id}：${(err && err.message) || err}`);
+          }
+        }
+        return `data:image/png;base64,${bytesToBase64(bytes)}`;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error("下载失败");
+  }
+
+  api.getAvatarData = async (id) => {
+    const key = String(id == null ? "" : id).replace(/[^0-9]/g, "");
+    if (!key) return { ok: false, error: "无效的从者 ID" };
+    try {
+      const local = await readAvatarFromDataDir(key);
+      if (local) return { ok: true, dataUrl: local, cached: true };
+      const dataUrl = await downloadAvatar(key);
+      return { ok: true, dataUrl, cached: false };
+    } catch (err) {
+      const message = (err && err.message) || String(err);
+      pushDiag("warn", `头像获取失败 ${key}：${message}`);
+      return { ok: false, error: message };
+    }
+  };
+
+  // ---- 诊断日志读取/清空（初始化失败时也能用，所以不走排队代理） ----
+  api.getDiagnosticLog = async () => {
+    const fs = getFilesystem();
+    // 先强制刷一次：落盘是防抖的，直接读文件可能缺最新几行（而最新那几行往往就是要看的）
+    if (fs) {
+      try {
+        await fs.writeFile({
+          path: DIAG_FILE,
+          directory: "DATA",
+          data: diagLines.join("\n"),
+          recursive: true,
+        });
+      } catch (_) {
+        /* 刷不进去也无妨，下面读内存 */
+      }
+    }
+    let persisted = "";
+    if (fs) {
+      try {
+        const res = await fs.readFile({ path: DIAG_FILE, directory: "DATA" });
+        if (res && typeof res.data === "string") persisted = res.data;
+      } catch (_) {
+        /* 没有文件就是还没记过 */
+      }
+    }
+    return {
+      ok: true,
+      text: persisted || diagLines.join("\n"),
+      path: `DATA/${DIAG_FILE}`,
+    };
+  };
+
+  api.clearDiagnosticLog = async () => {
+    diagLines.length = 0;
+    const fs = getFilesystem();
+    if (fs) {
+      try {
+        await fs.writeFile({ path: DIAG_FILE, directory: "DATA", data: "", recursive: true });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return { ok: true };
+  };
+
   api.onEngineProgress = (cb) => {
     if (typeof cb === "function") progressCallbacks.push(cb);
     return () => {
@@ -214,7 +385,9 @@
           recursive: true,
         });
       } catch (err) {
-        emitProgress("保存本地数据失败：" + (err && err.message ? err.message : err));
+        const message = err && err.message ? err.message : String(err);
+        emitProgress("保存本地数据失败：" + message);
+        pushDiag("warn", "保存本地数据失败：" + message);
       }
     }, 600);
   }
@@ -224,6 +397,7 @@
       throw new Error("sql.js 未加载（vendor/sqljs/sql-wasm.js 缺失）");
     }
     emitProgress("正在载入本地数据库...");
+    pushDiag("info", `开始载入本地数据库（v${window.__FGO_APP_VERSION || "?"}）`);
     const SQL = await window.initSqlJs({ locateFile: (file) => "./vendor/sqljs/" + file });
     const bytes = await loadDatabaseBytes();
     const db = new SQL.Database(bytes);
@@ -264,14 +438,19 @@
 
     // 引擎：经 Chaquopy 跑真 CPython；协议与桌面一致（一份请求 JSON → 一份结果 JSON）
     bridge.calculate = async (payload) => {
-      const cap = window.Capacitor;
-      const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
-      if (!plugin) throw new Error("Python 引擎插件未注册（请重新安装 APK）");
-      emitProgress("正在计算...");
-      const res = await plugin.calculate({ requestJson: JSON.stringify(payload) });
-      const out = JSON.parse((res && res.resultJson) || "{}");
-      if (out && out.status === "error") throw new Error(out.message || "计算失败");
-      return out;
+      try {
+        const cap = window.Capacitor;
+        const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
+        if (!plugin) throw new Error("Python 引擎插件未注册（请重新安装 APK）");
+        emitProgress("正在计算...");
+        const res = await plugin.calculate({ requestJson: JSON.stringify(payload) });
+        const out = JSON.parse((res && res.resultJson) || "{}");
+        if (out && out.status === "error") throw new Error(out.message || "计算失败");
+        return out;
+      } catch (err) {
+        pushDiag("error", `引擎计算失败：${(err && err.message) || err}`);
+        throw err;
+      }
     };
 
     // 写操作后持久化
@@ -289,6 +468,7 @@
 
     realBridge = wrapped;
     emitProgress("就绪");
+    pushDiag("info", "本地数据库已就绪");
   }
 
   init()
@@ -304,6 +484,7 @@
     .catch((err) => {
       initError = err instanceof Error ? err : new Error(String(err));
       console.error("[android-host] 初始化失败：", initError);
+      pushDiag("error", "初始化失败：" + initError.message);
       for (const call of pendingCalls.splice(0)) call.reject(initError);
     });
 })();

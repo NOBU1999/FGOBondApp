@@ -201,6 +201,12 @@ const App = {
       costumeNames: {},
       missingAvatars: [],
       avatarBroken: [],
+      localAvatars: {}, // 运行时补下来的头像（id -> data URL）
+      avatarTried: {}, // 已经尝试补过的 id（避免反复请求）
+      diagLogText: "", // 诊断日志（宿主提供 getDiagnosticLog 时才用）
+      diagLogLines: 0,
+      diagLogLoaded: false,
+      diagLogNote: "",
       servants: [],
       bondCrafts: [],
       otherCrafts: [],
@@ -650,8 +656,17 @@ const App = {
       return `从者 ${servantCost} + 主礼装 ${mainCost}${secondText} = ${total}`;
     },
     qualityModeText(mode) {
-      const map = { fast: "快速", balanced: "平衡", high: "高质量", extreme: "极限精算" };
+      const map = { fast: "快速", standard: "标准", balanced: "平衡", high: "高质量", extreme: "极限精算" };
       return map[mode] || mode || "";
+    },
+    /**
+     * 档位 → 时间预算（毫秒）。**唯一来源**：以前这份表在 buildPayload / buildPresetPayload
+     * 各抄了一份，加档位时容易改漏一处。
+     * 预算只决定"引擎的计划量 + 等待上限"：计划算完就返回，不会等满。
+     */
+    timeoutForQuality(mode) {
+      const map = { fast: 35000, standard: 60000, balanced: 90000, high: 135000, extreme: 300000 };
+      return map[mode] || map.balanced;
     },
     strategyText(strategy) {
       const map = { total_max: "总牵绊最大化", target_max: "指定从者最大化", balanced: "均衡模式" };
@@ -1151,11 +1166,79 @@ const App = {
     },
     crownClassFilters() { return CROWN_CLASS_FILTERS; },
     avatarPath(servantId) {
+      const local = this.localAvatars && this.localAvatars[String(servantId)];
+      if (local) return local;
       return `./assets/servantface/${servantId}.png`;
     },
     markAvatarBroken(id) {
       const key = String(id);
       if (!this.avatarBroken.includes(key)) this.avatarBroken.push(key);
+      // 头像缺失时顺手补一张（每个 id 只试一次；安卓端没有这个接口，会直接跳过）
+      this.requestAvatar(key);
+    },
+    /**
+     * 取一张本机没有的头像：主进程先找本地（运行时补下来的），没有才去下载。
+     * 拿到后换成 data URL 显示；拿不到就维持"没有头像"的现状，不弹错、不重试。
+     */
+    async requestAvatar(id) {
+      const key = String(id);
+      if (this.avatarTried[key]) return;
+      this.avatarTried[key] = true;
+      const api = window.fgo;
+      if (!api || typeof api.getAvatarData !== "function") return;
+      try {
+        const r = await api.getAvatarData(key);
+        if (!r || !r.ok || !r.dataUrl) return;
+        this.localAvatars = Object.assign({}, this.localAvatars, { [key]: r.dataUrl });
+        const idx = this.avatarBroken.indexOf(key);
+        if (idx >= 0) this.avatarBroken.splice(idx, 1);
+      } catch (_) {
+        // 取不到就当作没有头像（与现状一致），不打扰用户
+      }
+    },
+    /** 更新数据之后重试之前坏掉的头像（这时本地多半已经补上了，不会再走网络） */
+    retryBrokenAvatars() {
+      const ids = this.avatarBroken.slice();
+      this.avatarTried = {};
+      ids.forEach((id) => this.requestAvatar(id));
+    },
+    // ---------------- 诊断日志（设置里查看 / 复制；安卓端最需要，桌面也有） ----------------
+    diagLogAvailable() {
+      return !!(window.fgo && typeof window.fgo.getDiagnosticLog === "function");
+    },
+    async loadDiagnosticLog() {
+      this.diagLogNote = "";
+      try {
+        const r = await window.fgo.getDiagnosticLog();
+        this.diagLogText = (r && r.text) || "";
+        this.diagLogLines = this.diagLogText ? this.diagLogText.split("\n").length : 0;
+        this.diagLogLoaded = true;
+      } catch (e) {
+        this.diagLogText = "";
+        this.diagLogLines = 0;
+        this.diagLogLoaded = true;
+        this.diagLogNote = "读取失败：" + (e && e.message ? e.message : String(e));
+      }
+    },
+    async copyDiagnosticLog() {
+      if (!this.diagLogText) return;
+      try {
+        await window.fgo.copyText(this.diagLogText);
+        this.diagLogNote = "已复制到剪贴板";
+      } catch (e) {
+        this.diagLogNote = "复制失败：" + (e && e.message ? e.message : String(e));
+      }
+    },
+    async clearDiagnosticLog() {
+      try {
+        await window.fgo.clearDiagnosticLog();
+        this.diagLogText = "";
+        this.diagLogLines = 0;
+        this.diagLogLoaded = true;
+        this.diagLogNote = "已清空";
+      } catch (e) {
+        this.diagLogNote = "清空失败：" + (e && e.message ? e.message : String(e));
+      }
     },
     hasAvatar(servantId) {
       return this.avatarSet && this.avatarSet.has(String(servantId));
@@ -2580,7 +2663,7 @@ const App = {
         teaBonus: 1,
         topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
-        timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
+        timeoutMs: this.timeoutForQuality(this.qualityMode),
       };
     },
     buildPresetPayload(preset) {
@@ -2633,7 +2716,7 @@ const App = {
         teaBonus: 1,
         topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
-        timeoutMs: { fast: 35000, balanced: 60000, high: 135000, extreme: 300000 }[this.qualityMode] || 35000,
+        timeoutMs: this.timeoutForQuality(this.qualityMode),
       };
     },
     isFullPreset(preset) {
@@ -2732,6 +2815,8 @@ const App = {
           totalCandidates: result.totalCandidates,
           qualityMode: this.qualityMode,
           timeoutMs: payload.timeoutMs,
+          // 引擎的时间上限兜底：true = 还没跑完就被砍了（换更高档位可能更好）
+          truncated: !!result.truncated,
         };
         this.currentPage = 1;
         if (this.resultSettings.autoExpandFirst && this.results.length) {
@@ -2838,7 +2923,15 @@ const App = {
         return;
       }
     },
+    /**
+     * 安卓端不提供「更新数据」：数据与头像一起随 APK 发布（见 PLATFORM-ROADMAP 的决策），
+     * 装新版就是更新数据。界面据此隐藏入口，方法里也各留一道保险。
+     */
+    isAndroidPlatform() {
+      return !!(this.info && this.info.platform === "android");
+    },
     openUpdateModal() {
+      if (this.isAndroidPlatform()) return;
       this.updateTitle = "更新数据";
       this.updateModalVisible = true;
       if (!this.updateRunning && !this.updateItems.length) {
@@ -2849,6 +2942,7 @@ const App = {
       if (!this.updateRunning) this.updateModalVisible = false;
     },
     async runUpdate(force) {
+      if (this.isAndroidPlatform()) return; // 安卓：数据随 APK 发布，不提供联网更新
       this.updateModalVisible = true;
       this.updateTitle = "更新数据";
       this.updateRunning = true;
@@ -2870,6 +2964,8 @@ const App = {
           try {
             await this.reloadAllData();
             this.updateResult = Object.assign({}, r, { uiReloaded: true });
+            // 更新时主进程会顺手补齐缺失头像，这里让之前显示不出来的头像重新加载
+            this.retryBrokenAvatars();
           } catch (reloadErr) {
             this.updateError = (this.updateError ? this.updateError + "\n" : "") + ("刷新界面数据失败: " + (reloadErr.message || String(reloadErr)));
           }
@@ -3063,7 +3159,7 @@ const App = {
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
         <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
-        <button class="secondary" @click.stop="openUpdateModal">更新数据</button>
+        <button v-if="!isAndroidPlatform()" class="secondary" @click.stop="openUpdateModal">更新数据</button>
       </div>
     </div>
 
@@ -3179,10 +3275,11 @@ const App = {
           <div class="field">
             <label>计算质量 / 等待时间</label>
             <select v-model="qualityMode">
-              <option value="fast">快速（搜索量略少）</option>
-              <option value="balanced">平衡（默认）</option>
-              <option value="high">高质量（多一步「自由位排列优化」）</option>
-              <option value="extreme">极限精算（同高质量，等待上限更宽）</option>
+              <option value="fast">快速（约 35 秒上限）</option>
+              <option value="standard">标准（约 60 秒上限）</option>
+              <option value="balanced">平衡（默认，约 90 秒上限）</option>
+              <option value="high">高质量（约 135 秒上限，多一步「自由位排列优化」）</option>
+              <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
             </select>
             <div class="text-muted">
               实际耗时主要看下面的「结果最多计算数量」；档位只决定引擎的搜索量和等待上限（算完就返回，不会等满）。
@@ -3297,6 +3394,9 @@ const App = {
               <span v-else class="simple-exclusion-avatar fallback">{{ (servantMap[sid] ? servantMap[sid].name : '?').charAt(0) }}</span>
             </span>
           </div>
+        </div>
+        <div v-if="lastSearchStats && lastSearchStats.truncated" class="search-stats warn">
+          ⚠️ 本次搜索被时间上限截断（还没算完）：换更高的「计算质量」档位可能找到更好的队伍
         </div>
         <div v-if="resultSettings.showSearchStats && lastSearchStats" class="search-stats text-muted">
           本次搜索：{{ qualityModeText(lastSearchStats.qualityMode) }}
@@ -3757,10 +3857,11 @@ const App = {
         <div class="field">
           <label>计算质量 / 等待时间</label>
           <select v-model="qualityMode">
-            <option value="fast">快速（搜索量略少）</option>
-            <option value="balanced">平衡（默认）</option>
-            <option value="high">高质量（多一步「自由位排列优化」）</option>
-            <option value="extreme">极限精算（同高质量，等待上限更宽）</option>
+            <option value="fast">快速（约 35 秒上限）</option>
+            <option value="standard">标准（约 60 秒上限）</option>
+            <option value="balanced">平衡（默认，约 90 秒上限）</option>
+            <option value="high">高质量（约 135 秒上限，多一步「自由位排列优化」）</option>
+            <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
           </select>
           <div class="text-muted">
             实际耗时主要看下面的「结果最多计算数量」；档位只决定引擎的搜索量和等待上限（算完就返回）。
@@ -4091,6 +4192,16 @@ const App = {
               <option :value="100">100 条</option>
             </select>
           </label>
+        </div>
+        <div v-if="diagLogAvailable()" style="margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:12px">
+          <h4 style="margin:0 0 8px">诊断日志</h4>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="secondary" @click="loadDiagnosticLog">读取</button>
+            <button class="secondary" @click="copyDiagnosticLog" :disabled="!diagLogText">复制全部</button>
+            <button class="secondary" @click="clearDiagnosticLog" :disabled="!diagLogText">清空</button>
+            <span style="opacity:.75;font-size:12px">{{ diagLogNote || (diagLogLines ? '共 ' + diagLogLines + ' 行（只在本机，不会上传）' : (diagLogLoaded ? '日志是空的（暂时没有记录）' : '程序出错时这里会有记录')) }}</span>
+          </div>
+          <pre v-if="diagLogText" style="max-height:200px;overflow:auto;white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.28);padding:8px;border-radius:6px;margin:10px 0 0">{{ diagLogText }}</pre>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:14px">
           <button class="primary" @click="closeSettings">完成</button>

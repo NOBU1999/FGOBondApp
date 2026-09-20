@@ -5,14 +5,25 @@ ext {
     compileSdkVersion = 36
     targetSdkVersion = 36
 
-    // 版本号单一来源：package.json（Windows 与安卓同一版本号）
-    //   versionName = "0.1.10"（给人看）
-    //   versionCode = 110（给系统看，必须单调递增：major*10000 + minor*100 + patch）
+    // 版本号规则（2026-09-20 定）
+    //   基础版本     = package.json 的 version（Windows 与安卓**同步**；代码更新时两边一起 +1）
+    //   versionName  = "0.1.13+260920"  给人看：基础版本 + 打包日期(yymmdd)；`+` 后面是构建元数据，不参与比较
+    //   versionCode  = 101130001        给系统看：base*10000 + 数据刷新序号（androidDataRevision）
+    //     · 安卓规定 versionCode ≤ 2147483647（21.5 亿）→ **日期只能放 versionName**，拼进数字会溢出
+    //     · 必须"只增不减"：降级安装会被系统拒绝；平级（相同 code，同签名）可以覆盖安装
+    //     · 只刷新数据（不动代码）时：package.json 的 version 不动，只把 androidDataRevision +1
+    //       → 用 `node scripts/build_all.mjs --android-data-refresh`（会自动 +1 并只出 APK）
     def pkgJson = new groovy.json.JsonSlurper().parseText(file("../package.json").getText("UTF-8"))
-    appVersionName = pkgJson.version
-    def parts = appVersionName.tokenize(".").collect { it.replaceAll(/[^0-9].*$/, "") as int }
+    def parts = pkgJson.version.tokenize(".").collect { it.replaceAll(/[^0-9].*$/, "") as int }
     while (parts.size() < 3) { parts << 0 }
-    appVersionCode = parts[0] * 10000 + parts[1] * 100 + parts[2]
+    def dataRevision = (pkgJson.androidDataRevision ?: 1) as int
+    def baseCode = parts[0] * 10000 + parts[1] * 100 + parts[2]
+    // 打包日期：优先用 build_all.mjs 传进来的（保证 APK 元数据与界面显示的版本串是同一天）
+    def buildDate = project.hasProperty("androidBuildDate")
+        ? project.property("androidBuildDate").toString()
+        : new Date().format("yyMMdd")
+    appVersionName = "${pkgJson.version}+${buildDate}"
+    appVersionCode = baseCode * 10000 + dataRevision
     androidxActivityVersion = '1.11.0'
     androidxAppCompatVersion = '1.7.1'
     androidxCoordinatorLayoutVersion = '1.3.0'

@@ -8,18 +8,22 @@
  *   node scripts/build_all.mjs                      # 两个都出
  *   node scripts/build_all.mjs --skip-windows       # 只出 APK
  *   node scripts/build_all.mjs --skip-android       # 只出 Windows 包
+ *   node scripts/build_all.mjs --android-data-refresh   # 只刷新安卓数据：不 bump 版本，只把数据序号 +1，只出 APK
  *   node scripts/build_all.mjs --force-engine       # 强制重跑 PyInstaller 重建 engine.exe
  *   node scripts/build_all.mjs --notes "本版更新内容…" --compatible-from 0.1.9
  *
  * 产物（都在 release/）：
- *   FGO牵绊推荐器-v<版本>-Android.apk     正式签名 APK（版本号取自 package.json）
+ *   FGO牵绊推荐器-v<版本>-Android-<打包日期>.apk   正式签名 APK（versionName = <版本>+<打包日期>）
  *   FGO牵绊推荐器-v<版本>.7z              Windows 便携版（7z）
  *   FGO牵绊推荐器-v<版本>.zip             Windows 便携版（zip，兼容用）
  *   release-manifest-v<版本>.json         两个包的体积与 SHA-256
  *   RELEASE_NOTES_v<版本>.md              发布说明（模板 + 校验值，你补上更新内容即可粘贴到 Release）
  *
  * 说明：
- *   - 版本号**唯一来源** = package.json（Windows 与安卓同一版本号；安卓 versionCode 由它换算）
+ *   - 基础版本号唯一来源 = package.json（Windows 与安卓**同步**，代码更新时两边一起 +1）
+ *     安卓另有两样：versionName = 0.1.13+260920（给人看，带打包日期）；
+ *                   versionCode = 10113*10000 + androidDataRevision（给系统看，只能一样或变大）
+ *     仅刷新安卓数据（不动代码）→ 用 --android-data-refresh：版本号不动，只把 androidDataRevision +1
  *   - Windows 侧沿用既有流程：electron-builder --win dir → make_release_meta.py → 7z 打包
  *   - 种子库：打包前跑 scripts/make_seed.cjs —— 由开发库**复制一份再清空用户表**，
  *     绝不直接用开发库当种子库（v0.1.11 真实事故：包里带上了开发者的账号 / Box / 队伍）
@@ -48,9 +52,29 @@ const VERSION = PKG.version;
 const PRODUCT = PKG.productName || "app";
 const NOTES = value("--notes", "");
 const COMPAT_FROM = value("--compatible-from", null);
-const SKIP_WINDOWS = has("--skip-windows");
+let SKIP_WINDOWS = has("--skip-windows");
 const SKIP_ANDROID = has("--skip-android");
 const FORCE_ENGINE = has("--force-engine");
+// 仅刷新安卓数据：基础版本号不动，只把安卓数据序号 +1；只出 APK（Windows 那边数据是应用内更新的，不需要）
+const ANDROID_DATA_REFRESH = has("--android-data-refresh");
+
+// 安卓版本：versionName 给人看（带打包日期），versionCode 给系统看（只增不减，21.5 亿上限）
+const BUILD_DATE = value(
+  "--android-build-date",
+  (() => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+  })()
+);
+const ANDROID_BASE_CODE = (() => {
+  const p = VERSION.split(".").map((x) => parseInt(x, 10) || 0);
+  while (p.length < 3) p.push(0);
+  return p[0] * 10000 + p[1] * 100 + p[2];
+})();
+let ANDROID_REVISION = Number(PKG.androidDataRevision) || 1;
+let ANDROID_VERSION_NAME = `${VERSION}+${BUILD_DATE}`;
+let ANDROID_VERSION_CODE = ANDROID_BASE_CODE * 10000 + ANDROID_REVISION;
 
 const RELEASE_DIR = path.join(ROOT, "release");
 // 为什么这些不是写死的绝对路径：这是公开仓库，脚本里不该出现某个人的用户名/盘符/本地目录。
@@ -92,6 +116,72 @@ function humanSize(bytes) {
 
 mkdirSync(RELEASE_DIR, { recursive: true });
 log(`版本 ${VERSION}｜产物目录 ${path.relative(ROOT, RELEASE_DIR)}`);
+
+// 仅刷新安卓数据：版本号不动，只把数据序号 +1（改 package.json 里那一行，保留原有排版）
+if (ANDROID_DATA_REFRESH) {
+  ANDROID_REVISION += 1;
+  ANDROID_VERSION_CODE = ANDROID_BASE_CODE * 10000 + ANDROID_REVISION;
+  const pkgPath = path.join(ROOT, "package.json");
+  const raw = readFileSync(pkgPath, "utf8");
+  const next = raw.replace(/"androidDataRevision":\s*\d+/, `"androidDataRevision": ${ANDROID_REVISION}`);
+  if (next === raw) fatal("package.json 里找不到 androidDataRevision 字段，无法自动 +1");
+  writeFileSync(pkgPath, next, "utf8");
+  if (!SKIP_WINDOWS) {
+    SKIP_WINDOWS = true;
+    log("--android-data-refresh：只出 APK（Windows 的数据是应用内更新的，不需要跟这一版）");
+  }
+  log(`已把安卓数据序号 +1 → ${ANDROID_REVISION}`);
+}
+log(`安卓版本：versionName=${ANDROID_VERSION_NAME}｜versionCode=${ANDROID_VERSION_CODE}`);
+
+/**
+ * 安卓版本自检：和上一次的打包记录比，**只允许变大或持平**。
+ * 降级安装会被系统拒绝（最坏要用户卸载重装 → 本地数据全丢），所以变小必须拦下。
+ */
+function checkAndroidVersionRecord() {
+  const recordFile = path.join(RELEASE_DIR, ".android-version.json");
+  let previous = null;
+  try {
+    previous = JSON.parse(readFileSync(recordFile, "utf8"));
+  } catch (_) {
+    /* 首次 */
+  }
+  if (previous && typeof previous.versionCode === "number") {
+    if (ANDROID_VERSION_CODE < previous.versionCode) {
+      fatal(
+        `安卓 versionCode 变小了：上次 ${previous.versionCode}（${previous.versionName}）→ 这次 ${ANDROID_VERSION_CODE}（${ANDROID_VERSION_NAME}）\n` +
+          "安卓会拒绝降级安装（用户得卸载重装 → 本地账号 / Box 全丢）。\n" +
+          "请把 package.json 的 version 加一位，或用 --android-data-refresh（只把数据序号 +1）。"
+      );
+    }
+    if (ANDROID_VERSION_CODE === previous.versionCode) {
+      log(
+        `⚠️ 安卓 versionCode 与上次相同（${ANDROID_VERSION_CODE}）：平级安装可以装，但系统里看不出差异；` +
+          "数据刷新请用 --android-data-refresh"
+      );
+    }
+  }
+  return recordFile;
+}
+
+function rememberAndroidVersion(recordFile) {
+  writeFileSync(
+    recordFile,
+    JSON.stringify(
+      {
+        versionName: ANDROID_VERSION_NAME,
+        versionCode: ANDROID_VERSION_CODE,
+        baseVersion: VERSION,
+        dataRevision: ANDROID_REVISION,
+        buildDate: BUILD_DATE,
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+}
 
 const artifacts = [];
 
@@ -142,23 +232,32 @@ function buildAndroid() {
   if (!existsSync(path.join(ROOT, "android", "keystore.properties"))) {
     fatal("缺少 android/keystore.properties（正式签名配置）→ 先跑：node scripts/android/create_keystore.cjs");
   }
+  const recordFile = checkAndroidVersionRecord();
+  // 让界面里显示的版本 = 安卓 versionName（同一天、同一个号）
+  process.env.FGO_ANDROID_VERSION = ANDROID_VERSION_NAME;
   npmRun("android:sync");
-  run(path.join(ROOT, "android", "gradlew.bat"), ["assembleRelease", "--no-daemon", "--console=plain"], {
-    cwd: path.join(ROOT, "android"),
-    env: {
-      ...process.env,
-      JAVA_HOME,
-      ANDROID_HOME,
-      GRADLE_USER_HOME,
-      JAVA_TOOL_OPTIONS: "-Duser.language=en -Duser.country=US",
-    },
-  });
+  run(
+    path.join(ROOT, "android", "gradlew.bat"),
+    [`-PandroidBuildDate=${BUILD_DATE}`, "assembleRelease", "--no-daemon", "--console=plain"],
+    {
+      cwd: path.join(ROOT, "android"),
+      env: {
+        ...process.env,
+        JAVA_HOME,
+        ANDROID_HOME,
+        GRADLE_USER_HOME,
+        JAVA_TOOL_OPTIONS: "-Duser.language=en -Duser.country=US",
+      },
+    }
+  );
 
   const built = path.join(ROOT, "android", "app", "build", "outputs", "apk", "release", "app-release.apk");
   if (!existsSync(built)) fatal("没有产出 release APK：" + built);
-  const dest = path.join(RELEASE_DIR, `${PRODUCT}-v${VERSION}-Android.apk`);
+  const dest = path.join(RELEASE_DIR, `${PRODUCT}-v${VERSION}-Android-${BUILD_DATE}.apk`);
   copyFileSync(built, dest);
+  rememberAndroidVersion(recordFile);
   log(`→ ${path.relative(ROOT, dest)}（${humanSize(statSync(dest).size)}）`);
+  log(`   版本名 ${ANDROID_VERSION_NAME}｜版本码 ${ANDROID_VERSION_CODE}`);
   artifacts.push(fileInfo(dest));
   return dest;
 }
@@ -285,11 +384,7 @@ function buildWindows() {
 function writeManifestAndNotes() {
   step("发布清单与说明");
   const builtAt = new Date().toISOString();
-  const versionCode = (() => {
-    const p = VERSION.split(".").map((x) => parseInt(x, 10) || 0);
-    while (p.length < 3) p.push(0);
-    return p[0] * 10000 + p[1] * 100 + p[2];
-  })();
+  const versionCode = ANDROID_VERSION_CODE;
 
   // 合并已有清单：允许"分两次跑"（只出 APK / 只出 Windows）也能得到完整清单
   const manifestFile = path.join(RELEASE_DIR, `release-manifest-v${VERSION}.json`);
@@ -304,7 +399,9 @@ function writeManifestAndNotes() {
   const manifest = {
     productName: PRODUCT,
     version: VERSION,
+    androidVersionName: ANDROID_VERSION_NAME,
     androidVersionCode: versionCode,
+    androidDataRevision: ANDROID_REVISION,
     builtAt,
     artifacts: merged,
   };

@@ -184,13 +184,16 @@ stagePython(path.join(ROOT, "platforms", "android", "python"), PY_OUT);
 log(`Python 源码已暂存：${path.relative(ROOT, PY_OUT)}（${pyCount} 个文件，${(dirSize(PY_OUT) / 1048576).toFixed(2)} MB）`);
 
 // ---------------------------------------------------------------- 注入启动脚本
+// 界面里显示的版本 = 安卓的 versionName（"0.1.13+260920"）：由 build_all.mjs 传进来，
+// 保证"系统设置里看到的版本"和"界面里看到的版本"是同一天、同一个号。
+const APP_VERSION = process.env.FGO_ANDROID_VERSION || PKG.version;
 const indexPath = path.join(OUT, "index.html");
 let html = readFileSync(indexPath, "utf8");
 const marker = '<script src="./app.js"></script>';
 if (!html.includes(marker)) throw new Error("index.html 结构变了：找不到 app.js 引用，无法注入宿主");
 if (!html.includes("web-host/boot.js")) {
   const inject = [
-    `<script>window.__FGO_APP_VERSION = ${JSON.stringify(PKG.version)};</script>`,
+    `<script>window.__FGO_APP_VERSION = ${JSON.stringify(APP_VERSION)};</script>`,
     `<script src="./vendor/sqljs/sql-wasm.js"></script>`,
     `<script src="./platforms/android/web-host/boot.js"></script>`,
     marker,
