@@ -618,6 +618,10 @@ const App = {
       this.currentPage = 1;
       if (!this.resultSettings.compareMode) this.compareSelectedRanks = [];
     },
+    openSettings() {
+      // 桌面也能用（原来只能从系统菜单「设置 → 结果显示设置」打开；安卓没有系统菜单，必须有这个入口）
+      this.settingsVisible = true;
+    },
     closeSettings() {
       this.persistResultSettings();
       this.settingsVisible = false;
@@ -3160,6 +3164,8 @@ const App = {
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
         <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
         <button v-if="!isAndroidPlatform()" class="secondary" @click.stop="openUpdateModal">更新数据</button>
+        <!-- 设置必须能从界面进：安卓没有系统菜单（原来只有桌面菜单能打开结果显示设置） -->
+        <button class="secondary" @click.stop="openSettings">设置</button>
       </div>
     </div>
 
