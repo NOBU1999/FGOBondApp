@@ -95,6 +95,27 @@ log(`版本 ${VERSION}｜产物目录 ${path.relative(ROOT, RELEASE_DIR)}`);
 
 const artifacts = [];
 
+/**
+ * 出包前补齐缺失的从者头像。
+ * 背景：头像 PNG 是随包发布的静态文件（renderer/assets/servantface/{id}.png），
+ * 应用内「更新数据」只更新文字数据，不会下载图片 → 新从者上线后必须靠这一步补。
+ * 失败只警告、不中断（断网或源站还没图时不该卡住发版）。
+ */
+function ensureMissingAvatars() {
+  step("补齐缺失头像（游戏里新上的从者）");
+  const script = path.join(ROOT, "scripts", "fetch_missing_avatars.py");
+  if (!existsSync(script)) {
+    log("跳过：找不到 scripts/fetch_missing_avatars.py");
+    return;
+  }
+  const python = process.env.PYTHON || "python";
+  try {
+    run(python, [script, "--no-repack", "--db", path.join(ROOT, "db", "fgo_data.db")]);
+  } catch (err) {
+    log(`⚠️ 补齐头像失败（继续出包）：${err.message}`);
+  }
+}
+
 // ---------------------------------------------------------------- 安卓 APK
 function buildAndroid() {
   step("安卓 APK（Capacitor + Chaquopy，正式签名）");
@@ -342,6 +363,9 @@ function writeManifestAndNotes() {
 }
 
 // ---------------------------------------------------------------- 主流程
+// 出包前自动补齐缺失从者头像（新从者上线后，头像 PNG 需要随包发布）。
+// 失败只警告、不中断出包（断网/源站缺图时不该卡住发版）。
+ensureMissingAvatars();
 if (!SKIP_ANDROID) buildAndroid();
 if (!SKIP_WINDOWS) buildWindows();
 if (artifacts.length) {

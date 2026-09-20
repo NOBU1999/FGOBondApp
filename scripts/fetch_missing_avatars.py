@@ -110,6 +110,11 @@ def main() -> int:
         default="JP",
         help="头像 CDN 区域，默认 JP（日服数据）",
     )
+    parser.add_argument(
+        "--no-repack",
+        action="store_true",
+        help="只把头像写进源目录 / staging，不重打 app.asar（出包流程用这个）",
+    )
     args = parser.parse_args()
 
     db_path = args.db
@@ -123,9 +128,12 @@ def main() -> int:
     asar_path = ROOT / "release" / "MyFGOApp" / "resources" / "app.asar"
 
     source_have = existing_ids(source_dir)
-    staging_have = existing_ids(staging_dir)
+    # staging 只是构建中间产物：不存在时**不能**把全部从者都算成"缺失"，
+    # 否则会把 400+ 张头像全部重下一遍，还会顺手重打已发布的 app.asar。
+    staging_present = staging_dir.is_dir()
+    staging_have = existing_ids(staging_dir) if staging_present else set()
     source_missing = sorted(set(ids) - source_have)
-    staging_missing = sorted(set(ids) - staging_have)
+    staging_missing = sorted(set(ids) - staging_have) if staging_present else []
     need_fetch = sorted(set(source_missing) | set(staging_missing))
 
     _utf8_print(f"[info] 从者总数: {len(ids)}")
@@ -157,7 +165,7 @@ def main() -> int:
         _utf8_print(f"[error] 失败 {len(failed)} 个: {failed}")
         return 1
 
-    if staging_missing and staging_dir.is_dir():
+    if staging_missing and staging_present and not args.no_repack:
         ensure_asar_packed(
             ROOT / "release" / "app-staging",
             asar_path,

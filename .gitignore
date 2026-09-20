@@ -1,4 +1,4 @@
-# ---------- Node ----------
+﻿# ---------- Node ----------
 node_modules/
 .npm-cache/
 npm-debug.log*
@@ -36,6 +36,7 @@ db/*.db
 db/*.db-journal
 db/*.db-wal
 db/*.db-shm
+db/*.json
 # 杩愯搴撹嚜鍔ㄥ浠?/ 闅旂鐩綍
 db/backup/
 # privacy_clean 鍒犻櫎渚挎惡鐩綍杩愯搴撳墠鍙﹀瓨鐨勫浠斤紙鍚湡瀹炰釜浜烘暟鎹紝缁濅笉鎻愪氦锛?
