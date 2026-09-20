@@ -450,6 +450,7 @@ function getEventBondBonuses(dbPath) {
 module.exports = {
   open,
   ensureSchema,
+  getDomain,
   all,
   get,
   run,

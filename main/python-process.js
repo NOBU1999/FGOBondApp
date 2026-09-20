@@ -21,6 +21,11 @@ class PythonProcess extends EventEmitter {
     this._stderrTail = "";
   }
 
+  /** 引擎 stderr 的尾部：上层（ipc-handlers）失败时拿它写诊断日志 */
+  get stderrTail() {
+    return this._stderrTail.trim();
+  }
+
   _launchArgs(mode, forceUpdate = false) {
     const base = ["--mode", mode, "--db", this.dbPath];
     if (mode === "update" && forceUpdate) {

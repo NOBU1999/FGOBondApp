@@ -50,8 +50,8 @@ export function createDataBridge({ domain, platform = {} }) {
 
     // ---------------- 设置 ----------------
     setServerRegion: (region) => {
-      meta.setServerRegion(region === "cn" ? "cn" : "jp");
-      return { serverRegion: meta.getServerRegion() };
+      // 与领域层一致：正常返回值原样透传（调用方不读它，界面只关心随后的重新加载）
+      return meta.setServerRegion(region === "cn" ? "cn" : "jp");
     },
     setGenericBondParticipation: (ids) => {
       meta.setGenericBondParticipation(ids || []);
@@ -112,3 +112,22 @@ export const WRITE_METHODS = new Set([
   "saveUserTeam",
   "deleteUserTeam",
 ]);
+
+/**
+ * 全部「数据方法」的名字（各平台据此注册通道 / 装代理，避免清单分叉）。
+ *
+ * 直接由 createDataBridge 的真实返回值推导 —— 加了方法就自动进清单，
+ * 不存在"实现加了、清单忘了"的情况（这类分叉以前出过事：活动牵绊表在安卓端漏了）。
+ */
+const STUB_DOMAIN = {
+  meta: {},
+  accounts: {},
+  box: {},
+  exclusions: {},
+  customCrafts: {},
+  teams: {},
+  staticData: {},
+};
+export const BRIDGE_METHOD_NAMES = Object.freeze(
+  Object.keys(createDataBridge({ domain: STUB_DOMAIN }))
+);

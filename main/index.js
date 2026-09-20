@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const { registerIpcHandlers, stopActiveEngine } = require("./ipc-handlers");
@@ -8,8 +8,46 @@ const { buildMenu } = require("./menu");
 const database = require("./database");
 const { getDbPath } = require("./paths");
 const { ensureRuntimeDb } = require("./runtime-db");
+const { diagLog, diagLogPath } = require("./diag-log");
 
 const isDev = !app.isPackaged;
+
+// ---------------------------------------------------------------------------
+// 主进程自身的异常也要留痕（以前只在控制台一闪而过，用户反馈时无从查起）
+// ---------------------------------------------------------------------------
+let crashNotified = false;
+
+function reportMainCrash(title, err) {
+  diagLog(`${title}：${(err && err.stack) || err}`);
+  if (crashNotified) return;
+  crashNotified = true;
+  try {
+    if (!app.isReady()) return;
+    dialog
+      .showMessageBox({
+        type: "error",
+        title: "程序出现异常",
+        message: title,
+        detail:
+          `已记录到诊断日志：\n${diagLogPath()}\n\n` +
+          "程序可能变得不稳定，建议重启程序；如果反复出现，请把上面这个日志文件反馈给作者。",
+        buttons: ["知道了"],
+        noLink: true,
+      })
+      .catch(() => {});
+  } catch (_) {
+    // ignore：弹窗失败也无妨，日志已经写下
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  reportMainCrash("主进程发生未处理的错误", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  // 未处理的 Promise 拒绝通常不致命：只记日志，不打扰用户
+  diagLog(`unhandledRejection：${(reason && reason.stack) || reason}`);
+});
 
 // ---------------------------------------------------------------------------
 // 渲染稳定性（Windows）
@@ -27,41 +65,7 @@ if (forceSoftwareRendering) {
   app.disableHardwareAcceleration();
 }
 
-const RENDERER_LOG_PREFIX = "renderer";
-
-let diagLogFile = null;
 let reloadAttempts = 0;
-
-function diagLogPath() {
-  if (!diagLogFile) {
-    const dir = path.join(path.dirname(getDbPath()), "backup");
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-    } catch (_) {
-      // ignore
-    }
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, "0");
-    const day = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
-    diagLogFile = path.join(dir, `${RENDERER_LOG_PREFIX}-${day}.log`);
-  }
-  return diagLogFile;
-}
-
-/** 渲染/GPU 诊断日志：出问题时用户把这个文件发回来即可定位 */
-function diagLog(message) {
-  const line = `[${new Date().toISOString()}] ${message}`;
-  try {
-    console.log(`[diag] ${message}`);
-  } catch (_) {
-    // ignore
-  }
-  try {
-    fs.appendFileSync(diagLogPath(), line + "\n", "utf8");
-  } catch (_) {
-    // ignore
-  }
-}
 
 let mainWindow = null;
 

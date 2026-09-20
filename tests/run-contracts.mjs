@@ -8,11 +8,14 @@
  *       新平台（网页 / 安卓）实现完宿主后，跑同一套用例即可证明行为对齐。
  *
  * 用法：
- *   node tests/run-contracts.mjs                 # 跑全部（bridge + engine）
+ *   node tests/run-contracts.mjs                 # 跑全部（surface + bridge + engine）
+ *   node tests/run-contracts.mjs --suite surface # 只跑接口清单一致性（不需要数据库）
  *   node tests/run-contracts.mjs --suite bridge  # 只跑领域层契约
  *   node tests/run-contracts.mjs --suite engine  # 只跑引擎协议
  *   node tests/run-contracts.mjs --db <库路径>    # 换数据库（默认 db/fgo_data.db）
  *   node tests/run-contracts.mjs --host <模块>    # 换宿主实现（默认 Windows：main/database.js）
+ *      例如真正的桥接层： --host ./tests/hosts/windows-bridge-host.mjs
+ *                          --host ./tests/hosts/android-bridge-host.mjs
  *
  * 前置：
  *   - 需要 db/fgo_data.db（静态数据）。缺库时对应套件会 SKIP，不会误报通过。
@@ -103,7 +106,82 @@ function prepareTempDb() {
     if (existsSync(dst)) rmSync(dst, { force: true });
     if (existsSync(DB_ARG + suffix)) copyFileSync(DB_ARG + suffix, dst);
   }
+  // 活动牵绊表（随包发布的那份）：放到运行库旁边，这样桌面/安卓宿主读到的都是真实那份
+  const bonusSrc = path.join(path.dirname(DB_ARG), "event_bond_bonus.json");
+  const bonusDst = path.join(TMP_DIR, "event_bond_bonus.json");
+  if (existsSync(bonusSrc)) copyFileSync(bonusSrc, bonusDst);
+  else if (existsSync(bonusDst)) rmSync(bonusDst, { force: true });
   return target;
+}
+
+// ---------------------------------------------------------------------------
+// 套件 0：接口清单一致性（不需要数据库）
+//   挡住"实现加了方法、某个平台的清单忘了跟"——这类分叉出过事（活动牵绊表安卓端漏了）
+// ---------------------------------------------------------------------------
+async function runSurfaceSuite() {
+  log("");
+  log("【surface】桥接接口清单一致性");
+
+  const { BRIDGE_METHOD_NAMES } = await import(
+    pathToFileURL(path.join(ROOT, "shared", "bridge", "data-bridge.mjs")).href
+  );
+  const { PLATFORM_METHODS, SUBSCRIBE_METHODS, ANDROID_NOT_IMPLEMENTED } = await import(
+    pathToFileURL(path.join(ROOT, "shared", "bridge", "surface.mjs")).href
+  );
+
+  const bridgeNames = [...BRIDGE_METHOD_NAMES];
+  const readText = (rel) => readFileSync(path.join(ROOT, rel), "utf8");
+  /** 从源码里抠出 `const <varName> = [ ... ];` 中的字符串名单 */
+  const listFrom = (text, varName) => {
+    const m = text.match(new RegExp(`const ${varName} = \\[([\\s\\S]*?)\\];`));
+    if (!m) return null;
+    return [...m[1].matchAll(/"([A-Za-z0-9_]+)"/g)].map((x) => x[1]);
+  };
+  const diff = (a, b) => a.filter((x) => !b.includes(x));
+  const sameSet = (a, b) =>
+    a.length === b.length && new Set(a).size === new Set(b).size && a.every((x) => b.includes(x));
+
+  const preloadText = readText("preload.js");
+  const preloadData = listFrom(preloadText, "DATA_METHODS") || [];
+  if (sameSet(preloadData, bridgeNames)) {
+    pass(`preload.js 数据方法清单 = 桥接层清单（${bridgeNames.length} 个）`);
+  } else {
+    fail(
+      "preload.js 数据方法清单与桥接层不一致",
+      `preload 多 ${JSON.stringify(diff(preloadData, bridgeNames))} / 少 ${JSON.stringify(diff(bridgeNames, preloadData))}`
+    );
+  }
+
+  const bootPath = path.join("platforms", "android", "web-host", "boot.js");
+  const bootText = readText(bootPath);
+  const bootData = listFrom(bootText, "DATA_METHODS") || [];
+  if (sameSet(bootData, bridgeNames)) {
+    pass("安卓 boot.js 数据方法清单 = 桥接层清单");
+  } else {
+    fail(
+      "安卓 boot.js 数据方法清单与桥接层不一致",
+      `安卓多 ${JSON.stringify(diff(bootData, bridgeNames))} / 少 ${JSON.stringify(diff(bridgeNames, bootData))}`
+    );
+  }
+
+  const missingInPreload = [...PLATFORM_METHODS, ...SUBSCRIBE_METHODS].filter(
+    (n) => !new RegExp(`\\b${n}\\s*:`).test(preloadText)
+  );
+  if (!missingInPreload.length) pass("preload.js 暴露全部平台方法 / 订阅方法");
+  else fail("preload.js 少了平台方法", missingInPreload.join(", "));
+
+  const missingInBoot = PLATFORM_METHODS.filter(
+    (n) => !ANDROID_NOT_IMPLEMENTED.includes(n) && !new RegExp(`api\\.${n}\\s*=`).test(bootText)
+  );
+  if (!missingInBoot.length) pass("安卓 boot.js 暴露全部平台方法（除已声明例外）");
+  else fail("安卓 boot.js 少了平台方法", missingInBoot.join(", "));
+
+  const appText = readText(path.join("renderer", "app.js"));
+  const used = [...new Set([...appText.matchAll(/window\.fgo\.([A-Za-z0-9_]+)/g)].map((m) => m[1]))];
+  const known = new Set([...bridgeNames, ...PLATFORM_METHODS, ...SUBSCRIBE_METHODS]);
+  const unknown = used.filter((n) => !known.has(n));
+  if (!unknown.length) pass(`界面用到的 ${used.length} 个方法都在清单里`);
+  else fail("界面调用了清单外的方法", unknown.join(", "));
 }
 
 // ---------------------------------------------------------------------------
@@ -212,8 +290,20 @@ async function runBridgeSuite() {
   }
   log(`  宿主：${host.name}；库：${path.relative(ROOT, tmpDb)}`);
 
-  const file = loadCases("bridge-cases.json");
-  for (const c of file.cases) {
+  let cases = loadCases("bridge-cases.json").cases;
+  if (HOST_MODULE) {
+    // 换了宿主（真正的桥接层）时，追加一批只有桥接层才有的用例
+    const extraPath = path.join(ROOT, "tests", "contracts", "bridge-host-cases.json");
+    const bonusPresent = existsSync(path.join(path.dirname(tmpDb), "event_bond_bonus.json"));
+    if (existsSync(extraPath) && bonusPresent) {
+      const extra = JSON.parse(readFileSync(extraPath, "utf8"));
+      cases = cases.concat(extra.cases || []);
+      log(`  （追加 ${(extra.cases || []).length} 条「宿主专属」用例）`);
+    } else if (existsSync(extraPath)) {
+      log("  （跳过「宿主专属」用例：找不到 db/event_bond_bonus.json）");
+    }
+  }
+  for (const c of cases) {
     const fn = c.method.split(".").pop();
     const callArgs = resolveToken(c.args || []);
     let actual;
@@ -512,6 +602,7 @@ async function runEngineSuite() {
 // 主流程
 // ---------------------------------------------------------------------------
 log("一致性契约测试（contractVersion=1）");
+if (SUITE === "all" || SUITE === "surface") await runSurfaceSuite();
 if (SUITE === "all" || SUITE === "bridge") await runBridgeSuite();
 if (SUITE === "all" || SUITE === "engine") await runEngineSuite();
 

@@ -1,0 +1,29 @@
+{
+  "contractVersion": 1,
+  "suite": "bridge-host",
+  "note": "只有「真正的桥接层宿主」才跑的用例（--host 时追加）：平台字段注入 + 活动牵绊表。活动牵绊表这条专门挡住'安卓端漏了实现/只给空桩'——v0.1.12 就是栽在这里。",
+  "startState": "在 bridge-cases.json 跑完之后执行；此时库里有一个默认账号、区服等元信息已被用例改过。",
+  "cases": [
+    {
+      "name": "平台字段：getAppInfo 给出 platform / serverRegion / version / activeAccount",
+      "method": "platform.getAppInfo",
+      "args": [],
+      "expect": [
+        { "path": "result.platform", "matches": "^(windows|android)$" },
+        { "path": "result.serverRegion", "matches": "^(jp|cn)$" },
+        { "path": "result.version", "matches": ".+" },
+        { "path": "result.activeAccount.id", "gte": 1 },
+        { "path": "result.dbPath", "matches": ".+" }
+      ]
+    },
+    {
+      "name": "活动牵绊表：返回随包数据（不能是空桩、不能是 null）",
+      "method": "platform.getEventBondBonuses",
+      "args": [],
+      "expect": [
+        { "path": "result.length", "gte": 1 },
+        { "path": "result[0].eventId", "gte": 1 }
+      ]
+    }
+  ]
+}
