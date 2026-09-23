@@ -945,6 +945,105 @@ def _greedy_mapping(
 # ---------------------------------------------------------------------------
 # 组队与主入口
 # ---------------------------------------------------------------------------
+def _merge_craft_assignment(
+    ctx: DataContext,
+    bp: Blueprint,
+    players_by_pos: Dict[str, PlacedMember],
+    craft_choice: Sequence[int],
+    *,
+    passes: int = 1,
+) -> None:
+    """把礼装组合按"谁最吃得到"分配到自由礼装槽（配对优化，v0.1.14）。
+
+    旧做法是把礼装按 Cost 降序贴到排好序的槽位上，**完全不看谁能吃到它**：
+    一张"〔Caster〕+20%"贴给非术阶就等于白装。这里改成一眼贪心 + 若干轮
+    成对交换，目标是"让每张礼装尽量落在能吃满它的从者身上"。
+
+    只处理**同一物理槽组**内的分配（主礼装槽 / 冠位第二礼装槽各自的 Cost 语义
+    不同，不跨组交换，避免把 Cost 算错）。
+    """
+    if not craft_choice:
+        return
+    free_slots = [cs for cs in bp.player_craft_slots if cs.fixed_craft_id is None]
+    if not free_slots:
+        return
+    ordered_slots = sorted(
+        free_slots,
+        key=lambda cs: (0 if cs.index == 1 else 1, POSITIONS.index(cs.position)),
+    )
+    filled_slots = ordered_slots[: len(craft_choice)]
+
+    def current_craft_for(slot: "CraftSlot", player: PlacedMember) -> Optional[int]:
+        return player.craft_id if slot.index == 0 else player.second_craft_id
+
+    def set_craft(slot: "CraftSlot", player: PlacedMember, cid: Optional[int]) -> None:
+        if slot.index == 0:
+            player.craft_id = cid
+        else:
+            player.second_craft_id = cid
+
+    def craft_value(cid: int) -> float:
+        craft = ctx.crafts.get(cid)
+        if craft is None:
+            return 0.0
+        return float(craft.bonus_value or 0.0) + float(craft.flat_bonus or 0.0) * 0.05
+
+    def marginal(servant_id: int, cid: int) -> float:
+        """这张礼装给这名从者带来的收益（只算与"贴给谁"相关的部分）。"""
+        craft = ctx.crafts.get(cid)
+        if craft is None:
+            return 0.0
+        if craft.bonus_type == "trait":
+            table = trait_benefit_table(ctx)
+            if not table.can_trigger(servant_id, cid):
+                return 0.0
+        return float(craft.bonus_value or 0.0) + float(craft.flat_bonus or 0.0) * 0.05
+
+    # 贪心：按礼装自身价值降序，各自挑边际收益最高的空槽
+    pending = sorted(craft_choice, key=craft_value, reverse=True)
+    remaining = list(filled_slots)
+    for cid in pending:
+        best_slot, best_gain = None, None
+        for slot in remaining:
+            player = players_by_pos.get(slot.position)
+            if player is None:
+                continue
+            gain = marginal(player.servant_id, cid)
+            if best_gain is None or gain > best_gain:
+                best_gain, best_slot = gain, slot
+        if best_slot is None:
+            break
+        player = players_by_pos[best_slot.position]
+        set_craft(best_slot, player, cid)
+        remaining.remove(best_slot)
+
+    if passes <= 0:
+        return
+    # 成对交换：把两张礼装对调，若"两者边际收益之和"变大就换。
+    for _ in range(passes):
+        improved = False
+        for i, slot_a in enumerate(filled_slots):
+            pa = players_by_pos.get(slot_a.position)
+            if pa is None:
+                continue
+            for slot_b in filled_slots[i + 1:]:
+                pb = players_by_pos.get(slot_b.position)
+                if pb is None:
+                    continue
+                ca = current_craft_for(slot_a, pa)
+                cb = current_craft_for(slot_b, pb)
+                if ca is None and cb is None:
+                    continue
+                cur = marginal(pa.servant_id, ca or 0) + marginal(pb.servant_id, cb or 0)
+                nxt = marginal(pa.servant_id, cb or 0) + marginal(pb.servant_id, ca or 0)
+                if nxt > cur + 1e-12:
+                    set_craft(slot_a, pa, cb)
+                    set_craft(slot_b, pb, ca)
+                    improved = True
+        if not improved:
+            break
+
+
 def _make_team_config(
     ctx: DataContext,
     req: CalculationRequest,
@@ -2211,7 +2310,7 @@ def search_top_teams(
                 best_team = candidate
         return best_team
 
-    def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False):
+    def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False, pair_optimize=False):
         nonlocal seen, evaluated_total, global_best_score
         original_craft_combos = craft_combos
         used_players = set(bp.fixed_servant_ids) | set(extras_tuple)
@@ -2336,6 +2435,12 @@ def search_top_teams(
                     )
                     if team is None:
                         continue
+                    # ④ 配对优化（只在精算轮开启）：按"谁能吃到这张礼装"重新分配
+                    # 自由礼装槽。旧做法是按 Cost 降序贴槽位，不看从者特性，
+                    # 会把"〔Caster〕+20%"贴给非术阶（等于白装）。
+                    if pair_optimize:
+                        _merge_craft_assignment(ctx, bp, {p.position: p for p in team.players},
+                                                craft_choice, passes=2)
                     # 阶段不再由用户手动指定：根据当前礼装组合自动选择最优阶段/灵衣
                     # 把 DP/粗搜可能留下的空槽补满，避免“Cost 还有剩余却无礼装”
                     team = _fill_remaining_craft_slots(ctx, req, bp, team, craft_pool)
@@ -2528,14 +2633,19 @@ def search_top_teams(
                     if len(_usable) < len(_combo):
                         continue
                     for _variant in range(2):
+                        # 两种枚举顺序（按礼装价值 / 按 ID）会产生不同的"谁先占位"，
+                        # 从而得到不同队伍。实测加到 4 个变体会让单位时间能处理的
+                        # 礼装组合数下降，反而更差（9.832→9.760）
+                        _chosen: List[int] = []
+                        _used: Set[int] = set()
                         _crafts_order = sorted(
                             _combo,
                             key=(lambda cid: (-_table.craft_value(cid), cid))
-                            if _variant == 0 else (lambda cid: (cid,)),
+                            if _variant % 2 == 0 else (lambda cid: (cid,)),
                         )
-                        _chosen: List[int] = []
-                        _used: Set[int] = set()
                         for _cid in _crafts_order:
+                            if len(_chosen) >= len(bp.free_servant_positions):
+                                break
                             _best_sid, _best_key = None, None
                             for _sid in _all_pool:
                                 if _sid in _used:
@@ -2607,7 +2717,7 @@ def search_top_teams(
         if not servant_set:
             continue
         extras_tuple = tuple(sorted(set(servant_set) - set(bp.fixed_servant_ids)))
-        evaluate_extras(extras_tuple, full_combos)
+        evaluate_extras(extras_tuple, full_combos, pair_optimize=True)
 
     # 精算后对每个进入精算的从者阵容做一次自由位排列优化，修正启发式放位漏掉的交换。
     # 该兜底有额外算力成本，只保留在最后两个高算力档位（高质量/极限精算）。
