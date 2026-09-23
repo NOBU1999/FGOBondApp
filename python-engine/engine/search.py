@@ -2636,6 +2636,10 @@ def search_top_teams(
                     _sets.append((_value, _combo, _members))
             # 2) 价值高的集合优先评估
             _sets.sort(key=lambda x: x[0], reverse=True)
+            # 预算紧的档位多给这一趟一点时间：低档位（35/60s）下常规搜索本身很短，
+            # 如果这里只走到一半就停，最优解可能还没被评估到。
+            _first_share = 0.75 if timeout_seconds <= 70 else 0.5
+            _craft_first_deadline = start + timeout_seconds * _first_share
             for _value, _combo, _members in _sets:
                 check_cancel()
                 if time.time() >= _craft_first_deadline:
