@@ -197,6 +197,7 @@ function ensureSchema(db) {
       crown_positions TEXT,
       base_bond REAL DEFAULT 0,
       neighborhood TEXT DEFAULT 'standard',
+      search_order TEXT DEFAULT 'servant',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -207,6 +208,11 @@ function ensureSchema(db) {
   }
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN neighborhood TEXT DEFAULT 'standard'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN search_order TEXT DEFAULT 'servant'");
   } catch (_) {
     // 列已存在
   }

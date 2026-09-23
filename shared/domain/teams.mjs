@@ -14,8 +14,8 @@ export function createTeamsDomain({ sql }) {
         ? team.supportSecondCraftId
         : null;
     const info = sql.run(
-      `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, support_second_craft_id, support_position, cost_limit, strategy, quality_mode, mode, crown_class, crown_positions, base_bond, neighborhood)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO user_teams (name, fixed_servants, fixed_crafts, support_id, support_craft_id, support_second_craft_id, support_position, cost_limit, strategy, quality_mode, mode, crown_class, crown_positions, base_bond, neighborhood, search_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         team.name || "",
         JSON.stringify(team.fixedServants || []),
@@ -34,6 +34,7 @@ export function createTeamsDomain({ sql }) {
         team.neighborhood === "off" || team.neighborhood === "deep"
           ? team.neighborhood
           : "standard",
+        team.searchOrder === "craft" ? "craft" : "servant",
       ]
     );
     return info.lastInsertRowid;
@@ -41,7 +42,7 @@ export function createTeamsDomain({ sql }) {
 
   function listUserTeams() {
     const rows = sql.all(
-      "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, support_second_craft_id AS supportSecondCraftId, support_position AS supportPosition, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, mode, crown_class AS crownClass, crown_positions AS crownPositions, base_bond AS baseBond, neighborhood, created_at AS createdAt FROM user_teams ORDER BY id DESC"
+      "SELECT id, name, fixed_servants AS fixedServants, fixed_crafts AS fixedCrafts, support_id AS supportId, support_craft_id AS supportCraftId, support_second_craft_id AS supportSecondCraftId, support_position AS supportPosition, cost_limit AS costLimit, strategy, quality_mode AS qualityMode, mode, crown_class AS crownClass, crown_positions AS crownPositions, base_bond AS baseBond, neighborhood, search_order AS searchOrder, created_at AS createdAt FROM user_teams ORDER BY id DESC"
     );
     for (const r of rows) {
       try {

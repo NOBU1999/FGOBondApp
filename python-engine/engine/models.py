@@ -141,6 +141,12 @@ class CalculationRequest:
     #   "off"         关闭：不做邻域（省时间，适合小 Box 或快速档）
     #   "deep"        加深：追加 3-换层，最多 3 轮
     neighborhood: str = "standard"
+    # 搜索顺序（v0.1.14 新增）：
+    #   "servant" 默认：先选从者阵容，再给阵容配礼装（原行为）
+    #   "craft"         先枚举礼装组合，再反查"最能吃满这批礼装"的从者阵容
+    #                   （专捞"多人共享同一批特性礼装"的抱团阵容，
+    #                    该族阵容按单从者评分永远排不进候选池）
+    search_order: str = "servant"
 
 
 @dataclass
@@ -301,6 +307,10 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
     req.neighborhood = str(neighborhood).strip().lower() or "standard"
     if req.neighborhood not in ("off", "standard", "deep"):
         req.neighborhood = "standard"
+    order = (data.get("searchOrder") or "servant")
+    req.search_order = str(order).strip().lower() or "servant"
+    if req.search_order not in ("servant", "craft"):
+        req.search_order = "servant"
     if req.class_group in (None, "", "all"):
         req.class_group = None
     if strategy == STRATEGY_TARGET_MAX:
