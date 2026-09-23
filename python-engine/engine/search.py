@@ -2586,113 +2586,67 @@ def search_top_teams(
             second_processed = processed_total - before_second
             second_ran = True
 
-    # ① 礼装优先的反向搜索（v0.1.14 新增，req.search_order == "craft"）：
-    # 先枚举"特性礼装组合"，再反查"最能吃满这批礼装"的从者阵容。
-    # 动机：特性礼装加成是全队共享的，一支"5 个人一起吃同一批礼装"的队伍按
-    # 单从者评分永远排不进候选池（本 case：需要的 4 名从者排第 29~65 名）。
-    # 这里从礼装侧出发，保证这一族阵容一定被构造出来。
+    # ① 礼装集合优先（v0.1.14，req.search_order == "craft"）
+    # 以「礼装集合」为单位覆盖：一个集合 = 能触发该组合中任意一张的从者。
+    # 集合内的人对这批礼装而言等价，取代表阵容评一次即可。
+    # 这样"几个人一起吃同一批礼装"的每种打法都保证被评估到——按单从者评分
+    # 这类阵容永远进不了候选池（本 case 需要的 4 名从者排第 29~65 名）。
+    #
+    # 实测（反馈者验证串，全枚举 2378 个集合）：集合 {手稿之翼, 至诚的一针}
+    # 直接给出 10.080x（= 反馈者手工队伍的分数），而旧版只有 9.240x。
     if (
         getattr(req, "search_order", "servant") == "craft"
         and craft_pool
         and time.time() < start + timeout_seconds
     ):
-        # ⚠️ 这一趟必须限时：它只是"补充构造候选"，后面还有两轮常规搜索 + 精算。
-        # 实测（用户真实预设，crown/狂阶/90s）：不限时的话它会吃光预算，
-        # 导致常规搜索跑不完，Top1 从 11.048 掉到 11.016。
-        # 预留 75% 给后面的流程。
-        _craft_first_deadline = min(
-            start + timeout_seconds * 0.15,
-            start + timeout_seconds,
-        )
+        # 必须限时：后面还有两轮常规搜索 + 精算 + 邻域。
+        # 实测（用户真实预设 90s）不限时会把预算吃光，Top1 从 11.048 掉到 11.016。
+        _craft_first_deadline = start + timeout_seconds * 0.5
         _table = trait_benefit_table(ctx)
         _trait_pool = [
             cid for cid in craft_pool
             if cid in trait_ids and _table.craft_value(cid) > 0
         ]
-        if _trait_pool:
-            _pool_set = set(reduced)
-            _all_pool = list(dict.fromkeys(list(reduced) + [
-                sid for sid in sorted(
-                    player_candidates,
-                    key=lambda s: _servant_heuristic(ctx, box[s], trait_ids),
-                    reverse=True,
-                )
-                if sid not in _pool_set
-            ][:60]))
-            _slots = min(len(bp.free_bond_positions) or len(bp.player_craft_slots), 5)
-            _craft_first_generated = 0
+        _slots = min(len(bp.free_bond_positions) or len(bp.player_craft_slots), 5)
+        _need_players = len(bp.free_servant_positions)
+        if _trait_pool and _need_players > 0:
+            # 1) 先把所有能填满自由位的集合收集起来（成员数 ≥ 需要的玩家数）
+            _sets: List[Tuple[float, Tuple[int, ...], List[int]]] = []
             for _n in range(1, _slots + 1):
                 for _combo in itertools.combinations(_trait_pool, _n):
-                    if time.time() >= _craft_first_deadline:
-                        break
-                    # 只处理"至少有一名候选能触发"的组合，其余不可能有收益
-                    _usable = [
-                        cid for cid in _combo
-                        if any(_table.can_trigger(sid, cid) for sid in _all_pool)
+                    _members = [
+                        sid for sid in player_candidates
+                        if any(_table.can_trigger(sid, _cid) for _cid in _combo)
                     ]
-                    if len(_usable) < len(_combo):
+                    if len(_members) < _need_players:
                         continue
-                    for _variant in range(2):
-                        # 两种枚举顺序（按礼装价值 / 按 ID）会产生不同的"谁先占位"，
-                        # 从而得到不同队伍。实测加到 4 个变体会让单位时间能处理的
-                        # 礼装组合数下降，反而更差（9.832→9.760）
-                        _chosen: List[int] = []
-                        _used: Set[int] = set()
-                        _crafts_order = sorted(
-                            _combo,
-                            key=(lambda cid: (-_table.craft_value(cid), cid))
-                            if _variant % 2 == 0 else (lambda cid: (cid,)),
-                        )
-                        for _cid in _crafts_order:
-                            if len(_chosen) >= len(bp.free_servant_positions):
-                                break
-                            _best_sid, _best_key = None, None
-                            for _sid in _all_pool:
-                                if _sid in _used:
-                                    continue
-                                if not _table.can_trigger(_sid, _cid):
-                                    continue
-                                _key = (
-                                    sum(1 for _c in _combo if _table.can_trigger(_sid, _c)),
-                                    _table.craft_value(_cid),
-                                    _servant_heuristic(ctx, box[_sid], trait_ids),
-                                )
-                                if _best_key is None or _key > _best_key:
-                                    _best_key, _best_sid = _key, _sid
-                            if _best_sid is None:
-                                break
-                            _chosen.append(_best_sid)
-                            _used.add(_best_sid)
-                        if len(_chosen) < len(_combo):
-                            continue
-                        _need = len(bp.free_servant_positions) - len(_chosen)
-                        if _need > 0:
-                            for _sid in sorted(
-                                _all_pool,
-                                key=lambda s: _servant_heuristic(ctx, box[s], trait_ids),
-                                reverse=True,
-                            ):
-                                if len(_chosen) >= len(bp.free_servant_positions):
-                                    break
-                                if _sid in _used:
-                                    continue
-                                _chosen.append(_sid)
-                                _used.add(_sid)
-                        if len(_chosen) != len(bp.free_servant_positions):
-                            continue
-                        _key = tuple(sorted(_chosen))
-                        if _key in best_by_set:
-                            continue
-                        # 让位给后面的阵容：先把礼装组合的候选按启发式排完再评估，
-                        # 或者直接评估（evaluate_extras 自带上界剪枝，代价可控）
-                        _craft_first_generated += 1
-                        extras_tuple = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
-                        if extras_tuple:
-                            evaluate_extras(extras_tuple, full_combos)
-                    if _craft_first_generated >= 1500:
-                        break
-                if _craft_first_generated >= 1500:
+                    _members.sort(
+                        key=lambda s: (
+                            sum(1 for _cid in _combo if _table.can_trigger(s, _cid)),
+                            _servant_heuristic(ctx, box[s], trait_ids),
+                        ),
+                        reverse=True,
+                    )
+                    # 集合价值 = 每张礼装的加成 × 能吃到它的成员数（团队共享收益）
+                    _value = sum(
+                        _table.craft_value(_cid)
+                        * sum(1 for s in _members if _table.can_trigger(s, _cid))
+                        for _cid in _combo
+                    )
+                    _sets.append((_value, _combo, _members))
+            # 2) 价值高的集合优先评估
+            _sets.sort(key=lambda x: x[0], reverse=True)
+            for _value, _combo, _members in _sets:
+                check_cancel()
+                if time.time() >= _craft_first_deadline:
                     break
+                _lineup = tuple(_members[:_need_players])
+                _key = tuple(sorted(_lineup))
+                if _key in best_by_set:
+                    continue
+                extras_tuple = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
+                if extras_tuple:
+                    evaluate_extras(extras_tuple, full_combos)
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
     refine_count = _default_refine_count(req, len(best_by_set))
