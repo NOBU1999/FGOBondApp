@@ -2558,7 +2558,7 @@ def search_top_teams(
         ][:30]
         neighbor_ids = list(dict.fromkeys(list(reduced) + outside))
 
-        for _round in range(2):
+        for _round in range(3):
             seeds = [e for e in sorted(
                 best_by_set.values(), key=lambda x: x["rank_key"], reverse=True
             )[:20] if e.get("servant_set")]
@@ -2596,6 +2596,30 @@ def search_top_teams(
                         key = tuple(sorted(nxt))
                         if key not in best_by_set:
                             swaps[key] = None
+            # 第三层（贪心重启）：1 换不动的队伍，试「同时换 2 人」。
+            # 目的：最优阵容可能和当前最好的队伍只共享 1 个从者，
+            # 单点替换的邻域走不到，必须允许一次跳两步。
+            if _round >= 1:
+                top_seeds = seeds[:2]
+                cand_src = neighbor_ids[:8]
+                for a in top_seeds:
+                    a_ids = a["servant_set"]
+                    if len(a_ids) != len(bp.free_servant_positions):
+                        continue
+                    for i in range(len(a_ids)):
+                        for j in range(i + 1, len(a_ids)):
+                            for s1 in cand_src:
+                                if s1 in a_ids:
+                                    continue
+                                for s2 in cand_src:
+                                    if s2 in a_ids or s2 == s1:
+                                        continue
+                                    nxt = list(a_ids)
+                                    nxt[i] = s1
+                                    nxt[j] = s2
+                                    key = tuple(sorted(nxt))
+                                    if key not in best_by_set:
+                                        swaps[key] = None
             if not swaps:
                 break
             new_best_before = global_best_score
