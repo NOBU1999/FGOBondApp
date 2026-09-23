@@ -284,6 +284,9 @@ const App = {
       verificationTokensFull: [],
       verificationCopied: false,
       settingsVisible: false,
+      // 邻域优化档位（v0.1.14 新增）：算完后把靠前队伍互相"换人"再算，捞"混血"更优解。
+      // off / standard / deep；跟随队伍预设一起保存与加载。
+      neighborhood: "standard",
       resultSettings: {
         autoExpandFirst: false,
         showSearchStats: false,
@@ -2313,6 +2316,9 @@ const App = {
         costLimit: this.costLimit,
         strategy: this.strategy,
         qualityMode: this.qualityMode,
+        neighborhood: this.neighborhood === "off" || this.neighborhood === "deep"
+          ? this.neighborhood
+          : "standard",
       };
       try {
         await window.fgo.saveUserTeam(plainClone(team));
@@ -2371,6 +2377,9 @@ const App = {
       this.costLimit = preset.costLimit || 116;
       this.strategy = preset.strategy || "total_max";
       this.qualityMode = preset.qualityMode || "balanced";
+      this.neighborhood = preset.neighborhood === "off" || preset.neighborhood === "deep"
+        ? preset.neighborhood
+        : "standard";
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
       this.baseBond = Number(preset.baseBond || 0);
@@ -2668,6 +2677,7 @@ const App = {
         topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
         timeoutMs: this.timeoutForQuality(this.qualityMode),
+        neighborhood: this.neighborhood || "standard",
       };
     },
     buildPresetPayload(preset) {
@@ -2721,6 +2731,7 @@ const App = {
         topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
         timeoutMs: this.timeoutForQuality(this.qualityMode),
+        neighborhood: this.neighborhood || "standard",
       };
     },
     isFullPreset(preset) {
@@ -3277,6 +3288,18 @@ const App = {
               <option value="target_max">指定从者最大化</option>
               <option value="balanced">均衡模式</option>
             </select>
+          </div>
+          <div class="field">
+            <label>邻域优化（换人再算）</label>
+            <select v-model="neighborhood">
+              <option value="off">关闭（最快）</option>
+              <option value="standard">标准（默认）</option>
+              <option value="deep">深入（最多同时换 3 人，最慢）</option>
+            </select>
+            <div class="text-muted">
+              算完之后，会把结果里靠前的几支队伍互相"换人"再算一遍，专门捞那些
+              "把第 2 名的某个人换进第 1 名反而更强"的队伍。关闭可省时间；深入能找到更远的解，但更慢。
+            </div>
           </div>
           <div class="field">
             <label>计算质量 / 等待时间</label>

@@ -2535,19 +2535,30 @@ def search_top_teams(
                 if global_best_score is None or score > global_best_score:
                     global_best_score = score
 
-    # 邻域换人（v0.1.14 新增）：以当前 Top20 为种子，互相换 1 名自由位从者再评估。
+    # 邻域换人（v0.1.14 新增）：以当前 Top20 为种子，互相换从者再评估。
     # 动机：有人反馈"Top2 的某个从者换进 Top1 反而更高"——那些"混血阵容"往往
     # 介于两支高分队伍之间，既不在粗筛抽样集合里，也不在精算名单里，因此从未被
     # 评估过。这里用很小的代价把 Top 队伍的直接邻居补上。
-    # 只在标准档（≥60s）以上开启；换出来的阵容仍然走完整礼装管线 + 精算。
+    #
+    # 档位（req.neighborhood）：
+    #   off      —— 不做（快速档默认，省时间）
+    #   standard —— 1-换 + 2-换，最多 2 轮（默认）
+    #   deep     —— 追加 3-换层，最多 3 轮（更慢，能爬到更远的解）
+    neighborhood = (getattr(req, "neighborhood", "") or "standard").lower()
+    if neighborhood == "off":
+        neighborhood_rounds = 0
+    elif neighborhood == "deep":
+        neighborhood_rounds = 3
+    else:
+        neighborhood_rounds = 2
     if (
-        req.timeout_ms >= 60000
+        neighborhood_rounds > 0
         and len(bp.free_servant_positions) > 0
         and time.time() < refine_deadline
     ):
         pool_set = set(reduced)
-        # 邻域候选：池内 + 池外高启发式从者。给足数量，让"混血阵容"有机会被构造出来
-        # （上限 240 人，配合 evaluate_extras 自带的上界剪枝，代价可控）。
+        # 邻域候选：池内 + 池外高启发式从者。30 人是实测的最佳点：
+        # 再放宽（试过 60 / 80）会把时间耗在低价值换上，反而挤掉后续轮数。
         outside = [
             sid for sid in sorted(
                 player_candidates,
@@ -2558,7 +2569,7 @@ def search_top_teams(
         ][:30]
         neighbor_ids = list(dict.fromkeys(list(reduced) + outside))
 
-        for _round in range(3):
+        for _round in range(neighborhood_rounds):
             seeds = [e for e in sorted(
                 best_by_set.values(), key=lambda x: x["rank_key"], reverse=True
             )[:20] if e.get("servant_set")]
@@ -2620,6 +2631,46 @@ def search_top_teams(
                                     key = tuple(sorted(nxt))
                                     if key not in best_by_set:
                                         swaps[key] = None
+            # 第四层（只给最好的那支队）：3-换。2-换仍不够时，说明最优阵容与当前
+            # 最好的队伍共享的从者太少。候选池收紧到 4 人 + 上限 400 个组合，
+            # 保证这一层的耗时可控。仅在预算充足时报开启。
+            if (
+                _round >= 2
+                and seeds
+                and bp.free_servant_positions
+                and time.time() < refine_deadline - 5.0
+            ):
+                a = seeds[0]
+                a_ids = a["servant_set"]
+                if len(a_ids) == len(bp.free_servant_positions):
+                    # 关键：候选取自"池外高潜力段"（第 4~24 名），而不是最靠前的几名。
+                    # 目标阵容需要的从者往往排在第 29~65 名，用前几名做 3-换根本够不着。
+                    tail = [s for s in neighbor_ids[4:24] if s not in a_ids]
+                    cand_src = tail[:6]
+                    positions = list(range(len(a_ids)))
+                    for i in positions:
+                        for j in positions:
+                            if j <= i:
+                                continue
+                            for k in positions:
+                                if k <= j:
+                                    continue
+                                for s1 in cand_src:
+                                    for s2 in cand_src:
+                                        if s2 == s1:
+                                            continue
+                                        for s3 in cand_src:
+                                            if s3 in (s1, s2):
+                                                continue
+                                            nxt = list(a_ids)
+                                            nxt[i], nxt[j], nxt[k] = s1, s2, s3
+                                            key = tuple(sorted(nxt))
+                                            if key not in best_by_set:
+                                                swaps[key] = None
+                                        if len(swaps) >= 400:
+                                            break
+                                    if len(swaps) >= 400:
+                                        break
             if not swaps:
                 break
             new_best_before = global_best_score

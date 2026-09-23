@@ -136,6 +136,11 @@ class CalculationRequest:
     top_n: int = 20
     timeout_ms: int = 10000
     target_servant_id: Optional[int] = None
+    # 邻域搜索档位（v0.1.14 新增）：
+    #   ""/"standard" 默认：1-换 + 2-换，最多 2 轮
+    #   "off"         关闭：不做邻域（省时间，适合小 Box 或快速档）
+    #   "deep"        加深：追加 3-换层，最多 3 轮
+    neighborhood: str = "standard"
 
 
 @dataclass
@@ -292,6 +297,10 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
     )
     req.candidate_pool_size = int(data.get("candidatePoolSize", 30) or 30)
     req.craft_pool_size = int(data.get("craftPoolSize", 10) or 10)
+    neighborhood = (data.get("neighborhood") or "standard")
+    req.neighborhood = str(neighborhood).strip().lower() or "standard"
+    if req.neighborhood not in ("off", "standard", "deep"):
+        req.neighborhood = "standard"
     if req.class_group in (None, "", "all"):
         req.class_group = None
     if strategy == STRATEGY_TARGET_MAX:

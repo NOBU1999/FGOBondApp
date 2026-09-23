@@ -196,11 +196,17 @@ function ensureSchema(db) {
       crown_class TEXT DEFAULT 'all',
       crown_positions TEXT,
       base_bond REAL DEFAULT 0,
+      neighborhood TEXT DEFAULT 'standard',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN quality_mode TEXT DEFAULT 'balanced'");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    db.exec("ALTER TABLE user_teams ADD COLUMN neighborhood TEXT DEFAULT 'standard'");
   } catch (_) {
     // 列已存在
   }
