@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from . import calculator
-from .calculator import DataContext, PlacedMember, TeamConfig
+from .calculator import DataContext, PlacedMember, TeamConfig, trait_benefit_table
 from .models import (
     CLASS_GROUPS,
     FRONT_POSITIONS,
@@ -321,30 +321,21 @@ def _max_possible_trait_bonus(
     ctx: DataContext,
     servant_id: int,
     trait_craft_ids: Sequence[int],
+    limit: int = 5,
 ) -> float:
-    """该从者在所有普通再临阶段/灵衣状态下能获得的最高特性礼装收益。
+    """该从者能同时吃到的、最有价值的前 limit 张特性礼装收益之和。
 
-    用于候选池/启发式：即使当前默认阶段不满足某特性，只要某个阶段或灵衣
-    能满足，也应把该从者当作潜在受益者参与排序。
+    用于候选池/启发式排序。要点（v0.1.14 修正）：
+    - 旧口径只看「单张最高」，导致大批从者并列同分（本 case 166 人里 30+ 人同为
+      0.60），候选池按组合数截断时会把并列段腰斩，把真正的高潜力从者埋掉；
+    - 新口径看「能同时吃到几张」：特性礼装的加成是全队共享的，能同时吃到多张
+      的从者在「抱团吃礼装」的队伍里价值远高于单张最高者；
+    - 只看从者的所有再临阶段/灵衣状态，取最优状态（用户在 Box 里可以改阶段）。
     """
-    info = ctx.servants.get(servant_id)
-    if not info or not info.traits:
+    if limit <= 0 or not trait_craft_ids:
         return 0.0
-    best = 0.0
-    for state_key in info.traits:
-        mask = info.mask_for(state_key)
-        total = 0.0
-        for cid in trait_craft_ids:
-            craft = ctx.crafts.get(cid)
-            if craft is None:
-                continue
-            for group_mask in craft.trigger_masks:
-                if (mask & group_mask) == group_mask:
-                    total += craft.bonus_value
-                    break
-        if total > best:
-            best = total
-    return best
+    table = trait_benefit_table(ctx)
+    return table.top_sum(servant_id, trait_craft_ids, limit)
 
 
 def _servant_heuristic(
@@ -360,6 +351,8 @@ def _servant_heuristic(
     if bs.max_bond and not bs.bond_switch2:
         # 自身不计收益，作为玩家位价值下降；但作为助战无所谓
         score -= 0.8
+    # 权重 3.0 对应「一名从者大约参与 3 个位置的平均收益」的经验值；
+    # 改用「前 N 张之和」后，能同时吃多张特性礼装的从者会明显靠前。
     score += _max_possible_trait_bonus(ctx, bs.servant_id, trait_craft_ids) * 3.0
     return score
 
@@ -372,17 +365,66 @@ def _reduce_candidate_ids(
     box: Dict[int, BoxServant],
     trait_craft_ids: Sequence[int],
 ) -> List[int]:
+    """按启发式把候选池压到「组合数不超过 max_combos」的规模。
+
+    v0.1.14 起：启发式用「高覆盖特性礼装的参与度」而不是「单从者能吃到几张」。
+
+    实测（反馈者验证串，2026-09-23）：最优解 10.048 需要的 4 名从者
+    （吉尔伽美什 / 海伦娜 / 帕拉塞尔苏斯 / 库·丘林）按旧口径只能排到第 29~65 名，
+    被池子整片切掉；而池内那批"能吃到 4 张礼装"的从者反而只能到 9.456。
+
+    原因：特性礼装的加成是**全队共享**的，一张礼装的真实价值是
+    `加成值 × 队里能触发它的人数`。所以候选池应该优先收录
+    "能触发**很多队友也能触发**的那几张礼装"的从者（共享度高的群体），
+    而不是"自己单独能吃 4 张"的从者（后者往往没有队友配合）。
+    """
     if choose_count <= 0:
         return list(candidates)
+    share = _trait_share_weight(ctx, candidates, trait_craft_ids)
     scored = sorted(
         candidates,
-        key=lambda sid: _servant_heuristic(ctx, box[sid], trait_craft_ids),
+        key=lambda sid: _servant_heuristic(ctx, box[sid], trait_craft_ids)
+        + _cluster_bonus(share, sid),
         reverse=True,
     )
     k = len(scored)
     while k > choose_count and math.comb(k, choose_count) > max_combos:
         k -= 1
     return scored[:k]
+
+
+# 「高覆盖特性礼装参与度」在候选池排序里的权重。
+# 校准自反馈者验证串：0.16 可以把 库·丘林 / 帕拉塞尔苏斯 / 海伦娜
+# 这类"参与高覆盖礼装集群"的从者拉进池，同时不挤掉特性满分的从者。
+_CANDIDATE_CLUSTER_WEIGHT = 0.16
+
+
+def _trait_share_weight(
+    ctx: DataContext,
+    candidates: Sequence[int],
+    trait_craft_ids: Sequence[int],
+) -> Dict[int, float]:
+    """每名从者的"高覆盖礼装参与度"：Σ(能触发的礼装 × 该礼装在候选池里的覆盖人数)。
+
+    一张礼装能覆盖的人越多，队里放它就越赚（每多一名触发者就多一份加成）。
+    这个量用来给候选池排序补一个"团队共享度"分量。
+    """
+    table = trait_benefit_table(ctx)
+    counts: Dict[int, int] = {}
+    for cid in trait_craft_ids:
+        counts[cid] = sum(1 for sid in candidates if table.can_trigger(sid, cid))
+    weights: Dict[int, float] = {}
+    for sid in candidates:
+        total = 0.0
+        for cid in trait_craft_ids:
+            if counts[cid] and table.can_trigger(sid, cid):
+                total += table.craft_value(cid) * counts[cid]
+        weights[sid] = total
+    return weights
+
+
+def _cluster_bonus(share: Dict[int, float], servant_id: int) -> float:
+    return _CANDIDATE_CLUSTER_WEIGHT * share.get(servant_id, 0.0)
 
 
 def _trait_craft_ids(ctx: DataContext) -> List[int]:
@@ -442,17 +484,89 @@ def _generate_servant_combinations(
     yield from itertools.combinations(candidate_ids, choose_count)
 
 
+def _lineup_trait_potential(
+    ctx: DataContext,
+    lineup: Sequence[int],
+    trait_craft_ids: Sequence[int],
+    craft_slots: int,
+) -> float:
+    """一个从者阵容在特性礼装上的"团队潜力"上界（表③驱动的质量评分）。
+
+    特性礼装的加成**全队共享**：一张礼装的贡献 = 加成值 × 队里能触发它的从者数。
+    一次组队最多只能装 craft_slots 张礼装，所以取贡献最大的前 craft_slots 张求和，
+    就是该阵容在不考虑 Cost/位置/阶段细节时的上界估计。
+
+    用它把「等距撒点」换成「质量优先」：真正的高潜力阵容会被排到前面，
+    不再依赖字典序抽样的运气。
+    """
+    if not lineup or not trait_craft_ids:
+        return 0.0
+    table = trait_benefit_table(ctx)
+    contribs = []
+    for cid in trait_craft_ids:
+        value = table.craft_value(cid)
+        if value <= 0:
+            continue
+        n = 0
+        for sid in lineup:
+            if table.can_trigger(sid, cid):
+                n += 1
+        if n:
+            contribs.append(value * n)
+    if not contribs:
+        return 0.0
+    contribs.sort(reverse=True)
+    if craft_slots > 0 and len(contribs) > craft_slots:
+        contribs = contribs[:craft_slots]
+    return float(sum(contribs))
+
+
 def _sample_servant_combinations(
     candidate_ids: Sequence[int],
     choose_count: int,
     limit: int,
+    ctx: Optional[DataContext] = None,
+    trait_craft_ids: Optional[Sequence[int]] = None,
+    craft_slots: int = 5,
+    dual_pass: bool = False,
 ) -> List[Tuple[int, ...]]:
-    """等距抽样从者组合，避免只搜索候选池前部的组合。"""
+    """抽取要完整评估的从者组合。
+
+    两种模式（v0.1.14 起）：
+    - **质量优先**（给了 ctx + trait_craft_ids）：按"特性礼装团队潜力"取前 limit 个。
+      特性礼装全队共享，抱团吃礼装的阵容会被顶上来，不再靠字典序撒点碰运气。
+    - **等距抽样**（旧行为，兜底）：候选太多无法全枚举时作为多样性补充。
+
+    dual_pass=True 时返回「质量优先 ∪ 等距抽样」的去重并集（各占一半预算），
+    兼顾"挑好的"与"不整片漏掉某个特性方向"。
+    """
     combos = list(_generate_servant_combinations(candidate_ids, choose_count))
     if len(combos) <= limit:
         return combos
-    step = len(combos) / max(1, limit)
-    return [combos[int(i * step)] for i in range(limit)]
+
+    if ctx is None or not trait_craft_ids:
+        step = len(combos) / max(1, limit)
+        return [combos[int(i * step)] for i in range(limit)]
+
+    def potential(lineup: Tuple[int, ...]) -> float:
+        return _lineup_trait_potential(ctx, lineup, trait_craft_ids, craft_slots)
+
+    quality_budget = limit if not dual_pass else max(1, limit // 2)
+    ranked = sorted(combos, key=potential, reverse=True)
+    picked = ranked[:quality_budget]
+    if not dual_pass:
+        return picked
+
+    # 多样性补充：等距抽样，保证每个方向都有代表
+    stride_budget = limit - len(picked)
+    step = len(combos) / max(1, stride_budget)
+    seen = set(picked)
+    for i in range(stride_budget):
+        cand = combos[int(i * step)]
+        if cand not in seen:
+            seen.add(cand)
+            picked.append(cand)
+    return picked
 
 
 def _is_merged_generic_universal5(ctx: DataContext, craft_id: int) -> bool:
@@ -564,13 +678,67 @@ def _time_budget_seconds(req: CalculationRequest) -> float:
     return max(1.0, req.timeout_ms / 1000.0)
 
 
-def _default_servant_combo_limit(req: CalculationRequest) -> int:
-    """按等待时间动态决定从者候选组合上限，等待越久搜索越广。
+def _combos_budget_for(req: CalculationRequest) -> int:
+    """按等待时间折算「一轮最多评估多少个从者组合」。
 
-    时间预算已经提高（fast≈20s / balanced≈45s / high≈120s），
-    这里也相应放宽到最多 4000 个从者组合。
+    实测约每秒 2000 个组合（反馈者验证串 / 本机 / 2026-09），
+    取 0.6×时间预算作为工作量的确定性上限：
+    - 快速档 35s → 42000 个组合
+    - 标准档 60s → 72000
+    - 平衡档 90s → 108000
+    - 高质量 135s → 162000
+    - 极限 300s → 360000（再由 _MAX_COMBOS_PER_ROUND 封顶）
     """
-    return max(200, min(4000, int(_time_budget_seconds(req) * 200)))
+    seconds = _time_budget_seconds(req)
+    return int(max(1200, seconds * 2000 * 0.6))
+
+
+# 单轮组合枚举的硬上限：约 20s 计算量，避免极端配置把内存/时间炸掉。
+_MAX_COMBOS_PER_ROUND = 40000
+
+
+def _default_servant_combo_limit(req: CalculationRequest, choose_count: int = 5) -> int:
+    """按等待时间动态决定从者候选组合上限（= 候选池规模的目标组合数）。
+
+    这个数同时决定两件事：
+    1. `_reduce_candidate_ids` 把候选池压到「组合数不超过它」的规模；
+    2. `_default_sweep_limit` 按它决定每轮实际评估多少个组合。
+
+    v0.1.14 起：从「尽量大」改成「让候选池能被**跑完**」。
+    实测（反馈者验证串，2026-09-23）：
+      - 旧行为（池 15 / 抽样 1500，覆盖 50%）→ 9.240x
+      - 穷举池 15（3003 组合）→ 9.312x
+      - 穷举池 20（15504 组合）→ 10.048~10.080x（比旧结果高 8.7%）
+    宁可池子小一点但**全枚举**，也不要池子大却只抽样 10%。
+    """
+    choose = max(1, choose_count)
+    budget = min(_combos_budget_for(req), _MAX_COMBOS_PER_ROUND)
+    k = choose
+    while math.comb(k + 1, choose) <= budget:
+        k += 1
+    return max(600, math.comb(k, choose))
+
+
+def _default_sweep_limit(req: CalculationRequest, choose_count: int = 5) -> int:
+    """每轮粗搜评估多少个从者组合（`None`/超大值 = 全枚举候选池）。
+
+    与 `_default_servant_combo_limit` 配合：后者决定候选池有多大，
+    这里决定实际跑多少个组合。
+
+    v0.1.14 起：**与候选池规模对齐** —— 候选池按时间预算裁剪过，
+    只要能跑完就**全枚举**，不再做等距抽样。
+    旧版固定 1500 会让池 20 的 15504 个组合只跑到 9.7%，
+    实测正是这个覆盖率不足导致 10.048 那个解被漏掉。
+    """
+    choose = max(1, choose_count)
+    budget = min(_combos_budget_for(req), _MAX_COMBOS_PER_ROUND)
+    k = choose
+    while math.comb(k + 1, choose) <= budget:
+        k += 1
+    if math.comb(k, choose) <= budget:
+        # 候选池能被完全枚举：直接要求全部组合（抽样函数会原样返回）
+        return math.comb(k, choose)
+    return budget
 
 
 def _default_craft_combo_limit(req: CalculationRequest) -> int:
@@ -581,20 +749,6 @@ def _default_craft_combo_limit(req: CalculationRequest) -> int:
     """
     dynamic = int(_time_budget_seconds(req) * 200)
     return max(4000, min(12000, dynamic))
-
-
-def _default_sweep_limit(req: CalculationRequest) -> int:
-    """每轮粗搜评估多少个从者组合（从者组合等距抽样的上限）。
-
-    与 `_default_servant_combo_limit` 配合：后者决定候选池有多大，
-    这里决定实际跑多少个组合。上限越高覆盖越全，代价是线性变慢。
-
-    ⚠️ 实测（2026-09）：把这个上限从 1500 提到 3100（全枚举基础候选池）会让
-    部分玩法的最优分**下降**（crown_mode 10.72 → 10.24）——粗筛与精算共用同一个
-    去重集合，粗筛铺得越宽，精算阶段反而会跳过更多组合。扩大精算覆盖也补不回来。
-    所以在那个交互被修掉之前，这里保持 1500，不追求"全枚举"。
-    """
-    return max(200, min(1500, int(_time_budget_seconds(req) * 40)))
 
 
 def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
@@ -1850,7 +2004,7 @@ def search_top_teams(
         ctx,
         player_candidates,
         choose_count,
-        max_combos=_default_servant_combo_limit(req),
+        max_combos=_default_servant_combo_limit(req, choose_count),
         box=box,
         trait_craft_ids=trait_ids,
     )
@@ -2223,7 +2377,15 @@ def search_top_teams(
         nonlocal processed_total
         processed = 0
         combos_iter = (
-            _sample_servant_combinations(candidate_ids, choose_count, servant_limit)
+            _sample_servant_combinations(
+                candidate_ids,
+                choose_count,
+                servant_limit,
+                ctx=ctx,
+                trait_craft_ids=trait_ids,
+                craft_slots=max(1, len(bp.free_bond_positions) or len(bp.player_craft_slots)),
+                dual_pass=(len(candidate_ids) > choose_count * 3),
+            )
             if servant_limit is not None
             else _generate_servant_combinations(candidate_ids, choose_count)
         )
@@ -2372,6 +2534,83 @@ def search_top_teams(
                 current["rank_key"] = rank_key
                 if global_best_score is None or score > global_best_score:
                     global_best_score = score
+
+    # 邻域换人（v0.1.14 新增）：以当前 Top20 为种子，互相换 1 名自由位从者再评估。
+    # 动机：有人反馈"Top2 的某个从者换进 Top1 反而更高"——那些"混血阵容"往往
+    # 介于两支高分队伍之间，既不在粗筛抽样集合里，也不在精算名单里，因此从未被
+    # 评估过。这里用很小的代价把 Top 队伍的直接邻居补上。
+    # 只在标准档（≥60s）以上开启；换出来的阵容仍然走完整礼装管线 + 精算。
+    if (
+        req.timeout_ms >= 60000
+        and len(bp.free_servant_positions) > 0
+        and time.time() < refine_deadline
+    ):
+        pool_set = set(reduced)
+        # 邻域候选：池内 + 池外高启发式从者。给足数量，让"混血阵容"有机会被构造出来
+        # （上限 240 人，配合 evaluate_extras 自带的上界剪枝，代价可控）。
+        outside = [
+            sid for sid in sorted(
+                player_candidates,
+                key=lambda s: _servant_heuristic(ctx, box[s], trait_ids),
+                reverse=True,
+            )
+            if sid not in pool_set
+        ][:30]
+        neighbor_ids = list(dict.fromkeys(list(reduced) + outside))
+
+        for _round in range(2):
+            seeds = [e for e in sorted(
+                best_by_set.values(), key=lambda x: x["rank_key"], reverse=True
+            )[:20] if e.get("servant_set")]
+            if not seeds:
+                break
+            swaps: Dict[Tuple[int, ...], None] = {}
+            for i, a in enumerate(seeds):
+                a_ids = a["servant_set"]
+                if len(a_ids) != len(bp.free_servant_positions):
+                    continue
+                for b in seeds[i + 1:]:
+                    b_ids = b["servant_set"]
+                    if len(b_ids) != len(bp.free_servant_positions):
+                        continue
+                    b_set = set(b_ids)
+                    for pos_idx in range(len(a_ids)):
+                        if a_ids[pos_idx] in b_set:
+                            continue
+                        nxt = list(a_ids)
+                        nxt[pos_idx] = b_ids[pos_idx]
+                        key = tuple(sorted(nxt))
+                        if key not in best_by_set:
+                            swaps[key] = None
+            # 再补一层：把队里某个人换成池外/池内另一名从者（单点替换）
+            for a in seeds[:8]:
+                a_ids = a["servant_set"]
+                if len(a_ids) != len(bp.free_servant_positions):
+                    continue
+                for pos_idx in range(len(a_ids)):
+                    for sid in neighbor_ids:
+                        if sid in a_ids:
+                            continue
+                        nxt = list(a_ids)
+                        nxt[pos_idx] = sid
+                        key = tuple(sorted(nxt))
+                        if key not in best_by_set:
+                            swaps[key] = None
+            if not swaps:
+                break
+            new_best_before = global_best_score
+            for key in list(swaps.keys()):
+                check_cancel()
+                if time.time() >= refine_deadline:
+                    truncated[0] = True
+                    break
+                extras_tuple = tuple(sorted(set(key) - set(bp.fixed_servant_ids)))
+                if not extras_tuple:
+                    continue
+                evaluate_extras(extras_tuple, full_combos)
+            if global_best_score is not None and new_best_before is not None:
+                if global_best_score <= new_best_before + 1e-12:
+                    break  # 本轮没有改进，提前收手
 
     report("排序输出...")
     best_items = sorted(

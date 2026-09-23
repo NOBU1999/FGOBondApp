@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from . import database
 from .constants import STAGES
@@ -1003,3 +1003,102 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
         },
         "traitCoverage": sorted(trait_coverage),
     }
+
+
+# ---------------------------------------------------------------------------
+# 「从者 × 特性礼装」收益表
+#
+# 引擎里最核心的一个事实是：特性礼装的加成**全队共享** —— 队里每多一名能触发
+# 该礼装的从者，这张礼装就多赚一份。
+#
+# 同时有两条硬性限制：同一张礼装最多装备 1 张（只有 repeatable 的除外），
+# 因此同一名从者从某一张礼装身上最多拿一次加成。
+#
+# 这张表把「谁能吃到哪张、吃多少」预先算好并缓存，供两处使用：
+#   - 候选池排序：从「单张最高」改成「能同时吃到的前 N 张之和」
+#   - 礼装组合评估：把「逐人逐张试」换成「查表求和」
+# 表只依赖静态数据 + 从者各阶段特性掩码，与具体队伍无关。
+# ---------------------------------------------------------------------------
+class TraitBenefitTable:
+    """从者 × 特性礼装 的可触发关系与收益（惰性计算，按 (从者, 礼装) 缓存）。"""
+
+    def __init__(self, ctx: "DataContext") -> None:
+        self.ctx = ctx
+        self._masks: Dict[int, Tuple[int, ...]] = {}
+        self._values: Dict[int, float] = {}
+        self._matches: Dict[Tuple[int, int], Tuple[int, ...]] = {}
+
+    # -- 基础查询 -----------------------------------------------------------
+    def craft_value(self, craft_id: int) -> float:
+        """该礼装的加成值（无该礼装时为 0）。"""
+        value = self._values.get(craft_id)
+        if value is None:
+            craft = self.ctx.crafts.get(craft_id)
+            value = float(craft.bonus_value or 0.0) if craft is not None else 0.0
+            self._values[craft_id] = value
+        return value
+
+    def stage_masks(self, servant_id: int) -> Tuple[int, ...]:
+        """该从者所有阶段/灵衣的特性掩码（含 0，表示无特性）。"""
+        cached = self._masks.get(servant_id)
+        if cached is None:
+            info = self.ctx.servants.get(servant_id)
+            if not info or not info.traits:
+                cached = (0,)
+            else:
+                cached = tuple(info.mask_for(key) for key in info.traits)
+            self._masks[servant_id] = cached
+        return cached
+
+    def matches(self, servant_id: int, craft_id: int) -> Tuple[int, ...]:
+        """该从者能触发该礼装的阶段掩码列表（空 = 触发不了）。
+
+        同一阶段对同一张礼装只计一次，与计费逻辑的 first-match 语义一致。
+        """
+        key = (servant_id, craft_id)
+        cached = self._matches.get(key)
+        if cached is not None:
+            return cached
+        craft = self.ctx.crafts.get(craft_id)
+        if craft is None or not craft.trigger_masks:
+            hit: Tuple[int, ...] = ()
+        else:
+            groups = craft.trigger_masks
+            hit = tuple(
+                mask
+                for mask in self.stage_masks(servant_id)
+                if any((mask & gm) == gm for gm in groups)
+            )
+        self._matches[key] = hit
+        return hit
+
+    def can_trigger(self, servant_id: int, craft_id: int) -> bool:
+        return bool(self.matches(servant_id, craft_id))
+
+    def top_sum(self, servant_id: int, craft_ids: Sequence[int], limit: int = 5) -> float:
+        """该从者能同时吃到的、最有价值的前 limit 张特性礼装之和。
+
+        这是新排序口径的核心：只看「单张最高」会让大批从者并列同分，
+        进而在候选池截断时被埋掉；看「能同时吃到几张」才能分出真正的高潜力从者。
+        limit 取一次组队最多能装的礼装张数。
+        """
+        if limit <= 0:
+            return 0.0
+        values = [
+            self.craft_value(cid) for cid in craft_ids if self.can_trigger(servant_id, cid)
+        ]
+        if not values:
+            return 0.0
+        if len(values) <= limit:
+            return float(sum(values))
+        values.sort(reverse=True)
+        return float(sum(values[:limit]))
+
+
+def trait_benefit_table(ctx: DataContext) -> TraitBenefitTable:
+    """取得（并缓存）该 DataContext 的收益表。"""
+    table = getattr(ctx, "_trait_benefit_table", None)
+    if table is None:
+        table = TraitBenefitTable(ctx)
+        ctx._trait_benefit_table = table
+    return table
