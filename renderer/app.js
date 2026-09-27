@@ -287,11 +287,11 @@ const App = {
       // 邻域优化档位（v0.1.14 新增）：算完后把靠前队伍互相"换人"再算，捞"混血"更优解。
       // off / standard / deep；跟随队伍预设一起保存与加载。
       neighborhood: "standard",
-      // 搜索顺序（v0.1.14 新增）：两套并存、可切换
-      //   servant —— 先选从者阵容，再给阵容配礼装（原行为，默认）
-      //   craft   —— 先枚举礼装组合，再反查"最能吃满这批礼装"的从者阵容
-      searchOrder: "servant",
       resultSettings: {
+        // 搜索顺序（v0.1.14）：属于"结果偏好"，放在「结果显示设置」里，默认先选礼装。
+        //   craft   —— 先枚举礼装组合，再反查"最能吃满这批礼装"的从者阵容（默认，结果通常更好）
+        //   servant —— 先选从者阵容，再给阵容配礼装（原行为，更快）
+        searchOrder: "craft",
         autoExpandFirst: false,
         showSearchStats: false,
         showBonusFormula: false,
@@ -2323,7 +2323,6 @@ const App = {
         neighborhood: this.neighborhood === "off" || this.neighborhood === "deep"
           ? this.neighborhood
           : "standard",
-        searchOrder: this.searchOrder === "craft" ? "craft" : "servant",
       };
       try {
         await window.fgo.saveUserTeam(plainClone(team));
@@ -2385,7 +2384,6 @@ const App = {
       this.neighborhood = preset.neighborhood === "off" || preset.neighborhood === "deep"
         ? preset.neighborhood
         : "standard";
-      this.searchOrder = preset.searchOrder === "craft" ? "craft" : "servant";
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
       this.baseBond = Number(preset.baseBond || 0);
@@ -2684,7 +2682,7 @@ const App = {
         craftPoolSize: 60,
         timeoutMs: this.timeoutForQuality(this.qualityMode),
         neighborhood: this.neighborhood || "standard",
-        searchOrder: this.searchOrder === "craft" ? "craft" : "servant",
+        searchOrder: this.resultSettings.searchOrder === "servant" ? "servant" : "craft",
       };
     },
     buildPresetPayload(preset) {
@@ -2739,7 +2737,7 @@ const App = {
         craftPoolSize: 60,
         timeoutMs: this.timeoutForQuality(this.qualityMode),
         neighborhood: this.neighborhood || "standard",
-        searchOrder: this.searchOrder === "craft" ? "craft" : "servant",
+        searchOrder: this.resultSettings.searchOrder === "servant" ? "servant" : "craft",
       };
     },
     isFullPreset(preset) {
@@ -3296,17 +3294,6 @@ const App = {
               <option value="target_max">指定从者最大化</option>
               <option value="balanced">均衡模式</option>
             </select>
-          </div>
-          <div class="field">
-            <label>搜索顺序</label>
-            <select v-model="searchOrder">
-              <option value="servant">先选从者，再配礼装（默认）</option>
-              <option value="craft">先选礼装，再反查从者</option>
-            </select>
-            <div class="text-muted">
-              两种都保留、可随时切换。「先选从者」快而稳；「先选礼装」专找那种
-              "几个人一起吃同一批礼装"的队伍——这类队伍按单人评分看不出来，容易漏。
-            </div>
           </div>
           <div class="field">
             <label>邻域优化（换人再算）</label>
@@ -4180,13 +4167,28 @@ const App = {
       </div>
     </div>
 
-    <!-- 结果显示设置 -->
+    <!-- 设置（计算 + 结果显示） -->
     <div v-if="settingsVisible" class="modal-mask" @click.self="closeSettings">
       <div class="modal-panel small">
         <div class="overlay-head">
-          <h2>结果显示设置</h2>
+          <h2>设置</h2>
           <button class="secondary" @click="closeSettings">✕</button>
         </div>
+        <div class="settings-group-title">计算设置（影响怎么算）</div>
+        <div class="settings-list">
+          <label class="settings-row">
+            <span>搜索顺序</span>
+            <select v-model="resultSettings.searchOrder" @change="persistResultSettings">
+              <option value="craft">先选礼装，再反查从者（默认，结果通常更好）</option>
+              <option value="servant">先选从者，再配礼装（更快）</option>
+            </select>
+          </label>
+          <div class="text-muted" style="margin:-4px 0 4px">
+            「先选礼装」专门找那种"几个人一起吃同一批礼装"的队伍——按单人评分看不出来、容易漏；
+            「先选从者」则是老算法，速度快一些。两种都保留，可以随时切回来对比。
+          </div>
+        </div>
+        <div class="settings-group-title">结果显示设置（只影响显示）</div>
         <div class="settings-list">
           <label class="settings-row">
             <input type="checkbox" v-model="resultSettings.autoExpandFirst" @change="persistResultSettings" />

@@ -866,6 +866,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .craft-breakdown-item { font-size: 12px; color: var(--text); opacity: .9; }
 .detail-extra-line { margin-top: 4px; font-size: 12px; }
 .settings-list { display: flex; flex-direction: column; gap: 10px; }
+/* 设置弹窗里的分组标题：计算设置 / 结果显示设置 */
+.settings-group-title {
+  margin: 4px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  opacity: .85;
+}
+.settings-group-title + .settings-list { margin-bottom: 16px; }
+.settings-group-title:first-of-type { margin-top: 0; }
 .settings-row {
   display: flex;
   align-items: flex-start;
