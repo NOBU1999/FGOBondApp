@@ -307,9 +307,34 @@
 
   window.fgo = api;
 
+  // 供电脑侧自测（.temp/android-boot-e2e.cjs / android-boot-refresh-e2e.cjs）直接调用，
+  // 免去"造一个老版本 APK 再覆盖安装"才能测到这条路径。函数体在下面定义（函数声明会提升）。
+  window.__fgoRefreshStaticDataIfNewer = (SQL, persistBytes, packageBytes) =>
+    refreshStaticDataIfNewer(SQL, persistBytes, packageBytes);
+
   // ---- 异步初始化 ----
   const DB_FILE_IN_APP = "fgo_data.db";
   const DB_FILE_IN_PACKAGE = "./db/fgo_data.db";
+  // 静态数据随包刷新（v0.1.14）：随包库比本地库新时，只换「从者/礼装」这些静态表，
+  // 个人数据（账号 / Box / 排除 / 预设 / 自定义礼装）原样搬过去。
+  // 版本以 app_meta.updated_at 为准（桌面端 main/runtime-db.js 用的是同一套判据）。
+  const STATIC_VERSION_KEY = "updated_at";
+  const USER_META_KEYS = [
+    "active_account_id",
+    "server_region",
+    "generic_bond_participation",
+    "non_participating_craft_ids",
+  ];
+  // 需要随包刷新的静态表：以随包库为准整表替换，其余表（含用户表）不动
+  const STATIC_TABLES = [
+    "servants",
+    "servant_stage_traits",
+    "servant_stage_traits_cn",
+    "crafts",
+    "servant_costumes",
+    "servant_costume_traits",
+    "servant_costume_traits_cn",
+  ];
   const WRITE_METHODS = new Set([
     "createAccount",
     "renameAccount",
@@ -350,6 +375,211 @@
     return null;
   }
 
+  /** 读一个 app_meta 值；读不到返回空串（老库没有这个键也算"没有版本"） */
+  function readMetaValue(db, key) {
+    try {
+      const res = db.exec(
+        `SELECT value FROM app_meta WHERE key = '${String(key).replace(/'/g, "''")}'`
+      );
+      const row = res && res[0] && res[0].values && res[0].values[0];
+      const value = row && row[0];
+      return value === undefined || value === null ? "" : String(value);
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function staticTableExists(db, table) {
+    try {
+      const res = db.exec(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${String(table).replace(/'/g, "''")}'`
+      );
+      return !!(res && res[0] && res[0].values && res[0].values.length);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function listTableColumns(db, table) {
+    try {
+      const res = db.exec('PRAGMA table_info("' + table + '")');
+      const rows = (res && res[0] && res[0].values) || [];
+      return rows.map((row) => String(row[1]));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function readTableRows(db, table, columns) {
+    const cols = columns || listTableColumns(db, table);
+    if (!cols.length) return { columns: [], rows: [] };
+    const res = db.exec('SELECT * FROM main."' + table + '"');
+    return { columns: cols, rows: (res && res[0] && res[0].values) || [] };
+  }
+
+  function insertTableRows(db, table, data) {
+    const rows = (data && data.rows) || [];
+    if (!rows.length) return;
+    const columns = data.columns;
+    const placeholders = columns.map(() => "?").join(", ");
+    const stmt = db.prepare(
+      'INSERT INTO main."' + table + '" (' + columns.map((c) => '"' + c + '"').join(", ") +
+        ") VALUES (" + placeholders + ")"
+    );
+    try {
+      for (const row of rows) stmt.run(row);
+    } finally {
+      if (stmt && typeof stmt.free === "function") stmt.free();
+    }
+  }
+
+  /**
+   * 老库补列：与桌面端 main/database.js 的 ensureSchema 保持一致。
+   * 老用户覆盖安装时，本地库是旧结构，缺列会让「读预设」这类查询直接抛错。
+   * 每列都单独 try（列已存在时 SQLite 会报错，忽略即可）。
+   */
+  function migrateUserTableColumns(db) {
+    const additions = [
+      ["user_teams", "quality_mode", "TEXT DEFAULT 'balanced'"],
+      ["user_teams", "neighborhood", "TEXT DEFAULT 'standard'"],
+      ["user_teams", "search_order", "TEXT DEFAULT 'craft'"],
+      ["user_teams", "support_position", "TEXT DEFAULT 'front_right'"],
+      ["user_teams", "support_second_craft_id", "INTEGER"],
+      ["user_teams", "mode", "TEXT DEFAULT 'normal'"],
+      ["user_teams", "crown_class", "TEXT DEFAULT 'all'"],
+      ["user_teams", "crown_positions", "TEXT"],
+      ["user_teams", "base_bond", "REAL DEFAULT 0"],
+      ["user_box", "aura_bonus", "REAL DEFAULT 0"],
+      ["user_box", "bond_rank", "INTEGER DEFAULT 0"],
+      ["user_box", "bond_max_rank", "INTEGER DEFAULT 0"],
+    ];
+    let added = 0;
+    for (const [table, column, ddl] of additions) {
+      if (!staticTableExists(db, table)) continue;
+      try {
+        db.exec(`ALTER TABLE main."${table}" ADD COLUMN ${column} ${ddl}`);
+        added += 1;
+      } catch (_) {
+        /* 列已存在 */
+      }
+    }
+    if (added) pushDiag("info", `老库补列：新增 ${added} 个字段`);
+  }
+
+  /** 把旧库的个人数据按列名搬进新库（列取交集，兼容旧版本缺列） */
+  function carryUserTables(target, source, tables) {
+    let carried = 0;
+    for (const table of tables) {
+      if (!staticTableExists(target, table) || !staticTableExists(source, table)) continue;
+      const targetCols = listTableColumns(target, table);
+      const sourceCols = listTableColumns(source, table);
+      const shared = targetCols.filter((c) => sourceCols.indexOf(c) >= 0);
+      if (!shared.length) continue;
+      try {
+        const payload = readTableRows(source, table, shared);
+        if (!payload.rows.length) continue;
+        target.exec('BEGIN');
+        try {
+          target.exec('DELETE FROM main."' + table + '"');
+          insertTableRows(target, table, payload);
+          target.exec("COMMIT");
+        } catch (err) {
+          target.exec("ROLLBACK");
+          throw err;
+        }
+        carried += payload.rows.length;
+      } catch (err) {
+        pushDiag("warn", `静态数据刷新：搬移 ${table} 失败（已跳过该表）：${err && err.message ? err.message : err}`);
+      }
+    }
+    // 修正 AUTOINCREMENT 序列，避免搬运后新插入的 id 冲突
+    try {
+      for (const table of tables) {
+        if (!staticTableExists(target, table)) continue;
+        const res = target.exec('SELECT COALESCE(MAX(rowid), 0) FROM main."' + table + '"');
+        const maxRowId = Number((res && res[0] && res[0].values && res[0].values[0] && res[0].values[0][0]) || 0);
+        target.exec("DELETE FROM main.sqlite_sequence WHERE name = '" + table + "'");
+        target.exec("INSERT INTO main.sqlite_sequence(name, seq) VALUES('" + table + "', " + maxRowId + ")");
+      }
+    } catch (_) {
+      /* 没有 sqlite_sequence 时忽略 */
+    }
+    return carried;
+  }
+
+  /**
+   * 随包静态数据比本地新就刷新本地库：
+   *   以随包库为基底，搬入旧库的个人表 + 用户偏好键。
+   * 返回 { status, newBytes }；任何一步失败都返回 failed 并让调用方沿用旧库。
+   */
+  function refreshStaticDataIfNewer(SQL, persistBytes, packageBytes) {
+    if (!persistBytes || !packageBytes) return { status: "skip" };
+    let runtimeRoot = null;
+    let packageDb = null;
+    let next = null;
+    try {
+      runtimeRoot = new SQL.Database(persistBytes);
+      const runtimeVersion = readMetaValue(runtimeRoot, STATIC_VERSION_KEY);
+      packageDb = new SQL.Database(packageBytes);
+      const packageVersion = readMetaValue(packageDb, STATIC_VERSION_KEY);
+      // 随包库没有版本、或本地库不更旧 → 不动（用户自己更新过数据的也不回退）
+      if (!packageVersion || (runtimeVersion && packageVersion <= runtimeVersion)) {
+        return { status: "keep", runtimeVersion, packageVersion };
+      }
+
+      next = new SQL.Database(packageBytes);
+      const carried = carryUserTables(
+        next,
+        runtimeRoot,
+        ["accounts", "user_box", "user_exclusions", "user_teams", "custom_crafts"]
+      );
+      for (const key of USER_META_KEYS) {
+        const value = readMetaValue(runtimeRoot, key);
+        if (!value) continue;
+        try {
+          next.exec(
+            "INSERT INTO main.app_meta(key, value) VALUES('" + key + "', '" +
+              value.replace(/'/g, "''") + "') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+          );
+        } catch (_) {
+          /* 该键不存在时忽略 */
+        }
+      }
+
+      const newBytes = next.export();
+      pushDiag(
+        "info",
+        `随包静态数据已刷新：${runtimeVersion || "(空)"} -> ${packageVersion}（个人数据保留 ${carried} 行）`
+      );
+      emitProgress("已更新随包静态数据（Box / 预设已保留）");
+      return {
+        status: "refreshed",
+        newBytes,
+        runtimeVersion,
+        packageVersion,
+        carriedUserData: carried,
+      };
+    } catch (err) {
+      pushDiag("warn", `静态数据刷新失败（继续用本地库）：${err && err.message ? err.message : err}`);
+      return { status: "failed", error: err && err.message ? err.message : String(err) };
+    } finally {
+      try {
+        if (next) next.close();
+        if (packageDb) packageDb.close();
+        if (runtimeRoot) runtimeRoot.close();
+      } catch (_) {
+        /* 关不掉不影响主流程 */
+      }
+    }
+  }
+
+  /** 读随包（assets）里的那份数据库原始字节 */
+  async function loadPackageBytes() {
+    const resp = await fetch(DB_FILE_IN_PACKAGE);
+    if (!resp.ok) throw new Error("读不到随包数据库：" + DB_FILE_IN_PACKAGE);
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+
   /** 优先读应用数据目录里的库（用户改过的），没有就用随包的那份 */
   async function loadDatabaseBytes() {
     const fs = getFilesystem();
@@ -363,33 +593,47 @@
         /* 首次运行没有该文件，属正常 */
       }
     }
-    const resp = await fetch(DB_FILE_IN_PACKAGE);
-    if (!resp.ok) throw new Error("读不到随包数据库：" + DB_FILE_IN_PACKAGE);
-    return new Uint8Array(await resp.arrayBuffer());
+    return loadPackageBytes();
   }
 
   /** 把内存库写回应用数据目录（累加式保存；Box 保存等操作不频繁，可接受） */
   let saveTimer = null;
+  async function persistNow(dbOverride) {
+    const fs = getFilesystem();
+    const db = dbOverride || window.__fgoDb;
+    if (!fs || !db) return { ok: false };
+    try {
+      const bytes = db.export();
+      await fs.writeFile({
+        path: DB_FILE_IN_APP,
+        directory: "DATA",
+        data: bytesToBase64(bytes),
+        recursive: true,
+      });
+      return { ok: true };
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      pushDiag("warn", "保存本地数据失败：" + message);
+      return { ok: false, error: message };
+    }
+  }
+
   function schedulePersist() {
     if (saveTimer) return;
     saveTimer = setTimeout(async () => {
       saveTimer = null;
-      const fs = getFilesystem();
-      if (!fs || !window.__fgoDb) return;
-      try {
-        const bytes = window.__fgoDb.export();
-        await fs.writeFile({
-          path: DB_FILE_IN_APP,
-          directory: "DATA",
-          data: bytesToBase64(bytes),
-          recursive: true,
-        });
-      } catch (err) {
-        const message = err && err.message ? err.message : String(err);
-        emitProgress("保存本地数据失败：" + message);
-        pushDiag("warn", "保存本地数据失败：" + message);
-      }
+      const res = await persistNow();
+      if (res && res.ok === false && res.error) emitProgress("保存本地数据失败：" + res.error);
     }, 600);
+  }
+
+  /** 静态数据刷新后立刻落盘（不等防抖），避免刷新结果没写回就退出 */
+  function schedulePersistNow(dbOverride) {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    return persistNow(dbOverride);
   }
 
   async function init() {
@@ -400,8 +644,33 @@
     pushDiag("info", `开始载入本地数据库（v${window.__FGO_APP_VERSION || "?"}）`);
     const SQL = await window.initSqlJs({ locateFile: (file) => "./vendor/sqljs/" + file });
     const bytes = await loadDatabaseBytes();
-    const db = new SQL.Database(bytes);
+    // 随包静态数据更新时，用随包库 + 旧库的个人数据合成新库（安卓没有联网更新数据的入口，
+    // 所以换新版 APK 覆盖安装后，这一步就是把新从者/新礼装带进来的唯一机会）
+    let db = new SQL.Database(bytes);
     window.__fgoDb = db;
+    try {
+      const packageBytes = await loadPackageBytes();
+      const refreshed = refreshStaticDataIfNewer(SQL, db.export(), packageBytes);
+      if (refreshed.status === "refreshed" && refreshed.newBytes) {
+        try {
+          db.close();
+        } catch (_) {
+          /* 旧的关不掉无所谓 */
+        }
+        db = new SQL.Database(refreshed.newBytes);
+        window.__fgoDb = db;
+        await schedulePersistNow(db);
+      }
+    } catch (err) {
+      pushDiag("warn", `静态数据刷新检查失败（继续用本地库）：${err && err.message ? err.message : err}`);
+    }
+    // 老库补列（与桌面 main/database.js 的 ensureSchema 对齐）：安卓以前漏了这一步，
+    // 老用户覆盖安装后会因为"读预设"报 no such column 而直接报错
+    try {
+      migrateUserTableColumns(db);
+    } catch (err) {
+      pushDiag("warn", `老库补列失败（继续）：${err && err.message ? err.message : err}`);
+    }
 
     const [{ createWebHost }, { createDataBridge }] = await Promise.all([
       import("./create-host.mjs"),
