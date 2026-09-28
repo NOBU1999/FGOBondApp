@@ -135,6 +135,10 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
 
     Atlas 大导出文件支持 HTTP Range；且开启 gzip 后每个分段可独立解压。
     经实测 2MiB/段速度最优，避免整包流长时间无数据。
+
+    进度：每 2%（或每 1 MiB）输出一次，并带上已用时间与估算剩余时间。
+    Atlas 高峰期单文件可能只有 0.1~0.2 MB/s（65MB 要几分钟），
+    所以进度太稀疏会让用户以为卡死 —— 见下方 _PROGRESS_STEP。
     """
     import time
 
@@ -144,10 +148,32 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
         part.unlink()
 
     range_size = 2 * 1024 * 1024  # 2 MiB raw per request
+    progress_step = 2            # 每 2% 报一次（原来 10% 太稀疏，看着像卡死）
     start = 0
     total: Optional[int] = None
     downloaded = 0
-    last_percent = -1
+    last_reported = -1
+    t_start = time.time()
+
+    def report(force: bool = False) -> None:
+        nonlocal last_reported
+        if not total:
+            return
+        percent = min(100, downloaded * 100 // total)
+        if not force and (percent < last_reported + progress_step):
+            return
+        last_reported = percent
+        elapsed = time.time() - t_start
+        speed = downloaded / elapsed / 1024 / 1024 if elapsed > 0 else 0.0
+        eta = (total - downloaded) / (downloaded / elapsed) if downloaded > 0 and elapsed > 0 else 0.0
+        print(
+            f"[data_fetcher] {label}: {percent}% "
+            f"({downloaded / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB, "
+            f"{speed:.2f} MB/s"
+            + (f", 约剩 {eta:.0f}s" if eta > 0 else "")
+            + ")",
+            file=sys.stderr,
+        )
 
     with part.open("wb") as f:
         while True:
@@ -159,17 +185,13 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
             downloaded += len(raw)
             if total is None and total_raw:
                 total = total_raw
+                print(
+                    f"[data_fetcher] {label}: 开始下载，共 {total / 1024 / 1024:.1f} MB",
+                    file=sys.stderr,
+                )
             start += len(raw)
 
-            if total:
-                percent = downloaded * 100 // total
-                if percent != last_percent and percent % 10 == 0:
-                    print(
-                        f"[data_fetcher] {label}: {percent}% "
-                        f"({downloaded / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB)",
-                        file=sys.stderr,
-                    )
-                    last_percent = percent
+            report()
 
             if len(raw) < range_size or (total is not None and downloaded >= total):
                 break
@@ -177,6 +199,7 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
             # 轻微间隔，避免请求过密被断开
             time.sleep(0.05)
 
+    report(force=True)
     part.replace(dest)
     print(f"[data_fetcher] {label}: done -> {dest}", file=sys.stderr)
     return dest
