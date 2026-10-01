@@ -103,6 +103,9 @@ class CraftInfo:
 class DataContext:
     servants: Dict[int, ServantInfo] = field(default_factory=dict)
     crafts: Dict[int, CraftInfo] = field(default_factory=dict)
+    # 当前区服尚未实装的从者（简中服口径下才可能非空）——
+    # 引擎据此把它们从 Box 里剔掉，避免"日服库里已勾选、简中服还没上线"的从者参与计算。
+    unavailable_servant_ids: Set[int] = field(default_factory=set)
 
     def servant_traits(self, servant_id: int, stage: str) -> Set[str]:
         servant = self.servants.get(servant_id)
@@ -285,6 +288,27 @@ def _load_all_crafts(conn: sqlite3.Connection) -> Dict[int, CraftInfo]:
     return result
 
 
+def _load_unavailable_servant_ids(
+    conn: sqlite3.Connection,
+    region: str = "jp",
+) -> Set[int]:
+    """当前区服尚未实装的从者 ID。
+
+    数据构建时把「日服有、简中服没有」的可玩从者写进 app_meta.cn_unavailable_servant_ids；
+    日服模式下直接返回空集（不做任何过滤）。
+    """
+    if region != "cn":
+        return set()
+    try:
+        raw = database.get_meta(conn, "cn_unavailable_servant_ids") or "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return set()
+        return {int(x) for x in data if x is not None}
+    except Exception:
+        return set()
+
+
 def load_context(
     db_path: Optional[str] = None,
     region: str = "jp",
@@ -299,6 +323,7 @@ def load_context(
         for sid, info in servants.items():
             info.traits = traits.get(sid, {})
         crafts = _load_all_crafts(conn)
+        unavailable = _load_unavailable_servant_ids(conn, region=region)
     finally:
         conn.close()
 
@@ -391,7 +416,7 @@ def load_context(
         is_custom=False,
     )
 
-    return DataContext(servants=servants, crafts=crafts)
+    return DataContext(servants=servants, crafts=crafts, unavailable_servant_ids=unavailable)
 
 
 # ---------------------------------------------------------------------------

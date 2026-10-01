@@ -25,6 +25,17 @@ export function createMetaDomain({ sql }) {
     }
   }
 
+  /** 简中服尚未实装的可玩从者 ID（简中模式下要在候选池里剔除） */
+  function getCnUnavailableServantIds() {
+    try {
+      const raw = getMetaValue("cn_unavailable_servant_ids");
+      const list = JSON.parse(raw || "[]");
+      return Array.isArray(list) ? list.map(Number).filter((n) => Number.isFinite(n)) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   function getServerRegion() {
     const raw = getMetaValue("server_region");
     return raw === "cn" ? "cn" : "jp";
@@ -70,6 +81,7 @@ export function createMetaDomain({ sql }) {
     getMetaValue,
     setMetaValue,
     getCnUnavailableBondCeIds,
+    getCnUnavailableServantIds,
     getServerRegion,
     setServerRegion,
     getGenericBondParticipation,

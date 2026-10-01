@@ -571,19 +571,72 @@ def parse_craft(equip: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # 构建数据库
 # ---------------------------------------------------------------------------
+# 静态数据表：与个人数据无关，随包发布 / 应用内更新时整表替换
+STATIC_DATA_TABLES = (
+    "servants",
+    "servant_stage_traits",
+    "servant_stage_traits_cn",
+    "crafts",
+    "servant_costumes",
+    "servant_costume_traits",
+    "servant_costume_traits_cn",
+)
+
+
+def static_data_revision(conn: sqlite3.Connection) -> str:
+    """静态数据指纹：各静态表行数 + 数据更新时间。
+
+    用途：只更新静态数据内容（而没动 updated_at）时，运行库也要能被刷新。
+    曾经踩过 —— 补了新的 app_meta 键却没改 updated_at，结果随包的新数据永远刷不进去。
+    Android（平台侧 boot.js）用的是同一个算法，两边必须保持一致。
+    """
+    parts = []
+    for table in STATIC_DATA_TABLES:
+        try:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except Exception:
+            count = -1
+        parts.append(f"{table}={count}")
+    try:
+        updated = database.get_meta(conn, "updated_at") or ""
+    except Exception:
+        updated = ""
+    parts.append(f"updated_at={updated}")
+    return "|".join(parts)
+
+
 def _cn_unavailable_bond_ce_ids(
     conn: sqlite3.Connection,
     cn_equips: List[Dict[str, Any]],
 ) -> List[int]:
-    """对比当前 DB（JP 全量）与简中服礼装，找出简中服尚未实装的可选牵绊礼装 ID。
-
-    只处理 is_bond_ce = 1 的礼装，不扩展到全部礼装/从者。
-    """
+    """对比当前 DB（JP 全量）与简中服礼装，找出简中服尚未实装的可选牵绊礼装 ID。"""
     cn_ids = {int(e.get("id")) for e in cn_equips}
     rows = conn.execute(
         "SELECT id FROM crafts WHERE is_bond_ce = 1"
     ).fetchall()
     return sorted(int(r["id"]) for r in rows if int(r["id"]) not in cn_ids)
+
+
+def _cn_unavailable_servant_ids(
+    conn: sqlite3.Connection,
+    cn_servants: List[Dict[str, Any]],
+) -> List[int]:
+    """对比当前 DB（日服全量）与简中服从者，找出简中服尚未实装的可玩从者 ID。
+
+    简中服模式下这些从者不应出现在候选池里，也不参与计算
+    （日服库里他们的特性数据是简中服口径，算出来的分没有意义）。
+    """
+    cn_ids = {
+        int(s["id"])
+        for s in cn_servants
+        if s.get("id") is not None and s.get("type") in PLAYABLE_SERVANT_TYPES
+    }
+    rows = conn.execute("SELECT id, type FROM servants").fetchall()
+    return sorted(
+        int(r["id"])
+        for r in rows
+        if r["type"] in PLAYABLE_SERVANT_TYPES and int(r["id"]) not in cn_ids
+    )
 
 
 def build_database(
@@ -635,6 +688,7 @@ def build_database(
             database.upsert_costume_traits(conn, parsed["id"], costume_id, traits)
 
     # JP 全量作为主库时，额外写入简中服 traits，供“日服/简中服”切换后按服务器取数。
+    cn_unavailable_servant_ids: List[int] = []
     if region != "CN":
         if progress:
             progress("正在写入简中服特性数据...")
@@ -650,6 +704,13 @@ def build_database(
                 costume_traits = resolve_costume_trait_sets(raw)
                 for costume_id, traits in costume_traits.items():
                     database.upsert_costume_traits_cn(conn, parsed["id"], costume_id, traits)
+            # 顺便算出「简中服尚未实装的可玩从者」：简中模式下要排除掉
+            cn_unavailable_servant_ids = _cn_unavailable_servant_ids(conn, cn_servants_api)
+            # 记下简中服从者表的 etag，供 update_database 判断"简中服上了新从者"
+            try:
+                database.set_meta(conn, "cn_servant_etag", get_remote_export_meta("CN", NICE_SERVANT_FILE)["etag"])
+            except Exception:
+                pass
         except Exception as exc:
             # CN traits 只是日服模式的辅助数据，失败不阻断主数据更新
             if progress:
@@ -697,6 +758,21 @@ def build_database(
         json.dumps(cn_unavailable_ids, ensure_ascii=False),
     )
 
+    # 简中服尚未实装的可玩从者（简中模式下从候选池剔除）。
+    # 非 CN 区域构建时若这次没算出来（网络失败），沿用上一次的列表。
+    if region != "CN" and not cn_unavailable_servant_ids:
+        try:
+            previous = json.loads(database.get_meta(conn, "cn_unavailable_servant_ids") or "[]")
+            if isinstance(previous, list) and previous:
+                cn_unavailable_servant_ids = [int(x) for x in previous]
+        except Exception:
+            cn_unavailable_servant_ids = []
+    database.set_meta(
+        conn,
+        "cn_unavailable_servant_ids",
+        json.dumps(cn_unavailable_servant_ids, ensure_ascii=False),
+    )
+
     # 记录数据版本信息，供应用内“检查更新/更新数据”使用
     try:
         remote_meta = get_remote_export_meta(region)
@@ -711,6 +787,13 @@ def build_database(
         "updated_at",
         __import__("datetime").datetime.now().isoformat(timespec="seconds"),
     )
+    # 静态数据指纹：随包 / 运行库的刷新判断用它，能识别"updated_at 没变但内容变了"
+    conn.commit()
+    try:
+        database.set_meta(conn, "static_revision", static_data_revision(conn))
+    except Exception as exc:
+        if progress:
+            progress(f"警告：写入静态数据指纹失败（不影响本次更新）：{exc}")
     conn.commit()
     conn.close()
 
@@ -721,6 +804,7 @@ def build_database(
         "crafts": craft_count,
         "bond_ces": bond_ce_count,
         "cn_unavailable_bond_ces": len(cn_unavailable_ids),
+        "cn_unavailable_servants": len(cn_unavailable_servant_ids),
     }
     return stats
 
@@ -788,17 +872,65 @@ def refresh_costume_names(
     }
 
 
+def check_update(
+    region: Optional[str] = None,
+    db_path: Optional[Path | str] = None,
+) -> Dict[str, Any]:
+    """只检查是否有新数据（HEAD 远程 ETag），不下载任何东西。
+
+    返回 {status: "update_available" | "no_change", ...}，供界面「检查刷新」按钮用。
+    """
+    region = _region_or_default(region)
+    conn = database.connect(db_path)
+    database.init_db(conn)
+    local_etag = database.get_meta(conn, "servant_etag") or ""
+    local_cn_equip_etag = database.get_meta(conn, "cn_equip_etag") or ""
+    local_cn_servant_etag = database.get_meta(conn, "cn_servant_etag") or ""
+    local_updated_at = database.get_meta(conn, "updated_at") or ""
+    conn.close()
+
+    def _safe_remote_meta(reg: str, filename: str) -> Dict[str, str]:
+        try:
+            return get_remote_export_meta(reg, filename)
+        except Exception:
+            return {"etag": "", "last_modified": ""}
+
+    jp_meta = _safe_remote_meta(region, NICE_SERVANT_FILE)
+    reasons: List[str] = []
+    if jp_meta["etag"] and local_etag != jp_meta["etag"]:
+        reasons.append("日服数据有更新")
+    if region != "CN":
+        cn_equip_meta = _safe_remote_meta("CN", NICE_EQUIP_FILE)
+        cn_servant_meta = _safe_remote_meta("CN", NICE_SERVANT_FILE)
+        if cn_equip_meta["etag"] and local_cn_equip_etag != cn_equip_meta["etag"]:
+            reasons.append("简中服礼装有更新")
+        if cn_servant_meta["etag"] and local_cn_servant_etag != cn_servant_meta["etag"]:
+            reasons.append("简中服从者有更新")
+
+    available = bool(reasons)
+    return {
+        "status": "update_available" if available else "no_change",
+        "updated": False,
+        "update_available": available,
+        "region": region,
+        "local_etag": local_etag,
+        "remote_etag": jp_meta["etag"],
+        "remote_last_modified": jp_meta["last_modified"],
+        "local_updated_at": local_updated_at,
+        "reasons": reasons,
+        "message": "、" .join(reasons) if available else "数据已经是最新版本",
+    }
+
+
 def update_database(
     region: Optional[str] = None,
     db_path: Optional[Path | str] = None,
-    force: bool = False,
     use_cache: bool = True,
     progress: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """应用内“更新数据”入口。
+    """应用内「更新数据」入口：**无条件全量重建**（检查交给 check_update）。
 
-    先 HEAD 远程 ETag；若本地已是最新且未强制更新，则直接返回 no_change。
-    否则执行全量重建。重建只清空 servants/servant_stage_traits/crafts，
+    重建只清空 servants/servant_stage_traits/crafts，
     user_box/user_teams 不会被改动，因此新从者/新礼装可平滑加入。
     """
     region = _region_or_default(region)
@@ -806,37 +938,9 @@ def update_database(
         progress("正在检查数据更新...")
     conn = database.connect(db_path)
     database.init_db(conn)
-    local_etag = database.get_meta(conn, "servant_etag")
-    local_cn_equip_etag = database.get_meta(conn, "cn_equip_etag")
     conn.close()
 
-    remote_meta = get_remote_export_meta(region)
-    cn_remote_meta: Dict[str, str] = {"etag": "", "last_modified": ""}
-    if region != "CN":
-        try:
-            cn_remote_meta = get_remote_export_meta("CN", NICE_EQUIP_FILE)
-        except Exception:
-            cn_remote_meta = {"etag": "", "last_modified": ""}
-    cn_changed = bool(
-        region != "CN"
-        and cn_remote_meta["etag"]
-        and local_cn_equip_etag != cn_remote_meta["etag"]
-    )
-    if (
-        not force
-        and not cn_changed
-        and local_etag
-        and remote_meta["etag"]
-        and local_etag == remote_meta["etag"]
-    ):
-        if progress:
-            progress("数据已是最新版本")
-        return {
-            "status": "no_change",
-            "updated": False,
-            "region": region,
-            "message": "数据已经是最新版本",
-        }
+    remote_meta = _safe_remote_meta(region, NICE_SERVANT_FILE)
 
     stats = build_database(
         region=region,
@@ -878,14 +982,15 @@ if __name__ == "__main__":
     parser.add_argument("--region", default=DEFAULT_REGION)
     parser.add_argument("--db", default=str(database.DB_PATH))
     parser.add_argument("--no-cache", action="store_true")
-    parser.add_argument("--update", action="store_true", help="应用内更新模式：检测 ETag，变化才重建")
-    parser.add_argument("--force", action="store_true", help="强制更新/重建，即使 ETag 未变化")
+    parser.add_argument("--check", action="store_true", help="只检查远程是否有新数据（不下载、不重建）")
+    parser.add_argument("--update", action="store_true", help="全量重建静态数据（保留个人数据）")
     args = parser.parse_args()
-    if args.update:
+    if args.check:
+        stats = check_update(region=args.region, db_path=args.db)
+    elif args.update:
         stats = update_database(
             region=args.region,
             db_path=args.db,
-            force=args.force,
             use_cache=not args.no_cache,
         )
     else:

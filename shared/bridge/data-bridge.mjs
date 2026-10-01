@@ -35,6 +35,7 @@ export function createDataBridge({ domain, platform = {} }) {
       dataRegion: meta.getMetaValue("data_region"),
       serverRegion: meta.getServerRegion(),
       cnUnavailableBondCeIds: meta.getCnUnavailableBondCeIds(),
+      cnUnavailableServantIds: meta.getCnUnavailableServantIds(),
       genericParticipatingCraftIds: meta.getGenericBondParticipation(),
       nonParticipatingCraftIds: meta.getNonParticipatingCraftIds(),
       activeAccount: accounts.getActiveAccount(),

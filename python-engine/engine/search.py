@@ -1992,6 +1992,13 @@ def search_top_teams(
     检查挂在 report() 与精算循环上，粒度约为每 100 个候选一次。
     """
     start = time.time()
+    # 区服未实装的从者直接剔除：简中服模式下，日服库里勾选的"简中服还没上线"的从者不能参与计算。
+    # （界面已不显示这些从者，这里兜底，兼容旧 Box / 手改数据 / 直接调引擎）
+    unavailable = getattr(ctx, "unavailable_servant_ids", None) or set()
+    if unavailable:
+        kept = [b for b in req.box if int(b.servant_id) not in unavailable]
+        if len(kept) != len(req.box):
+            req.box = kept
     box = _box_map(req)
     if not req.box:
         raise ValueError("请至少勾选一位从者")
@@ -2048,6 +2055,11 @@ def search_top_teams(
             if cid == slot.fixed_craft_id and c_info:
                 fixed_cost += c_info.cost
     if choose_count > len(player_candidates):
+        if unavailable:
+            raise ValueError(
+                f"当前服务器（简中服）已排除 {len(unavailable)} 位尚未实装的从者后，"
+                "Box 剩余人数不足，无法组成 5 名玩家 + 助战的队伍"
+            )
         raise ValueError("Box 人数不足，无法组成 5 名玩家 + 助战的队伍")
     min_extra_cost = sum(
         sorted(ctx.servants[sid].cost for sid in player_candidates)[:choose_count]

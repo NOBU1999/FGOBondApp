@@ -221,6 +221,8 @@ const App = {
       mode: "normal",
       serverRegion: "jp",
       cnUnavailableCraftIds: [],
+      // 简中服尚未实装的可玩从者：简中模式下要从候选池里剔除（日服照常）
+      cnUnavailableServantIds: [],
       genericParticipatingCraftIds: [],
       nonParticipatingCraftIds: [],
       customCrafts: [],
@@ -325,8 +327,19 @@ const App = {
     };
   },
   computed: {
+    /** 简中服未实装从者的 id 集合（日服模式下为空集，等于不生效） */
+    cnUnavailableServantSet() {
+      if (this.serverRegion !== "cn") return new Set();
+      return new Set((this.cnUnavailableServantIds || []).map(Number));
+    },
+    /** 当前服务器下可见的从者（简中模式会隐藏简中服尚未实装的那些） */
+    visibleServants() {
+      const hidden = this.cnUnavailableServantSet;
+      if (!hidden.size) return this.servants;
+      return this.servants.filter((s) => !hidden.has(Number(s.id)));
+    },
     ownedServants() {
-      return this.servants.filter((s) => this.box[s.id] && this.box[s.id].checked);
+      return this.visibleServants.filter((s) => this.box[s.id] && this.box[s.id].checked);
     },
     universal5Craft() {
       return {
@@ -461,8 +474,9 @@ const App = {
         const kw = this.overlay.keyword.toLowerCase();
         const isSupportSlot = this.overlay.slotIndex !== null && this.slots[this.overlay.slotIndex] && this.slots[this.overlay.slotIndex].isSupport;
         const crownGroup = this.mode === "crown" ? this.crownClass : "all";
-        // 助战从者可选择所有已收录角色（不限于自己 Box）
-        const source = isSupportSlot ? this.servants : this.ownedServants;
+        // 助战从者可选择所有已收录角色（不限于自己 Box）；
+        // 简中模式下同样要排除简中服尚未实装的从者
+        const source = isSupportSlot ? this.visibleServants : this.ownedServants;
         return this.sortServantList(
           source.filter((s) => {
             if (kw && !s.name.toLowerCase().includes(kw)) return false;
@@ -568,6 +582,7 @@ const App = {
       this.activeAccountId = (accountInfo && accountInfo.activeId) || null;
       this.serverRegion = (info && info.serverRegion) || "jp";
       this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
+      this.cnUnavailableServantIds = (info && info.cnUnavailableServantIds) || [];
       this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || [];
       this.nonParticipatingCraftIds = (info && info.nonParticipatingCraftIds) || [];
       this.costumeNames = costumeNames || {};
@@ -602,8 +617,7 @@ const App = {
       });
       window.fgo.onMenuAction((data) => {
         if (data && data.channel === "menu:settings") this.settingsVisible = true;
-        if (data && data.channel === "menu:update-data") this.runUpdate(false);
-        if (data && data.channel === "menu:update-data-force") this.runUpdate(true);
+        if (data && data.channel === "menu:update-data") this.runUpdate();
         if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });
     } catch (e) {
@@ -1823,6 +1837,7 @@ const App = {
       this.info = info || this.info;
       this.serverRegion = (info && info.serverRegion) || this.serverRegion || "jp";
       this.cnUnavailableCraftIds = (info && info.cnUnavailableBondCeIds) || [];
+      this.cnUnavailableServantIds = (info && info.cnUnavailableServantIds) || [];
       this.genericParticipatingCraftIds = (info && info.genericParticipatingCraftIds) || this.genericParticipatingCraftIds || [];
       this.nonParticipatingCraftIds = (info && info.nonParticipatingCraftIds) || this.nonParticipatingCraftIds || [];
       this.servants = servants || [];
@@ -2962,7 +2977,41 @@ const App = {
     closeUpdateModal() {
       if (!this.updateRunning) this.updateModalVisible = false;
     },
-    async runUpdate(force) {
+    /**
+     * 只检查远程是否有新数据（HEAD 比对，秒回、不下载）。
+     * 与「更新数据」拆成两个按钮：检查用来看值不值得更新，更新是无条件重建。
+     */
+    async runCheck(progressItemKey = "check") {
+      if (this.isAndroidPlatform()) return; // 安卓：数据随 APK 发布
+      this.updateTitle = "更新数据";
+      this.updateModalVisible = true;
+      this.updateRunning = true;
+      this.updateResult = null;
+      this.updateError = "";
+      if (!this.updateItems.length) this.updateItems = this.initUpdateItems();
+      this.setUpdateItem(progressItemKey, "running", "正在检查远程数据...");
+      try {
+        const r = await window.fgo.checkDataUpdate();
+        this.updateRunning = false;
+        this.updateResult = r;
+        if (r && r.status === "update_available") {
+          const detail = (r.reasons || []).join("、") || "远程有新数据";
+          this.setUpdateItem(progressItemKey, "done", detail + "，可以更新");
+        } else {
+          this.setUpdateItem(progressItemKey, "done", "本地已是最新版本");
+        }
+      } catch (e) {
+        this.updateRunning = false;
+        this.updateError = e.message || String(e);
+        this.setUpdateItem(progressItemKey, "error");
+      }
+    },
+    /**
+     * 更新数据：**无条件全量重建**（要不要更新请先用「检查刷新」看一眼）。
+     * 安卓端不提供「更新数据」：数据与头像一起随 APK 发布（见 PLATFORM-ROADMAP 的决策），
+     * 界面据此隐藏入口，方法里也各留一道保险。
+     */
+    async runUpdate() {
       if (this.isAndroidPlatform()) return; // 安卓：数据随 APK 发布，不提供联网更新
       this.updateModalVisible = true;
       this.updateTitle = "更新数据";
@@ -2970,9 +3019,9 @@ const App = {
       this.updateResult = null;
       this.updateError = "";
       this.updateItems = this.initUpdateItems();
-      this.setUpdateItem("check", "running", "正在检查远程数据...");
+      this.setUpdateItem("check", "running", "正在下载并重建...");
       try {
-        const r = await window.fgo.updateData(force);
+        const r = await window.fgo.updateData();
         this.updateRunning = false;
         this.updateResult = r;
         if (r && r.status === "no_change") {
@@ -3978,9 +4027,9 @@ const App = {
           <button class="secondary" :disabled="updateRunning" @click="closeUpdateModal">✕</button>
         </div>
         <div v-if="updateTitle === '更新数据'" class="filters">
-          <button class="secondary" :disabled="updateRunning" @click="runUpdate(false)">检查并更新</button>
-          <button class="secondary" :disabled="updateRunning" @click="runUpdate(true)">强制更新</button>
-          <span class="text-muted" style="align-self:center">{{ updateRunning ? '正在更新...' : '空闲' }}</span>
+          <button class="secondary" :disabled="updateRunning" @click="runCheck()">检查刷新</button>
+          <button class="secondary" :disabled="updateRunning" @click="runUpdate()">更新数据</button>
+          <span class="text-muted" style="align-self:center">{{ updateRunning ? '处理中...' : '空闲' }}</span>
         </div>
         <div v-if="updateTitle !== '更新数据'" class="text-muted" style="margin-bottom:10px">
           只重建静态数据（从者/礼装/特性/灵衣），账号 / Box / 排除 / 预设 / 自定义礼装都会保留；失败会自动回滚。
