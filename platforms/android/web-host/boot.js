@@ -151,6 +151,8 @@
     }
     return Promise.resolve({ ok: true });
   };
+  api.checkDataUpdate = () =>
+    Promise.reject(new Error("安卓版不支持联网检查更新；数据随安装包发布（更新请下载新版 APK）"));
   api.updateData = () =>
     Promise.reject(new Error("安卓版不支持联网更新数据；数据随安装包发布（更新请下载新版 APK）"));
   api.resetStaticData = () =>
@@ -389,6 +391,13 @@
     }
   }
 
+  /** 读单个标量值（sql.js 的 exec 返回 [ { columns, values } ]） */
+  function oneValue(db, sql) {
+    const res = db.exec(sql);
+    const row = res && res[0] && res[0].values && res[0].values[0];
+    return row ? row[0] : null;
+  }
+
   function staticTableExists(db, table) {
     try {
       const res = db.exec(
@@ -508,6 +517,27 @@
   }
 
   /**
+   * 静态数据指纹（与 Python `static_data_revision()`、`scripts/make_seed.cjs` 必须算出同一个值）：
+   * 各静态表行数 + updated_at。
+   * 为什么要它：`updated_at` 没变但静态数据内容变了（例如补了新的 app_meta 键）时，
+   * 只比 updated_at 会漏刷新 —— 简中服「未实装从者/礼装」名单就是这么漏掉的。
+   */
+  function staticDataRevision(db) {
+    const parts = [];
+    for (const table of STATIC_TABLES) {
+      let count = -1;
+      try {
+        count = Number(oneValue(db, 'SELECT COUNT(*) FROM main."' + table + '"') || 0);
+      } catch (_) {
+        /* 表不存在 */
+      }
+      parts.push(table + "=" + count);
+    }
+    parts.push("updated_at=" + (readMetaValue(db, "updated_at") || ""));
+    return parts.join("|");
+  }
+
+  /**
    * 随包静态数据比本地新就刷新本地库：
    *   以随包库为基底，搬入旧库的个人表 + 用户偏好键。
    * 返回 { status, newBytes }；任何一步失败都返回 failed 并让调用方沿用旧库。
@@ -520,10 +550,27 @@
     try {
       runtimeRoot = new SQL.Database(persistBytes);
       const runtimeVersion = readMetaValue(runtimeRoot, STATIC_VERSION_KEY);
+      const runtimeRevision = readMetaValue(runtimeRoot, "static_revision");
       packageDb = new SQL.Database(packageBytes);
       const packageVersion = readMetaValue(packageDb, STATIC_VERSION_KEY);
-      // 随包库没有版本、或本地库不更旧 → 不动（用户自己更新过数据的也不回退）
-      if (!packageVersion || (runtimeVersion && packageVersion <= runtimeVersion)) {
+      const packageRevision = readMetaValue(packageDb, "static_revision");
+
+      // 随包库没有版本 → 不动；用户自己更新过（本地更新）→ 不回退
+      if (!packageVersion || (runtimeVersion && packageVersion < runtimeVersion)) {
+        return { status: "keep", runtimeVersion, packageVersion };
+      }
+      let reason = "";
+      if (!runtimeVersion) {
+        reason = "本地库无版本号";
+      } else if (packageVersion > runtimeVersion) {
+        reason = "随包数据版本更新";
+      } else if (packageRevision && runtimeRevision && packageRevision !== runtimeRevision) {
+        reason = "静态数据已更新（指纹不同）";
+      } else if (packageRevision && !runtimeRevision) {
+        reason = "本地库缺少静态数据指纹（旧版本库）";
+      } else if (!packageRevision && !packageVersion) {
+        return { status: "keep", runtimeVersion, packageVersion };
+      } else {
         return { status: "keep", runtimeVersion, packageVersion };
       }
 
@@ -549,12 +596,14 @@
       const newBytes = next.export();
       pushDiag(
         "info",
-        `随包静态数据已刷新：${runtimeVersion || "(空)"} -> ${packageVersion}（个人数据保留 ${carried} 行）`
+        `随包静态数据已刷新：${runtimeVersion || "(空)"} -> ${packageVersion}` +
+          `（${reason}；个人数据保留 ${carried} 行）`
       );
       emitProgress("已更新随包静态数据（Box / 预设已保留）");
       return {
         status: "refreshed",
         newBytes,
+        reason,
         runtimeVersion,
         packageVersion,
         carriedUserData: carried,

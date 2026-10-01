@@ -36,6 +36,44 @@ const USER_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "c
 // 用户偏好 / 本机状态：不随发布包分发
 const USER_META_KEYS = ["server_region", "generic_bond_participation", "non_participating_craft_ids", "active_account_id"];
 
+// 静态数据表：与个人数据无关，随包发布 / 运行库刷新时整表替换
+// （必须与 python-engine/engine/data_fetcher.py 的 STATIC_DATA_TABLES、platforms/android/web-host/boot.js 的 STATIC_TABLES 一致）
+const STATIC_TABLES = [
+  "servants",
+  "servant_stage_traits",
+  "servant_stage_traits_cn",
+  "crafts",
+  "servant_costumes",
+  "servant_costume_traits",
+  "servant_costume_traits_cn",
+];
+
+/**
+ * 静态数据指纹：各静态表行数 + updated_at。
+ * 与 python-engine 的 static_data_revision()、安卓 boot.js 的 staticDataRevision() 必须算出同一个值。
+ */
+function staticDataRevision(db) {
+  const parts = [];
+  for (const t of STATIC_TABLES) {
+    let count = -1;
+    try {
+      count = db.prepare(`SELECT COUNT(*) AS c FROM "${t}"`).get().c;
+    } catch (_) {
+      /* 表不存在 */
+    }
+    parts.push(`${t}=${count}`);
+  }
+  let updated = "";
+  try {
+    const row = db.prepare("SELECT value FROM app_meta WHERE key = 'updated_at'").get();
+    updated = row && row.value ? String(row.value) : "";
+  } catch (_) {
+    /* 忽略 */
+  }
+  parts.push(`updated_at=${updated}`);
+  return parts.join("|");
+}
+
 const argv = process.argv.slice(2);
 const flagValue = (name, fallback) => {
   const i = argv.indexOf(name);
@@ -170,6 +208,9 @@ try {
   const placeholders = USER_META_KEYS.map(() => "?").join(", ");
   db.prepare(`DELETE FROM app_meta WHERE key IN (${placeholders})`).run(...USER_META_KEYS);
   db.exec("VACUUM");
+  // 静态数据指纹以"实际落盘的种子库"为准重算一遍，避免与开发库不一致
+  db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES('static_revision', ?)")
+    .run(staticDataRevision(db));
   after = tableCounts(db, USER_TABLES);
 } finally {
   db.close();

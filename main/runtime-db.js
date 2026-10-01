@@ -23,6 +23,7 @@
  */
 
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const database = require("./database");
 
@@ -215,6 +216,24 @@ function pruneBackups(backupDir) {
 }
 
 /**
+ * 两份数据库内容是否一致（先比大小，再比 sha256）。
+ * 用途：`updated_at` 相同时判断"种子库是否真的和运行库一样"，
+ * 一样就不刷新（避免每次启动都白重建一遍）。
+ */
+function sameContent(a, b) {
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    if (sa.size !== sb.size) return false;
+    const ha = crypto.createHash("sha256").update(fs.readFileSync(a)).digest("hex");
+    const hb = crypto.createHash("sha256").update(fs.readFileSync(b)).digest("hex");
+    return ha === hb;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * 确保运行库可用；返回 { action } 便于日志与测试。
  * action: no-seed | created | keep | refreshed | failed
  */
@@ -235,17 +254,42 @@ function ensureRuntimeDb(dbDir) {
     }
   }
 
-  // 静态数据版本比较：seed 更新才刷新（用户自己更新过数据时不回退）
   const seedVersion = readMeta(seed, "updated_at");
   const runtimeVersion = readMeta(runtime, "updated_at");
-  if (!seedVersion || (runtimeVersion && seedVersion <= runtimeVersion)) {
+  const seedRevision = readMeta(seed, "static_revision");
+  const runtimeRevision = readMeta(runtime, "static_revision");
+  let reason = "";
+
+  if (!seedVersion) {
+    // 种子库没有版本号：只能靠内容比对（没变化就保持）
+    if (sameContent(seed, runtime)) return { action: "keep" };
+    reason = "种子库无版本号且内容不同";
+  } else if (!runtimeVersion) {
+    reason = "运行库无版本号";
+  } else if (seedVersion > runtimeVersion) {
+    reason = "种子库版本更新";
+  } else if (seedVersion < runtimeVersion) {
+    // 用户自己更新过数据（运行库更新）→ 不回退
+    return { action: "keep" };
+  } else if (seedRevision && runtimeRevision && seedRevision !== runtimeRevision) {
+    // 版本号相同但静态数据指纹不同：
+    // 踩过 —— 只补静态数据内容（如新增 app_meta 键、补数据表）而没动 updated_at，
+    // 结果随包的新数据永远刷不进去（简中服未实装名单就是这么没生效的）。
+    reason = "静态数据已更新（指纹不同）";
+  } else if (seedRevision && !runtimeRevision) {
+    reason = "运行库缺少静态数据指纹（旧版本库）";
+  } else if (!seedRevision && !sameContent(seed, runtime)) {
+    // 种子库没有指纹（更老的构建）：退回内容比对
+    reason = "种子库与运行库内容不同";
+  } else {
     return { action: "keep" };
   }
 
-  return refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion });
+  log(`刷新运行库：${reason}`);
+  return refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion, reason });
 }
 
-function refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion }) {
+function refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion, reason = "" }) {
   const newPath = path.join(dbDir, NEW_NAME);
   const backupDir = path.join(dbDir, BACKUP_DIR);
   let backupPath = "";
@@ -323,7 +367,7 @@ function refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion }) {
   }
 
   pruneBackups(backupDir);
-  log(`静态数据已刷新：${runtimeVersion || "(空)"} -> ${seedVersion}`);
+  log(`静态数据已刷新：${runtimeVersion || "(空)"} -> ${seedVersion}${reason ? `（${reason}）` : ""}`);
   return {
     action: "refreshed",
     runtime,
