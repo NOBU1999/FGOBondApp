@@ -23,7 +23,7 @@
 注意
 ----
 - 同步完要**重启应用**（asar 与引擎都是启动时读取）。
-- 用户运行库里的静态数据由出包版 `main/runtime-db.js` 在启动时按 `updated_at` 自动刷新，
+- 用户运行库里的静态数据由出包版 `main/runtime-db.js` 在启动时按 `static_revision` 自动刷新，
   所以不必手工动 `fgo_data.db`。
 - `app.asar` 是"解包 → 换文件 → 重打包"，先把原文件备份成 `app.asar.bak-<时间戳>`。
 """
@@ -84,11 +84,37 @@ PLAIN_FILES = [
     ("使用说明.txt", "使用说明.txt"),
 ]
 
-# 仅供参考、不影响运行的说明文件
-HINT_FILES = [
-    ("release/RELEASE_NOTES_v0.1.14.md", "RELEASE_NOTES_v0.1.14.md"),
-    ("release/动态文案-v0.1.14.txt", "动态文案-v0.1.14.txt"),
-]
+def _latest_release_notes() -> list:
+    """取当前版本的发布说明与动态文案（release/ 已按版本归档到 05-发布包/vX/）。"""
+    pkg = ROOT / "package.json"
+    version = ""
+    try:
+        version = str(json.loads(pkg.read_text(encoding="utf-8")).get("version") or "")
+    except Exception:
+        pass
+    candidates = []
+    if version:
+        candidates.append(ROOT / "release" / "05-发布包" / f"v{version}")
+    candidates.append(ROOT / "release")
+    pairs = []
+    for folder in candidates:
+        if not folder.is_dir():
+            continue
+        notes = sorted(folder.glob("RELEASE_NOTES_v*.md"))
+        dynamic = sorted(folder.glob("动态文案-v*.txt"))
+        if notes:
+            p = notes[-1]
+            pairs.append((p.relative_to(ROOT) if p.is_relative_to(ROOT) else p, p.name))
+        if dynamic:
+            p = dynamic[-1]
+            pairs.append((p.relative_to(ROOT) if p.is_relative_to(ROOT) else p, p.name))
+        if pairs:
+            break
+    return pairs
+
+
+# 仅供参考、不影响运行的说明文件（按当前版本自动定位，归档后仍然找得到）
+HINT_FILES = _latest_release_notes()
 
 # ---------------------------------------------------------------- asar 读写
 # 格式参考 @electron/asar：12 字节头 + 4 字节 JSON 长度 + JSON 头 + 文件数据区。
@@ -276,7 +302,7 @@ def main() -> int:
             print("  -", s)
     print("=" * 60)
     print("⚠️  你的运行库 db/fgo_data.db 没被动过（账号 / Box / 队伍都在）。")
-    print("⚠️  同步完请**重启应用**；启动时它会按 updated_at 自动刷新静态数据，")
+    print("⚠️  同步完请**重启应用**；启动时它会按 static_revision 自动刷新静态数据，")
     print("    简中服的「未实装从者」名单也会一起生效。")
     return 0
 
