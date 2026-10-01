@@ -26,20 +26,16 @@ class PythonProcess extends EventEmitter {
     return this._stderrTail.trim();
   }
 
-  _launchArgs(mode, forceUpdate = false) {
-    const base = ["--mode", mode, "--db", this.dbPath];
-    if (mode === "update" && forceUpdate) {
-      base.push("--force-update");
-    }
-    return base;
+  _launchArgs(mode) {
+    return ["--mode", mode, "--db", this.dbPath];
   }
 
-  _spawn(mode, forceUpdate = false) {
+  _spawn(mode) {
     if (this.child) {
       throw new Error("Python 引擎已经在运行");
     }
     const info = getEngineLaunchInfo();
-    const args = this._launchArgs(mode, forceUpdate);
+    const args = this._launchArgs(mode);
     const childEnv = {
       ...process.env,
       PYTHONIOENCODING: "utf-8",
@@ -101,14 +97,14 @@ class PythonProcess extends EventEmitter {
     throw new Error("Python 引擎返回了无法解析的 JSON");
   }
 
-  run(mode, payload = undefined, forceUpdate = false) {
+  run(mode, payload = undefined) {
     return new Promise((resolve, reject) => {
       if (this.child) {
         reject(new Error("Python 引擎已经在运行"));
         return;
       }
       try {
-        this._spawn(mode, forceUpdate);
+        this._spawn(mode);
       } catch (err) {
         reject(err);
         return;
@@ -168,11 +164,17 @@ class PythonProcess extends EventEmitter {
   }
 
   calculate(payload) {
-    return this.run("calculate", payload, false);
+    return this.run("calculate", payload);
   }
 
-  update(force = false) {
-    return this.run("update", undefined, force);
+  /** 只检查远程是否有新数据（HEAD，不下载） */
+  check() {
+    return this.run("check");
+  }
+
+  /** 全量重建静态数据（保留个人数据） */
+  update() {
+    return this.run("update");
   }
 
   stop() {

@@ -41,12 +41,7 @@ def main() -> None:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="应用内更新模式：HEAD ETag，无变化则跳过重建",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="强制重建/更新（忽略 ETag）",
+        help="全量重建静态数据（保留个人数据）",
     )
     args = parser.parse_args()
 
@@ -63,7 +58,6 @@ def main() -> None:
         stats = data_fetcher.update_database(
             region=args.region,
             db_path=args.db,
-            force=args.force,
             use_cache=not args.no_cache,
         )
     else:

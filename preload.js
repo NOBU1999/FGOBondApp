@@ -56,7 +56,8 @@ contextBridge.exposeInMainWorld("fgo", {
 
   // 平台能力（各平台自己实现；清单见 shared/bridge/surface.mjs）
   calculate: (payload) => ipcRenderer.invoke("engine:calculate", toPlain(payload)),
-  updateData: (force = false) => ipcRenderer.invoke("engine:update", toPlain({ force })),
+  checkDataUpdate: () => ipcRenderer.invoke("engine:check"),
+  updateData: () => ipcRenderer.invoke("engine:update"),
   resetStaticData: () => ipcRenderer.invoke("db:reset-static"),
   cancelEngine: () => ipcRenderer.invoke("engine:cancel"),
   copyText: (text) => ipcRenderer.invoke("clipboard:write", toPlain(text)),
@@ -72,7 +73,7 @@ contextBridge.exposeInMainWorld("fgo", {
     return () => ipcRenderer.removeListener("engine-progress", listener);
   },
   onMenuAction: (callback) => {
-    const channels = ["menu:settings", "menu:update-data", "menu:update-data-force", "menu:reset-database"];
+    const channels = ["menu:settings", "menu:update-data", "menu:reset-database"];
     const listeners = channels.map((channel) => {
       const listener = (_event, data) => callback(Object.assign({}, data || {}, { channel }));
       ipcRenderer.on(channel, listener);

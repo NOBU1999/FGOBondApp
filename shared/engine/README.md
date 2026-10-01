@@ -16,10 +16,11 @@
 
 ```js
 // 所有实现都必须满足这个形状
-engine.calculate(request)   // → Promise<结果 JSON>（与 contracts/engine-protocol.md 完全一致）
-engine.cancel()             // 停止当前计算
-engine.updateData({force})  // 仅桌面实现支持；其他实现抛出"不支持"
-engine.onProgress(cb)       // 订阅进度，返回取消订阅函数
+engine.calculate(request)    // → Promise<结果 JSON>（与 contracts/engine-protocol.md 完全一致）
+engine.cancel()              // 停止当前计算
+engine.checkDataUpdate()     // 只检查远程是否有新数据（不下载）；仅桌面支持，其他实现抛"不支持"
+engine.updateData()          // 全量重建静态数据（保留个人数据）；仅桌面支持，其他实现抛"不支持"
+engine.onProgress(cb)        // 订阅进度，返回取消订阅函数
 ```
 
 ## 硬性要求

@@ -78,29 +78,36 @@ def calculate(
     return result
 
 
-def update(db_path: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
-    _progress("正在检查数据更新...")
+def update(db_path: Optional[str] = None) -> Dict[str, Any]:
+    _progress("正在下载并重建数据...")
     result = data_fetcher.update_database(
         db_path=db_path,
-        force=force,
         use_cache=True,
         progress=_progress,
     )
-    _progress("数据更新完成" if result.get("updated") else "数据已是最新")
+    _progress("数据更新完成")
+    return result
+
+
+def check(db_path: Optional[str] = None) -> Dict[str, Any]:
+    _progress("正在检查远程数据...")
+    result = data_fetcher.check_update(db_path=db_path)
+    _progress("检查完成")
     return result
 
 
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description="FGO 牵绊推荐计算引擎")
-    parser.add_argument("--mode", default="calculate", choices=["calculate", "update"])
+    parser.add_argument("--mode", default="calculate", choices=["calculate", "check", "update"])
     parser.add_argument("--db", default=str(DB_PATH))
-    parser.add_argument("--force-update", action="store_true")
     args = parser.parse_args(argv)
 
     start = time.time()
     try:
-        if args.mode == "update":
-            result = update(db_path=args.db, force=args.force_update)
+        if args.mode == "check":
+            result = check(db_path=args.db)
+        elif args.mode == "update":
+            result = update(db_path=args.db)
         else:
             result = calculate_from_stdin(db_path=args.db)
         result.setdefault("status", "success")

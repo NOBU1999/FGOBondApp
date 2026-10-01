@@ -87,13 +87,14 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | `deleteAccount` | `id` | 删除账号 | 🟡 |
 | `setActiveAccount` | `id` | 切换当前账号 | 🟡 |
 
-### 2.5 计算引擎（4）
+### 2.5 计算引擎（5）
 
 | 方法 | 参数 | 用途 | 归属 | 网页 / 安卓注意 |
 |---|---|---|---|---|
 | `calculate` | `payload`（见 `engine-protocol.md`） | 算出 Top N 队伍 | 🔵 | 桌面 = 起子进程；网页 / 安卓 = Worker + WASM，**同一份 JSON** |
 | `cancelEngine` | – | 取消正在跑的计算 | 🔵 | 桌面 = kill 子进程；网页 = Worker 终止 |
-| `updateData` | `{force}` | 联网更新游戏数据 | 🔵 | 网页 / 安卓不适用（随包发版） |
+| `checkDataUpdate` | – | 检查远程是否有新数据（只 HEAD 比对，不下载） | 🔵 | 网页 / 安卓不适用（随包发版） |
+| `updateData` | – | 全量重建游戏数据（**保留个人数据**） | 🔵 | 网页 / 安卓不适用（随包发版） |
 | `resetStaticData` | – | 重建静态数据 | 🔵 | 网页 / 安卓不适用或随包重置 |
 
 ### 2.6 系统能力与事件（3）
@@ -104,7 +105,7 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | `onEngineProgress` | `callback` | 订阅引擎进度 | 🟢 抽象 / 🔵 传输 | 桌面 = IPC 推送；网页 = Worker `postMessage` |
 | `onMenuAction` | `callback` | 订阅系统菜单动作 | 🔵 | **网页没有系统菜单** → 界面里要有自己的入口按钮（设置 / 更新数据 / 重置） |
 
-`onMenuAction` 的通道名：`menu:settings`、`menu:update-data`、`menu:update-data-force`、`menu:reset-database`。
+`onMenuAction` 的通道名：`menu:settings`、`menu:update-data`、`menu:reset-database`。
 
 ## 3. 平台能力最小集（各平台都必须提供这些，否则功能缺块）
 

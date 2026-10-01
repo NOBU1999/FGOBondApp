@@ -58,7 +58,8 @@ Worker 内嵌 WASM 引擎
 | 模式 | 参数 | 输入 | 用途 | 平台适用 |
 |---|---|---|---|---|
 | `calculate` | `--mode calculate --db <path>` | stdin JSON | 算队伍 | 全平台 |
-| `update` | `--mode update --db <path> [--force-update]` | 无 | 联网更新游戏数据 | **仅桌面**（网页 / 安卓随包发版） |
+| `check` | `--mode check --db <path>` | 无 | 检查远程是否有新数据（只 HEAD 比对，不下载） | **仅桌面**（网页 / 安卓随包发版） |
+| `update` | `--mode update --db <path>` | 无 | 全量重建静态数据（保留个人数据） | **仅桌面**（网页 / 安卓随包发版） |
 
 ## 3. 请求结构（`calculate`）
 

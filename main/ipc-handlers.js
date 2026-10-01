@@ -137,13 +137,32 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle("engine:update", async (event, options = {}) => {
+  // 只检查远程是否有新数据（HEAD，不下载、不重建）
+  ipcMain.handle("engine:check", async (event) => {
     stopActiveEngine();
     const engine = new PythonProcess({ dbPath: getDbPath() });
     activeEngine = engine;
     engine.on("progress", (text) => sendProgress(event, text));
     try {
-      const result = await engine.update(Boolean(options && options.force));
+      const result = await engine.check();
+      diagLog(`数据检查结束：status=${result && result.status}`);
+      return result;
+    } catch (err) {
+      logEngineFailure("数据检查", err, engine);
+      throw err;
+    } finally {
+      if (activeEngine === engine) activeEngine = null;
+    }
+  });
+
+  // 全量重建静态数据（保留个人数据）
+  ipcMain.handle("engine:update", async (event) => {
+    stopActiveEngine();
+    const engine = new PythonProcess({ dbPath: getDbPath() });
+    activeEngine = engine;
+    engine.on("progress", (text) => sendProgress(event, text));
+    try {
+      const result = await engine.update();
       diagLog(`数据更新结束：status=${result && result.status} updated=${result && result.updated}`);
       // 顺手补齐新从者的头像（下载失败只提示，不影响更新数据本身）
       const avatarResult = await backfillAvatars(event);

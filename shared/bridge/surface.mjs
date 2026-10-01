@@ -14,6 +14,7 @@
 /** 平台能力：各平台自己实现（桌面 main/ipc-handlers.js，安卓 platforms/android/web-host/boot.js） */
 export const PLATFORM_METHODS = Object.freeze([
   "calculate",
+  "checkDataUpdate",
   "updateData",
   "resetStaticData",
   "cancelEngine",
@@ -29,6 +30,6 @@ export const SUBSCRIBE_METHODS = Object.freeze(["onEngineProgress", "onMenuActio
 
 /**
  * 安卓端**故意不实现**的平台方法（界面必须能在缺失时优雅退化）。
- * 注意 updateData / resetStaticData 安卓是"明确报错"（有实现、给出提示），不在此列。
+ * 注意 checkDataUpdate / updateData / resetStaticData 安卓是"明确报错"（有实现、给出提示），不在此列。
  */
 export const ANDROID_NOT_IMPLEMENTED = Object.freeze(["ensureAvatars"]);
