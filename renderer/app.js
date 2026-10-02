@@ -254,6 +254,9 @@ const App = {
       excludedCrafts: [],
       batchModalVisible: false,
       batchSelectedServants: [],
+      // 按住滑动批量选择（仅电脑端鼠标）的"预览状态"：id(字符串) -> 目标状态
+      // 拖动过程中只改这里，松手才一次性提交，避免列表被筛选条件抽走导致选中范围错乱
+      dragSelectPending: {},
       eventBondBonuses: [],
       selectedEventId: null,
       batchImportMessage: "",
@@ -1284,6 +1287,7 @@ const App = {
     },
     showHover(e, servant) {
       if (!servant) return;
+      if (this.dragSelectActive()) return;
       if (this.hoverTipDisabled()) return;
       clearTimeout(this._hoverTimer);
       this._hoverTimer = setTimeout(() => {
@@ -1299,6 +1303,184 @@ const App = {
     hideHover() {
       clearTimeout(this._hoverTimer);
       this.hover.visible = false;
+    },
+
+    // ---------------- 按住滑动批量选择（仅电脑端鼠标 / 触控板） ----------------
+    // 手感对齐"选文本"：
+    //   · 按住不动 → 交给原有 click（单击行为完全不变）
+    //   · 按住 + 滑动 → 起点到当前格划出连续区间，按"起点状态取反"预览
+    //   · 往回拖 → 划出区间的格子自动恢复原状态（不是"划过就留下"）
+    //   · 松手 → 一次性提交（只写一次库）
+    dragSelectActive() {
+      return !!(this._drag && this._drag.active);
+    },
+    // 单元格"生效状态"：拖动预览优先，否则取真实状态
+    cellState(kind, id) {
+      const key = String(id);
+      const pending = this.dragSelectPending;
+      if (pending && Object.prototype.hasOwnProperty.call(pending, key)) return !!pending[key];
+      if (kind === "owned") return !!(this.box[id] && this.box[id].checked);
+      if (kind === "batch") return this.batchSelectedServants.includes(id);
+      return this.isExcludedServant(id);
+    },
+    dragGridOf(el) {
+      return el && el.closest ? el.closest(".box-grid, .exclusion-grid") : null;
+    },
+    dragIndexAtPoint(d, x, y) {
+      const el = document.elementFromPoint(x, y);
+      const cell = el && el.closest ? el.closest("[data-cell-id]") : null;
+      if (cell && d.container.contains(cell)) {
+        const idx = d.cells.indexOf(cell);
+        if (idx >= 0) return idx;
+      }
+      // 指针移出网格：停在上一次的位置，不越界也不乱跳
+      return d.lastIndex;
+    },
+    dragRequeryCells(d) {
+      const first = d.cells[d.anchorIndex];
+      if (first && first.isConnected) return;
+      d.cells = Array.from(d.container.querySelectorAll("[data-cell-id]"));
+      const again = d.cells.findIndex((el) => Number(el.dataset.cellId) === d.id);
+      if (again >= 0) d.anchorIndex = again;
+    },
+    dragPreviewTo(d, idx) {
+      const lo = Math.max(0, Math.min(d.anchorIndex, idx));
+      const hi = Math.min(d.cells.length - 1, Math.max(d.anchorIndex, idx));
+      const next = {};
+      for (let i = lo; i <= hi; i++) {
+        const el = d.cells[i];
+        if (el) next[String(el.dataset.cellId)] = d.target;
+      }
+      // 整体替换：被拖出去的格子自动回到真实状态
+      this.dragSelectPending = next;
+    },
+    onCellDragStart(event, kind, id) {
+      if (event.button !== 0) return;            // 只认左键（右键留给详情菜单）
+      // 只做电脑端：安卓是触摸滚动列表，别去抢事件（否则可能卡住滚动）
+      try { if (this.isAndroidPlatform && this.isAndroidPlatform()) return; } catch (_) { /* ignore */ }
+      if (this.dragSelectActive()) return;
+      const container = this.dragGridOf(event.currentTarget);
+      if (!container) return;
+      const cells = Array.from(container.querySelectorAll("[data-cell-id]"));
+      const anchorIndex = cells.findIndex((el) => Number(el.dataset.cellId) === Number(id));
+      if (anchorIndex < 0) return;
+      event.preventDefault();                     // 阻止图片原生拖动 / 文本选择
+      this.hideHover();
+      this._drag = {
+        active: true, kind, id: Number(id), container, cells,
+        anchorIndex, target: !this.cellState(kind, id),   // 起点取反 = 本次操作方向
+        startX: event.clientX, startY: event.clientY,
+        lastX: event.clientX, lastY: event.clientY,
+        moved: false, lastIndex: anchorIndex, autoDy: 0, raf: null,
+      };
+      window.addEventListener("mousemove", this.onCellDragMove, { passive: false });
+      window.addEventListener("mouseup", this.onCellDragEnd);
+    },
+    onCellDragMove(event) {
+      const d = this._drag;
+      if (!d || !d.active) return;
+      d.lastX = event.clientX;
+      d.lastY = event.clientY;
+      if (!d.moved) {
+        if (Math.abs(event.clientX - d.startX) < 4 && Math.abs(event.clientY - d.startY) < 4) return;
+        d.moved = true;
+        document.body.classList.add("drag-selecting");
+        this.dragPreviewTo(d, d.anchorIndex);
+        this.startDragAutoScroll();
+      }
+      event.preventDefault();
+      this.dragRequeryCells(d);
+      const idx = this.dragIndexAtPoint(d, event.clientX, event.clientY);
+      if (idx !== d.lastIndex) {
+        d.lastIndex = idx;
+        this.dragPreviewTo(d, idx);
+      }
+      this.updateDragAutoScroll(d);
+    },
+    updateDragAutoScroll(d) {
+      const rect = d.container.getBoundingClientRect();
+      const EDGE = 44;
+      const MAX = 18;
+      if (d.lastY < rect.top + EDGE) d.autoDy = -Math.min(MAX, Math.max(4, (rect.top + EDGE - d.lastY) / 2));
+      else if (d.lastY > rect.bottom - EDGE) d.autoDy = Math.min(MAX, Math.max(4, (d.lastY - (rect.bottom - EDGE)) / 2));
+      else d.autoDy = 0;
+    },
+    startDragAutoScroll() {
+      if (!this._drag || this._drag.raf) return;
+      const step = () => {
+        const d = this._drag;
+        if (!d || !d.active) return;
+        if (d.autoDy) {
+          const before = d.container.scrollTop;
+          d.container.scrollTop = before + d.autoDy;
+          if (d.container.scrollTop !== before) {
+            const idx = this.dragIndexAtPoint(d, d.lastX, d.lastY);
+            if (idx !== d.lastIndex) {
+              d.lastIndex = idx;
+              this.dragPreviewTo(d, idx);
+            }
+          }
+        }
+        d.raf = requestAnimationFrame(step);
+      };
+      this._drag.raf = requestAnimationFrame(step);
+    },
+    async onCellDragEnd() {
+      const d = this._drag;
+      window.removeEventListener("mousemove", this.onCellDragMove);
+      window.removeEventListener("mouseup", this.onCellDragEnd);
+      this._drag = null;
+      document.body.classList.remove("drag-selecting");
+      if (d && d.raf) cancelAnimationFrame(d.raf);
+      if (!d || !d.moved) {
+        this.dragSelectPending = {};   // 没滑动 = 普通单击，交回原 click 处理
+        return;
+      }
+      const pending = this.dragSelectPending;
+      this.dragSelectPending = {};
+      // 松手后浏览器还会补一个 click（落在起点与终点公共祖先上）→ 屏蔽掉，否则会多切一格
+      this._suppressDragClick = true;
+      setTimeout(() => { this._suppressDragClick = false; }, 0);
+      await this.commitDragSelection(d.kind, pending);
+    },
+    dragClickSuppressed() {
+      if (this._suppressDragClick) return true;
+      if (this.dragSelectActive()) return true;
+      return false;
+    },
+    async commitDragSelection(kind, pending) {
+      const ids = Object.keys(pending || {}).map(Number);
+      if (!ids.length) return;
+      if (kind === "exclusion") {
+        const set = new Set(this.excludedServants.map(Number));
+        for (const id of ids) { if (pending[String(id)]) set.add(id); else set.delete(id); }
+        this.excludedServants = Array.from(set);
+        await this.persistExclusions();
+        return;
+      }
+      if (kind === "batch") {
+        const set = new Set(this.batchSelectedServants.map(Number));
+        for (const id of ids) { if (pending[String(id)]) set.add(id); else set.delete(id); }
+        this.batchSelectedServants = this.ownedServants.map((s) => s.id).filter((id) => set.has(id));
+        return;
+      }
+      // owned：副作用对齐 toggleOwned（取消持有时清满绊/开关、并从队伍里摘掉），但只存一次
+      for (const id of ids) {
+        const b = this.box[id];
+        if (!b) continue;
+        const want = !!pending[String(id)];
+        if (!!b.checked === want) continue;
+        b.checked = want;
+        if (!want) {
+          b.maxBond = false;
+          b.switch1 = false;
+          b.switch2 = false;
+          for (const slot of this.slots) {
+            if (slot.servantId === id) { slot.servantId = null; slot.craftId = null; slot.secondCraftId = null; }
+          }
+        }
+      }
+      await this.persistBox();
     },
     async openServantDetail(servantId, slotIndex = null) {
       this.servantDetail.servantId = servantId;
@@ -1626,6 +1808,7 @@ const App = {
       this.refreshAccounts();
     },
     toggleOwned(id) {
+      if (this.dragClickSuppressed()) return;
       const b = this.box[id];
       b.checked = !b.checked;
       if (!b.checked) {
@@ -1734,6 +1917,7 @@ const App = {
       this.persistBox();
     },
     toggleBatchSelect(id) {
+      if (this.dragClickSuppressed()) return;
       if (this.batchSelectedServants.includes(id)) {
         this.batchSelectedServants = this.batchSelectedServants.filter((x) => x !== id);
       } else {
@@ -1867,6 +2051,7 @@ const App = {
       this.refreshAccounts();
     },
     async toggleExcludeServant(id) {
+      if (this.dragClickSuppressed()) return;
       const nid = Number(id);
       const set = this.excludedServantSet;
       if (set.has(nid)) {
@@ -1906,7 +2091,16 @@ const App = {
     },
     triggerCaptureImport() {
       const input = this.$refs.captureInput;
-      if (input) input.click();
+      if (!input) return;
+      // 安卓的系统文件选择器**只认 MIME 类型**：Capacitor 会把 accept 里的扩展名翻成 MIME，
+      // 翻不出来的（.php 不在安卓的 MimeTypeMap 里）会被直接丢掉，
+      // 最后只剩 text/plain + application/json 两个过滤条件；
+      // 而抓包文件通常被系统认成 octet-stream → 在选择器里是灰的、点不动（玩家反馈的问题）。
+      // 所以安卓上放开过滤（*/*），让所有文件都能选；桌面端保留扩展名过滤，方便找人。
+      let android = false;
+      try { android = !!(this.isAndroidPlatform && this.isAndroidPlatform()); } catch (_) { android = false; }
+      input.accept = android ? "*/*" : ".php,.txt,.json,application/json";
+      input.click();
     },
     async onCaptureFile(e) {
       const file = e.target.files && e.target.files[0];
@@ -3704,19 +3898,21 @@ const App = {
             v-for="s in boxGridServants"
             :key="s.id"
             class="box-cell"
-            :class="{ owned: box[s.id].checked }"
+            :data-cell-id="s.id"
+            :class="{ owned: cellState('owned', s.id) }"
+            @mousedown="onCellDragStart($event, 'owned', s.id)"
             @click="toggleOwned(s.id)"
             @contextmenu="openBoxContext($event, s)"
             @mouseenter="showHover($event, s)"
             @mousemove="moveHover($event)"
             @mouseleave="hideHover"
           >
-            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" :alt="s.name" class="box-avatar" @error="markAvatarBroken(s.id)" />
+            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" :alt="s.name" class="box-avatar" draggable="false" @error="markAvatarBroken(s.id)" />
             <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
-            <div v-if="box[s.id].checked" class="box-owned-mark">✔</div>
+            <div v-if="cellState('owned', s.id)" class="box-owned-mark">✔</div>
             <div class="box-sn">{{ s.collectionNo }}</div>
 
-            <div v-if="box[s.id].checked" class="box-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" @click.stop="toggleMaxBond(s.id)" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
+            <div v-if="cellState('owned', s.id)" class="box-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" @click.stop="toggleMaxBond(s.id)" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
           </div>
         </div>
       </div>
@@ -3748,16 +3944,18 @@ const App = {
             v-for="s in ownedServants"
             :key="s.id"
             class="box-cell"
-            :class="{ owned: batchSelectedServants.includes(s.id) }"
+            :data-cell-id="s.id"
+            :class="{ owned: cellState('batch', s.id) }"
+            @mousedown="onCellDragStart($event, 'batch', s.id)"
             @click="toggleBatchSelect(s.id)"
             @contextmenu="openBoxContext($event, s)"
             @mouseenter="showHover($event, s)"
             @mousemove="moveHover($event)"
             @mouseleave="hideHover"
           >
-            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" :alt="s.name" class="box-avatar" @error="markAvatarBroken(s.id)" />
+            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" :alt="s.name" class="box-avatar" draggable="false" @error="markAvatarBroken(s.id)" />
             <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
-            <div v-if="batchSelectedServants.includes(s.id)" class="box-owned-mark">✔</div>
+            <div v-if="cellState('batch', s.id)" class="box-owned-mark">✔</div>
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:10px">
@@ -3895,15 +4093,17 @@ const App = {
             v-for="s in filteredExclusionServants"
             :key="s.id"
             class="box-cell exclusion-cell"
-            :class="{ 'exclusion-active': isExcludedServant(s.id) }"
+            :data-cell-id="s.id"
+            :class="{ 'exclusion-active': cellState('exclusion', s.id) }"
+            @mousedown="onCellDragStart($event, 'exclusion', s.id)"
             @click="toggleExcludeServant(s.id)"
             :title="s.name"
           >
-            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" @error="markAvatarBroken(s.id)" />
+            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" draggable="false" @error="markAvatarBroken(s.id)" />
             <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
             <div v-if="exclusionSortBy === 'bond' && servantBondInfo(s)" class="bond-badge exclusion-bond-badge" :class="servantBondInfo(s).kind" :title="servantBondInfo(s).text">{{ servantBondInfo(s).text }}</div>
             <div v-else-if="exclusionSortBy !== 'bond'" class="box-maxbond exclusion-maxbond" :class="{ active: box[s.id].maxBond && box[s.id].switch1, full: box[s.id].maxBond && !box[s.id].switch1 }" :title="box[s.id].maxBond ? (box[s.id].switch1 ? '满绊 · 参与25%全队加成' : '满绊 · 未启用25%加成') : '满绊标记'">绊</div>
-            <div class="exclusion-check">{{ isExcludedServant(s.id) ? '✓' : '' }}</div>
+            <div class="exclusion-check">{{ cellState('exclusion', s.id) ? '✓' : '' }}</div>
           </div>
           <div v-if="!filteredExclusionServants.length" class="empty">没有可排除的从者</div>
         </div>

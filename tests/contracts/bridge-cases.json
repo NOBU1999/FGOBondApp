@@ -273,6 +273,32 @@
       ]
     },
     {
+      "name": "box.importCaptureContent（选错文件：读不出内容 → 报错，不写库）",
+      "method": "box.importCaptureContent",
+      "args": ["<html>这不是抓包文件</html>", 2],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "matches": "读不出抓包数据" }
+      ]
+    },
+    {
+      "name": "box.importCaptureContent（选错文件：是 JSON 但没有从者数据 → 报错，不写库）",
+      "method": "box.importCaptureContent",
+      "args": ["{\"hello\":\"world\"}", 2],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "matches": "没有找到从者数据" }
+      ]
+    },
+    {
+      "name": "box.getUserBox（选错文件后 Box 必须保持原样，不能被清空）",
+      "method": "box.getUserBox",
+      "args": [2],
+      "expect": [
+        { "path": "result.length", "eq": 3 }
+      ]
+    },
+    {
       "name": "accounts.copy（复制账号带走 Box + 排除）",
       "method": "accounts.createAccount",
       "args": ["复制自甲", { "copyFromId": 2 }],

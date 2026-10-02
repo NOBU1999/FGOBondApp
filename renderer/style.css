@@ -474,6 +474,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .box-cell:hover { border-color: var(--accent); }
 .box-cell.owned { border-color: var(--ok); }
+
+/* 按住滑动批量选择（仅电脑端）：拖动时禁用选中/拖图，避免选中文本或拖走头像 */
+.box-avatar, .exclusion-cell img { -webkit-user-drag: none; user-drag: none; }
+body.drag-selecting, body.drag-selecting * { user-select: none !important; }
+body.drag-selecting .box-cell { cursor: crosshair; }
 .box-avatar, .cell-avatar {
   width: 100%;
   height: 100%;

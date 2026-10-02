@@ -56,8 +56,20 @@ export function createBoxDomain({ sql, accounts, codec }) {
       const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
       jsonText = codec.decodeBase64ToUtf8(padded);
     }
-    const data = JSON.parse(jsonText);
+    const data = (() => {
+      try {
+        return JSON.parse(jsonText);
+      } catch (_) {
+        throw new Error("这个文件读不出抓包数据，请确认选的是抓包导出的那个文件");
+      }
+    })();
     const replaced = ((data || {}).cache || {}).replaced || {};
+    // 选错文件时必须报错退出，不能继续往下走：
+    // 下面会执行 saveUserBox(entries)，空输入等于把用户的 Box 清空（等价于「恢复Box默认」），
+    // 安卓放开了文件类型过滤之后更容易选错文件，所以这里必须挡住。
+    if (!replaced.userSvt && !replaced.userSvtStorage && !replaced.userSvtCollection) {
+      throw new Error("这个文件里没有找到从者数据，请确认选的是抓包导出的那个文件");
+    }
     const collection = replaced.userSvtCollection || [];
     const userSvt = replaced.userSvt || [];
     // Chaldea 会同时读取 userSvt 与 userSvtStorage（第二保管室），
