@@ -872,6 +872,14 @@ def refresh_costume_names(
     }
 
 
+def _safe_remote_meta(reg: str, filename: str) -> Dict[str, str]:
+    """远程导出文件的元信息；网络失败时返回空值（调用方按"比不出来"处理，不报错）。"""
+    try:
+        return get_remote_export_meta(reg, filename)
+    except Exception:
+        return {"etag": "", "last_modified": ""}
+
+
 def check_update(
     region: Optional[str] = None,
     db_path: Optional[Path | str] = None,
@@ -888,12 +896,6 @@ def check_update(
     local_cn_servant_etag = database.get_meta(conn, "cn_servant_etag") or ""
     local_updated_at = database.get_meta(conn, "updated_at") or ""
     conn.close()
-
-    def _safe_remote_meta(reg: str, filename: str) -> Dict[str, str]:
-        try:
-            return get_remote_export_meta(reg, filename)
-        except Exception:
-            return {"etag": "", "last_modified": ""}
 
     jp_meta = _safe_remote_meta(region, NICE_SERVANT_FILE)
     reasons: List[str] = []
@@ -939,8 +941,6 @@ def update_database(
     conn = database.connect(db_path)
     database.init_db(conn)
     conn.close()
-
-    remote_meta = _safe_remote_meta(region, NICE_SERVANT_FILE)
 
     stats = build_database(
         region=region,
