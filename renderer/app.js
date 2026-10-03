@@ -1327,11 +1327,16 @@ const App = {
       return el && el.closest ? el.closest(".box-grid, .exclusion-grid") : null;
     },
     dragIndexAtPoint(d, x, y) {
-      const el = document.elementFromPoint(x, y);
-      const cell = el && el.closest ? el.closest("[data-cell-id]") : null;
-      if (cell && d.container.contains(cell)) {
-        const idx = d.cells.indexOf(cell);
-        if (idx >= 0) return idx;
+      // 用 elementsFromPoint（复数）：菜单/气泡这类浮层可能还盖在格子上
+      // （触摸端"长按弹菜单→继续滑"时，菜单这一帧还没从 DOM 里消失），
+      // 单数版只会返回最上面那个浮层，导致选区圈不到底下的格子。
+      const stack = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+      for (const el of stack) {
+        const cell = el && el.closest ? el.closest("[data-cell-id]") : null;
+        if (cell && d.container.contains(cell)) {
+          const idx = d.cells.indexOf(cell);
+          if (idx >= 0) return idx;
+        }
       }
       // 指针移出网格：停在上一次的位置，不越界也不乱跳
       return d.lastIndex;
@@ -1386,7 +1391,7 @@ const App = {
         d.moved = true;
         document.body.classList.add("drag-selecting");
         this.dragPreviewTo(d, d.anchorIndex);
-        this.startDragAutoScroll();
+        this.startDragAutoScroll(d);
       }
       event.preventDefault();
       this.dragRequeryCells(d);
@@ -1405,10 +1410,11 @@ const App = {
       else if (d.lastY > rect.bottom - EDGE) d.autoDy = Math.min(MAX, Math.max(4, (d.lastY - (rect.bottom - EDGE)) / 2));
       else d.autoDy = 0;
     },
-    startDragAutoScroll() {
-      if (!this._drag || this._drag.raf) return;
+    startDragAutoScroll(session) {
+      const s = session || this._drag;
+      if (!s || s.raf) return;
       const step = () => {
-        const d = this._drag;
+        const d = s;
         if (!d || !d.active) return;
         if (d.autoDy) {
           const before = d.container.scrollTop;
@@ -1423,7 +1429,7 @@ const App = {
         }
         d.raf = requestAnimationFrame(step);
       };
-      this._drag.raf = requestAnimationFrame(step);
+      s.raf = requestAnimationFrame(step);
     },
     async onCellDragEnd() {
       const d = this._drag;
@@ -1481,6 +1487,118 @@ const App = {
         }
       }
       await this.persistBox();
+    },
+
+    // ---------------- 触摸端（安卓）：长按菜单 + 长按后滑动批量选择 ----------------
+    // 手感（与桌面版同一套划选内核，区别只在"怎么启动"）：
+    //   · 快速滑动           → 就是滚列表（没长按就不抢事件）
+    //   · 长按不动 0.5 秒    → 弹出自己的菜单（从者设置 / 从者属性），可以抬手去点
+    //   · 长按后手指不松继续滑 → 菜单淡出，直接进入划选，抬手提交
+    // 为什么不用系统自带的长按菜单：那个菜单我们关不掉，也挡着格子（详见 CONTEXT 文档）
+    onCellTouchStart(event, kind, id) {
+      if (this._touch) return;
+      const t = event.touches && event.touches[0];
+      if (!t) return;
+      const container = this.dragGridOf(event.currentTarget);
+      if (!container) return;
+      const cells = Array.from(container.querySelectorAll("[data-cell-id]"));
+      const anchorIndex = cells.findIndex((el) => Number(el.dataset.cellId) === Number(id));
+      if (anchorIndex < 0) return;
+      const d = {
+        kind, id: Number(id), container, cells, anchorIndex,
+        target: !this.cellState(kind, id),
+        startX: t.clientX, startY: t.clientY, lastX: t.clientX, lastY: t.clientY,
+        mode: "idle", lastIndex: anchorIndex, autoDy: 0, raf: null,
+        timer: setTimeout(() => this.enterTouchMenu(d), 500),
+      };
+      this._touch = d;
+      window.addEventListener("touchmove", this.onCellTouchMove, { passive: false });
+      window.addEventListener("touchend", this.onCellTouchEnd);
+      window.addEventListener("touchcancel", this.onCellTouchCancel);
+    },
+    enterTouchMenu(d) {
+      if (this._touch !== d || d.mode !== "idle") return;
+      d.mode = "menu";
+      const maxX = Math.max(8, window.innerWidth - 210);
+      const maxY = Math.max(8, window.innerHeight - 150);
+      this.hideHover();
+      this.contextMenu = {
+        visible: true, target: "box", servantId: d.id, slotIndex: null,
+        x: Math.min(Math.max(8, d.startX), maxX),
+        y: Math.min(Math.max(8, d.startY), maxY),
+      };
+      try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) { /* 没权限就算了 */ }
+    },
+    onCellTouchMove(event) {
+      const d = this._touch;
+      if (!d) return;
+      const t = event.touches && event.touches[0];
+      if (!t) return;
+      d.lastX = t.clientX;
+      d.lastY = t.clientY;
+      const dist = Math.hypot(t.clientX - d.startX, t.clientY - d.startY);
+      if (d.mode === "idle") {
+        // 还没长按成功就滑动 → 判定为滚列表，彻底让开（不 preventDefault）
+        if (dist > 15) { clearTimeout(d.timer); this.endTouchSession(); }
+        return;
+      }
+      // 已经进菜单 / 划选：这整个手势都不许列表跟着滚
+      if (event.cancelable) event.preventDefault();
+      if (d.mode === "menu") {
+        if (dist <= 15) return;
+        d.mode = "select";
+        this.closeContextMenu();               // 菜单淡出，进入划选
+        document.body.classList.add("drag-selecting");
+        this.dragRequeryCells(d);
+        d.lastIndex = d.anchorIndex;
+        this.updateDragAutoScroll(d);
+        this.startDragAutoScroll(d);
+        // 不 return：这一次滑动就该把选区算到当前格子（否则手指划一下就停会只圈到起点）
+      }
+      this.dragRequeryCells(d);
+      const idx = this.dragIndexAtPoint(d, t.clientX, t.clientY);
+      if (idx !== d.lastIndex) {
+        d.lastIndex = idx;
+        this.dragPreviewTo(d, idx);
+      }
+      this.updateDragAutoScroll(d);
+    },
+    onCellTouchEnd(event) {
+      const d = this._touch;
+      if (!d) return;
+      clearTimeout(d.timer);
+      if (d.mode === "idle") {
+        this.endTouchSession();                // 普通点按：交给原有 click
+        return;
+      }
+      // 长按（菜单 or 划选）都要吃掉这次合成 click：
+      // 否则会多切一格、或者刚弹出的菜单被根节点的 click 立刻关掉
+      if (event.cancelable) event.preventDefault();
+      this._suppressDragClick = true;
+      setTimeout(() => { this._suppressDragClick = false; }, 0);
+      if (d.mode === "select") {
+        const pending = this.dragSelectPending;
+        this.dragSelectPending = {};
+        this.endTouchSession();
+        this.commitDragSelection(d.kind, pending);
+      } else {
+        this.endTouchSession();                // 菜单留着，等用户点
+      }
+    },
+    onCellTouchCancel() {
+      this.closeContextMenu();
+      this.dragSelectPending = {};
+      this.endTouchSession();
+    },
+    endTouchSession() {
+      const d = this._touch;
+      if (d && d.timer) clearTimeout(d.timer);
+      if (d && d.raf) cancelAnimationFrame(d.raf);
+      this._touch = null;
+      document.body.classList.remove("drag-selecting");
+      window.removeEventListener("touchmove", this.onCellTouchMove);
+      window.removeEventListener("touchend", this.onCellTouchEnd);
+      window.removeEventListener("touchcancel", this.onCellTouchCancel);
     },
     async openServantDetail(servantId, slotIndex = null) {
       this.servantDetail.servantId = servantId;
@@ -3901,6 +4019,7 @@ const App = {
             :data-cell-id="s.id"
             :class="{ owned: cellState('owned', s.id) }"
             @mousedown="onCellDragStart($event, 'owned', s.id)"
+            @touchstart="onCellTouchStart($event, 'owned', s.id)"
             @click="toggleOwned(s.id)"
             @contextmenu="openBoxContext($event, s)"
             @mouseenter="showHover($event, s)"
@@ -3947,6 +4066,7 @@ const App = {
             :data-cell-id="s.id"
             :class="{ owned: cellState('batch', s.id) }"
             @mousedown="onCellDragStart($event, 'batch', s.id)"
+            @touchstart="onCellTouchStart($event, 'batch', s.id)"
             @click="toggleBatchSelect(s.id)"
             @contextmenu="openBoxContext($event, s)"
             @mouseenter="showHover($event, s)"
@@ -4096,6 +4216,7 @@ const App = {
             :data-cell-id="s.id"
             :class="{ 'exclusion-active': cellState('exclusion', s.id) }"
             @mousedown="onCellDragStart($event, 'exclusion', s.id)"
+            @touchstart="onCellTouchStart($event, 'exclusion', s.id)"
             @click="toggleExcludeServant(s.id)"
             :title="s.name"
           >
