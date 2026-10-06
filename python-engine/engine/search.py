@@ -569,6 +569,84 @@ def _sample_servant_combinations(
     return picked
 
 
+def _craft_set_lineups(
+    table: Any,
+    combo: Sequence[int],
+    members: Sequence[int],
+    need_players: int,
+    max_lineups: int = 3,
+) -> List[Tuple[int, ...]]:
+    """给一个「礼装集合」产出少量几条候选阵容（并集补人 + 不同填法）。
+
+    为什么不能只取一条：同一集合里的成员**并不等价** —— 各人能用上的子集不同，
+    "触发张数最多"的前 N 名往往挤满了同一批"万金油"从者，而
+    "每人负责不同礼装、合起来吃满整批"的填法里，可能**没有任何人**触发张数最多。
+    2026-10-06 反馈的那支 11.096 队伍就是这样被漏掉的：它确实在集合的并集里，
+    但 4 名成员都不是"触发张数 + 启发式"的前 4 名，于是整个集合只评了另一条阵容。
+
+    产出（去重，最多 max_lineups 条）：
+      ① 现有口径：按「触发张数 + 启发式」排序的前 N 名；
+      ② 贪心覆盖：按礼装价值从高到低，每张挑能顺带覆盖最多剩余礼装的人（"核心组"思路）；
+      ③ 每张各挑一个最强触发者（不看重复命中）——补充"分工吃不同礼装"的填法。
+    成员按需要补满；预算由调用方按截止时间控制。
+    """
+    if not members or need_players <= 0:
+        return []
+    out: List[Tuple[int, ...]] = []
+    seen: Set[Tuple[int, ...]] = set()
+
+    def push(lineup: Sequence[int]) -> None:
+        picked: List[int] = []
+        for sid in lineup:
+            if sid not in picked:
+                picked.append(sid)
+            if len(picked) >= need_players:
+                break
+        for sid in members:            # 不足则按成员顺位（触发张数+启发式）补满
+            if len(picked) >= need_players:
+                break
+            if sid not in picked:
+                picked.append(sid)
+        if len(picked) < need_players:
+            return
+        key = tuple(sorted(picked[:need_players]))
+        if key not in seen and len(out) < max_lineups:
+            seen.add(key)
+            out.append(key)
+
+    push(list(members))
+
+    order = sorted(combo, key=lambda cid: table.craft_value(cid), reverse=True)
+
+    # ② 贪心覆盖
+    chosen: List[int] = []
+    for cid in order:
+        if len(chosen) >= need_players:
+            break
+        best_sid, best_gain = None, -1.0
+        for sid in members:
+            if sid in chosen or not table.can_trigger(sid, cid):
+                continue
+            gain = sum(1 for c in combo if table.can_trigger(sid, c))
+            if gain > best_gain:
+                best_gain, best_sid = gain, sid
+        if best_sid is not None:
+            chosen.append(best_sid)
+    push(chosen)
+
+    # ③ 每张礼装各挑一个最强触发者（members 已按强度排序，取第一个即可）
+    per_craft: List[int] = []
+    for cid in order:
+        if len(per_craft) >= need_players:
+            break
+        for sid in members:
+            if sid not in per_craft and table.can_trigger(sid, cid):
+                per_craft.append(sid)
+                break
+    push(per_craft)
+    return out
+
+
 def _is_merged_generic_universal5(ctx: DataContext, craft_id: int) -> bool:
     """是否属于被 UI 合并成“通用5%”的普通 5% 牵绊礼装。
 
@@ -2818,13 +2896,18 @@ def search_top_teams(
                 check_cancel()
                 if time.time() >= _craft_first_deadline:
                     break
-                _lineup = tuple(_members[:_need_players])
-                _key = tuple(sorted(_lineup))
-                if _key in best_by_set:
-                    continue
-                extras_tuple = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
-                if extras_tuple:
-                    evaluate_extras(extras_tuple, full_combos)
+                # 一个集合评「少量几条填法」，而不是只评"触发张数前 N 名"那一条：
+                # 成员对这批礼装并不等价，只评一条会把真实最优填法整条漏掉
+                # （2026-10-06 反馈：11.096 那支队就是这样没被算出来的）。
+                for _lineup in _craft_set_lineups(_table, _combo, _members, _need_players):
+                    _key = tuple(sorted(_lineup))
+                    if _key in best_by_set:
+                        continue
+                    extras_tuple = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
+                    if extras_tuple:
+                        evaluate_extras(extras_tuple, full_combos)
+                    if time.time() >= _craft_first_deadline:
+                        break
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
     refine_count = _default_refine_count(req, len(best_by_set))
