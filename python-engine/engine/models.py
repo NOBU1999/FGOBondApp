@@ -147,6 +147,9 @@ class CalculationRequest:
     #                   （专捞"多人共享同一批特性礼装"的抱团阵容，
     #                    该族阵容按单从者评分永远排不进候选池）
     search_order: str = "servant"
+    # 诊断开关（默认关闭，宿主不传）：打开后引擎在结果里附 "_boundCheck"，
+    # 报告"剪枝上界 vs 实际分"的自检结果。用于回归测试，见 tests/bound_sanity.py。
+    debug_bound_check: bool = False
 
 
 @dataclass
@@ -311,6 +314,7 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
     req.search_order = str(order).strip().lower() or "servant"
     if req.search_order not in ("servant", "craft"):
         req.search_order = "servant"
+    req.debug_bound_check = bool(data.get("debugBoundCheck"))
     if req.class_group in (None, "", "all"):
         req.class_group = None
     if strategy == STRATEGY_TARGET_MAX:
