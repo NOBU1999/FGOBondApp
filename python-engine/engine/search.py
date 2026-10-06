@@ -1518,13 +1518,8 @@ def _relaxed_base_score(
     ctx: DataContext,
     req: CalculationRequest,
     players: Sequence[_RelaxedPlayer],
-    front_override: Optional[float] = None,
 ) -> float:
-    """没有任何自由礼装/助战礼装时的松弛总分基线。
-
-    front_override：给"上界"用的保守前排系数（取所有位置里的最大值）。
-    不传时用各成员实际放位的系数（= 粗搜/DP 用的口径）。
-    """
+    """没有任何自由礼装/助战礼装时的松弛总分基线。"""
     max_bond_count, aura_total = _relaxed_team_constants(players)
     activity = req.activity_bonus or 0.0
     weight = _relaxed_percent_weight(req)
@@ -1539,7 +1534,7 @@ def _relaxed_base_score(
             + aura_total
             + p.personal_bonus
         )
-        total += (p.front_factor if front_override is None else front_override) * inner
+        total += p.front_factor * inner
     return weight * total
 
 
@@ -1548,12 +1543,10 @@ def _relaxed_craft_score(
     req: CalculationRequest,
     craft: Any,
     players: Sequence[_RelaxedPlayer],
-    front_override: Optional[float] = None,
 ) -> float:
     """单张玩家位礼装的松弛总分贡献。
 
     特性礼装按“该从者任一阶段/灵衣可满足条件”计入，可能高估，但保证不低估。
-    front_override：上界用的保守前排系数（见 `_relaxed_base_score`）。
     """
     if craft is None:
         return 0.0
@@ -1570,9 +1563,7 @@ def _relaxed_craft_score(
             can_match = True
         if not can_match:
             continue
-        percent_score += float(craft.bonus_value) * (
-            p.front_factor if front_override is None else front_override
-        )
+        percent_score += float(craft.bonus_value) * p.front_factor
         flat_score += float(craft.flat_bonus or 0.0)
     score = weight * percent_score
     if _uses_points_scoring(req):
@@ -1587,11 +1578,10 @@ def _make_craft_score_map(
     req: CalculationRequest,
     players: Sequence[_RelaxedPlayer],
     candidate_craft_ids: Sequence[int],
-    front_override: Optional[float] = None,
 ) -> Dict[int, float]:
-    """为每个候选礼装计算松弛分数，供 DP 使用（front_override 供上界用）。"""
+    """为每个候选礼装计算松弛分数，供 DP 使用。"""
     return {
-        cid: _relaxed_craft_score(ctx, req, ctx.crafts.get(cid), players, front_override)
+        cid: _relaxed_craft_score(ctx, req, ctx.crafts.get(cid), players)
         for cid in candidate_craft_ids
     }
 
@@ -1601,7 +1591,6 @@ def _relaxed_support_craft_score(
     req: CalculationRequest,
     craft: Any,
     players: Sequence[_RelaxedPlayer],
-    front_override: Optional[float] = None,
 ) -> float:
     """单张助战礼装的松弛总分贡献。
 
@@ -1613,13 +1602,12 @@ def _relaxed_support_craft_score(
     if float(craft.support_bonus or 0.0) > 0:
         weight = _relaxed_percent_weight(req)
         return weight * sum(
-            (p.front_factor if front_override is None else front_override)
-            * float(craft.support_bonus)
+            p.front_factor * float(craft.support_bonus)
             for p in players
             if p.counted
         )
     if craft.is_bond_ce and float(craft.support_bonus or 0.0) <= 0:
-        return _relaxed_craft_score(ctx, req, craft, players, front_override)
+        return _relaxed_craft_score(ctx, req, craft, players)
     return 0.0
 
 
@@ -1630,7 +1618,6 @@ def _support_max_relaxed_add(
     support_second_options: Sequence[int],
     players: Sequence[_RelaxedPlayer],
     repeatable_ids: Set[int],
-    front_override: Optional[float] = None,
 ) -> float:
     """助战主位/第二礼装位能提供的最大松弛加分（不参与玩家礼装 DP）。"""
     main_scores: List[Tuple[float, int]] = []
@@ -1638,17 +1625,13 @@ def _support_max_relaxed_add(
         craft = ctx.crafts.get(cid)
         if craft is None:
             continue
-        main_scores.append(
-            (_relaxed_support_craft_score(ctx, req, craft, players, front_override), cid)
-        )
+        main_scores.append((_relaxed_support_craft_score(ctx, req, craft, players), cid))
     second_scores: List[Tuple[float, int]] = []
     for cid in support_second_options:
         craft = ctx.crafts.get(cid)
         if craft is None:
             continue
-        second_scores.append(
-            (_relaxed_support_craft_score(ctx, req, craft, players, front_override), cid)
-        )
+        second_scores.append((_relaxed_support_craft_score(ctx, req, craft, players), cid))
 
     best = 0.0
     for score, _ in main_scores:
@@ -1799,98 +1782,12 @@ def _prepare_dp_craft_combos_for_team(
     return players, craft_scores, dp_combos
 
 
-def _max_front_factor() -> float:
-    """所有位置/助战前後排组合里最大的前排系数（上界用保守值）。"""
-    values = [
-        calculator.frontline_bonus(pos, support_in_front)
-        for pos in POSITIONS
-        for support_in_front in (False, True)
-    ]
-    return 1.0 + max(values) if values else 1.0
-
-
-def _exact_best_craft_plan(
-    ctx: DataContext,
-    req: CalculationRequest,
-    players: Sequence[_RelaxedPlayer],
-    candidate_craft_ids: Sequence[int],
-    free_slots_count: int,
-    cost_budget: int,
-    zero_cost_slots: Optional[Sequence[bool]],
-    repeatable_ids: Set[int],
-    craft_scores: Dict[int, float],
-) -> Tuple[float, Optional[Tuple[int, ...]], int]:
-    """所有可行礼装组合的**精确最优**（不用 beam）：返回 (松弛分上界, 最优组合, 该组合真实 Cost)。
-
-    两个用途（缺一不可，2026-10-06 的 bug 就是两者都没覆盖）：
-    1. **剪枝上界**：必须 ≥ 真实可取值，不能依赖 beam DP；
-    2. **粗筛评估**：`craft_combos = dp_combos`（beam，top 12）本身也会漏掉最优组合，
-       所以要把这里的组合一并喂给评估，否则该阵容被评到时也拿不到真实最高分。
-
-    为什么不能靠 beam：`_dp_top_craft_combinations` 每个状态只留 top_k=12 条。候选礼装
-    Cost 全为 12（特性礼装常见）时，状态塌成"按张数一个状态"，真实最优组合的中途前缀
-    挤不进前 12 → 整条路径被剪断。实测：目标阵容 beam 只给 2.304，精确 DP 给 3.496
-    （真实那套 6 张，Cost 恰 60 = 预算），而真实分 11.096 比当时报出的第 2 名还高。
-
-    约束一律"只放宽、不收紧"（零费槽按最贵礼装减免折算），故上界一定 ≥ 真实可取值。
-    """
-    if free_slots_count <= 0:
-        return 0.0, None, 0
-    items: List[Tuple[int, float, int, int]] = []
-    for cid in candidate_craft_ids:
-        score = float(craft_scores.get(cid, 0.0))
-        if score <= 0:
-            continue
-        craft = ctx.crafts.get(cid)
-        if craft is None:
-            continue
-        max_copies = free_slots_count if cid in repeatable_ids else 1
-        items.append((int(craft.cost), score, max_copies, cid))
-    if not items:
-        return 0.0, None, 0
-    zero_count = sum(1 for z in (zero_cost_slots or []) if z)
-    max_cost = max(cost for cost, _s, _m, _cid in items)
-    raw_cap = min(
-        free_slots_count * max_cost,
-        max(0, cost_budget) + zero_count * max_cost,
-    )
-    # dp[(已用槽数, 原始 Cost)] = (最高松弛分, 对应组合)；状态数 ≤ 7 × (raw_cap+1)，很小
-    dp: Dict[Tuple[int, int], Tuple[float, Tuple[int, ...]]] = {(0, 0): (0.0, ())}
-    for cost, score, max_copies, cid in items:
-        for (used, raw), (base_score, base_combo) in list(dp.items()):
-            for copies in range(1, max_copies + 1):
-                new_used = used + copies
-                if new_used > free_slots_count:
-                    break
-                new_raw = raw + cost * copies
-                if new_raw > raw_cap:
-                    break
-                value = base_score + score * copies
-                key = (new_used, new_raw)
-                current = dp.get(key)
-                if current is None or value > current[0] + 1e-12:
-                    dp[key] = (value, base_combo + (cid,) * copies)
-
-    best_ub = max((v for v, _c in dp.values()), default=0.0)
-    # 真实可行（按评估时的 Cost 口径）里最优的那套，供粗筛评估使用
-    best_value = -1.0
-    best_combo: Optional[Tuple[int, ...]] = None
-    best_real_cost = 0
-    for (_used, _raw), (value, combo) in dp.items():
-        if not combo:
-            continue
-        real_cost = _craft_combo_actual_cost(ctx, combo, zero_cost_slots)
-        if real_cost > cost_budget:
-            continue
-        if value > best_value:
-            best_value, best_combo, best_real_cost = value, combo, real_cost
-    return best_ub, best_combo, (best_real_cost if best_combo else 0)
-
-
 def _relaxed_score_upper_bound(
     ctx: DataContext,
     req: CalculationRequest,
     players: Sequence[_RelaxedPlayer],
+    craft_scores: Dict[int, float],
+    dp_combos: Sequence[Tuple[int, Tuple[int, ...]]],
     support_top_options: Sequence[int],
     support_second_options: Sequence[int],
     candidate_craft_ids: Optional[Sequence[int]] = None,
@@ -1901,49 +1798,29 @@ def _relaxed_score_upper_bound(
 ) -> float:
     """计算一套从者阵容的保守总分上界（对应 _score_from_metrics 的口径）。
 
-    - 玩家礼装：用**精确值 DP** 求所有可行组合里的最大松弛分（不用 beam，见
-      `_exact_best_craft_score`）；粗搜的 beam DP 结果不再参与上界；
-    - 前排系数：所有位置取最大（保守），因为真实分是对所有放位取最优；
+    - 玩家礼装取 DP 中松弛分最高的组合；
     - 助战礼装单独取最大可能加分；
     - 总上界 = 无礼装基线 + 玩家礼装上界 + 助战礼装上界。
-    以上均只可能高估，因此可作为"是否可能进入 Top-N"的剪枝判据。
-    ⚠️ 改动本函数后必须跑 `tests/bound_sanity.py`（自检"实际分 ≤ 上界"）。
+    由于松弛口径只可能高估，因此可作为“是否可能超过当前 best”的剪枝判据。
     """
-    # 上界专用：前排系数取所有位置的最大值（真实分是对所有放位取最优，
-    # 单次贪心放位的系数不保证高估）；礼装项用精确值 DP，不依赖 beam。
-    # —— 2026-10-06 修复：原先用 beam DP 的 dp_combos 当"最优礼装分"，会低于真实可取值。
-    front_max = _max_front_factor()
-    repeatable = _repeatable_craft_ids(ctx)
-    baseline = _relaxed_base_score(ctx, req, players, front_override=front_max)
+    repeatable_ids = _repeatable_craft_ids(ctx)
+    baseline = _relaxed_base_score(ctx, req, players)
     # 固定礼装已经占用了槽位，效果恒定存在；上界必须包含它们，否则会低估可达到分数。
     for cid in (fixed_bond_craft_ids or []):
-        baseline += _relaxed_craft_score(
-            ctx, req, ctx.crafts.get(cid), players, front_override=front_max
-        )
-    ub_craft_scores = _make_craft_score_map(
-        ctx, req, players, candidate_craft_ids or [], front_override=front_max
-    )
-    best_craft_score, _ub_combo, _ub_cost = _exact_best_craft_plan(
-        ctx,
-        req,
-        players,
-        candidate_craft_ids or [],
-        free_slots_count,
-        cost_budget,
-        zero_cost_slots,
-        repeatable,
-        ub_craft_scores,
+        baseline += _relaxed_craft_score(ctx, req, ctx.crafts.get(cid), players)
+    best_craft_score = max(
+        (_combo_relaxed_score(combo, craft_scores) for _, combo in dp_combos),
+        default=0.0,
     )
     support_add = _support_max_relaxed_add(
-        ctx, req, support_top_options, support_second_options, players, repeatable,
-        front_override=front_max,
+        ctx, req, support_top_options, support_second_options, players, repeatable_ids
     )
     total_ub = baseline + best_craft_score + support_add
 
     if req.strategy == STRATEGY_TARGET_MAX:
         # target_max 的 score = target_value * 10000 + total_score。
-        # 这里用“只针对 target 的松弛分数”再算一次上界，
-        # 避免全队最优组合不一定是 target 最优组合。
+        # 这里用“只针对 target 的松弛分数”再跑一次小 DP，得到 target 的保守上界，
+        # 避免全队 DP 的最优组合不一定是 target 最优组合。
         target_players = [p for p in players if p.servant_id == req.target_servant_id]
         if not target_players or not any(p.counted for p in target_players):
             return total_ub
@@ -1952,26 +1829,25 @@ def _relaxed_score_upper_bound(
         target_inner += (req.activity_bonus or 0.0)
         target_inner += sum(float(p.aura_bonus or 0.0) for p in players)
         target_inner += target.personal_bonus
-        target_base = _relaxed_percent_weight(req) * front_max * target_inner
-        target_scores = _make_craft_score_map(
-            ctx, req, target_players, candidate_craft_ids or [], front_override=front_max
-        )
-        target_craft_ub, _t_combo, _t_cost = _exact_best_craft_plan(
+        target_base = _relaxed_percent_weight(req) * target.front_factor * target_inner
+        target_scores = _make_craft_score_map(ctx, req, target_players, candidate_craft_ids or [])
+        target_dp = _dp_top_craft_combinations(
             ctx,
-            req,
-            target_players,
             candidate_craft_ids or [],
             free_slots_count,
             cost_budget,
+            _repeatable_craft_ids(ctx),
             zero_cost_slots,
-            repeatable,
             target_scores,
+            top_k=1,
+        )
+        target_craft_ub = (
+            _combo_relaxed_score(target_dp[0][1], target_scores)
+            if target_dp else 0.0
         )
         # 固定礼装效果同样要计入 target 上界。
         fixed_target_score = sum(
-            _relaxed_craft_score(
-                ctx, req, ctx.crafts.get(cid), target_players, front_override=front_max
-            )
+            _relaxed_craft_score(ctx, req, ctx.crafts.get(cid), target_players)
             for cid in (fixed_bond_craft_ids or [])
         )
         # support_add 是全队松弛加分，作为 target 单人的上界也安全（只高不低）。
@@ -2147,13 +2023,6 @@ def search_top_teams(
             pass
 
     bp = prepare_blueprint(req, ctx)
-
-    # 诊断（默认关闭）：记录"剪枝上界 vs 实际分"的自检结果，随结果返回 `_boundCheck`。
-    # 用于回归测试（tests/bound_sanity.py）——上界必须真的 ≥ 实际分，否则会误杀前排队伍。
-    bound_check: Optional[Dict[str, Any]] = (
-        {"checked": 0, "maxGap": 0.0, "worst": None} if req.debug_bound_check else None
-    )
-    bound_pending: Dict[Tuple[int, ...], float] = {}
 
     if len(bp.fixed_servant_ids) > 6:
         raise ValueError("固定从者不能超过6人")
@@ -2508,33 +2377,13 @@ def search_top_teams(
                 free_bond_zero_cost,
                 top_k=12,
             )
-            # 精确 DP 的最优组合也要喂给评估：粗筛用的是 beam(top 12)，
-            # 而 beam 会漏掉"多张同价特性礼装一起吃满"的最优组合（2026-10-06 那个 bug），
-            # 漏了就会让这套阵容即使被评到也拿不到真实最高分。
             if dp_players:
-                _exact_ub, exact_combo, exact_cost = _exact_best_craft_plan(
-                    ctx,
-                    req,
-                    dp_players,
-                    craft_pool,
-                    free_slots_count,
-                    ce_budget,
-                    free_bond_zero_cost,
-                    _repeatable_craft_ids(ctx),
-                    craft_scores,
-                )
-                if exact_combo:
-                    dp_combos = [(exact_cost, exact_combo)] + [
-                        (c, cb) for c, cb in dp_combos if cb != exact_combo
-                    ]
-            # 剪枝目标是“Top-N 阈值”，不是“当前最高分”：
-            # 否则会把所有低于当前第一名的队伍全剪掉，只剩一个结果。
-            # 上界只在真的可能剪枝时才计算（结果集未满时不用算）。
-            if dp_players and len(best_by_set) >= req.top_n:
                 ub = _relaxed_score_upper_bound(
                     ctx,
                     req,
                     dp_players,
+                    craft_scores,
+                    dp_combos,
                     support_top_options,
                     support_second_options,
                     candidate_craft_ids=craft_pool,
@@ -2543,15 +2392,16 @@ def search_top_teams(
                     zero_cost_slots=free_bond_zero_cost,
                     fixed_bond_craft_ids=bp.fixed_bond_craft_ids,
                 )
-                cutoff_scores = sorted(
-                    (e["score"] for e in best_by_set.values()),
-                    reverse=True,
-                )
-                cutoff = cutoff_scores[req.top_n - 1]
-                if bound_check is not None:
-                    bound_pending[servant_set] = ub
-                if ub < cutoff - 1e-9:
-                    return None
+                # 剪枝目标是“Top-N 阈值”，不是“当前最高分”：
+                # 否则会把所有低于当前第一名的队伍全剪掉，只剩一个结果。
+                if len(best_by_set) >= req.top_n:
+                    cutoff_scores = sorted(
+                        (e["score"] for e in best_by_set.values()),
+                        reverse=True,
+                    )
+                    cutoff = cutoff_scores[req.top_n - 1]
+                    if ub < cutoff - 1e-9:
+                        return None
             if use_dp:
                 # DP 组合优先，再并入原有的全局抽样组合，兼顾“阵容专属协同”与
                 # “旧抽样多样性”，避免粗搜只依赖单一启发式。
@@ -2619,18 +2469,6 @@ def search_top_teams(
                     metrics = calculator.calculate_team_metrics(ctx, team)
                     evaluated_total += 1
                     score, rank_key = _score_from_metrics(metrics, team, metrics["multipliers"])
-                    if bound_check is not None:
-                        _ub = bound_pending.get(servant_set)
-                        if _ub is not None:
-                            bound_check["checked"] += 1
-                            _gap = score - _ub
-                            if _gap > bound_check["maxGap"]:  # 上界被违反 = 剪枝会误杀
-                                bound_check["maxGap"] = round(_gap, 6)
-                                bound_check["worst"] = {
-                                    "score": round(score, 6),
-                                    "upperBound": round(_ub, 6),
-                                    "servants": list(servant_set),
-                                }
 
                     old = best_by_set.get(servant_set)
                     if old is None or rank_key > old["rank_key"]:
@@ -3048,7 +2886,7 @@ def search_top_teams(
         top.append(item)
 
     total_candidates = len(best_by_set)
-    result: Dict[str, Any] = {
+    return {
         "status": "success",
         "totalCandidates": total_candidates,
         "top20": top,
@@ -3065,7 +2903,3 @@ def search_top_teams(
             "optimizeProcessed": optimize_processed,
         },
     }
-    if bound_check is not None:
-        # maxGap 必须 <= 0（上界真的成立）。> 0 说明剪枝用的估计值偏低，会误杀前排队伍。
-        result["_boundCheck"] = bound_check
-    return result
