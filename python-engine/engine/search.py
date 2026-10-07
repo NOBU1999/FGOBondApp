@@ -2422,6 +2422,33 @@ def search_top_teams(
         for craft_cost, craft_choice in craft_combos:
             if craft_cost > ce_budget:
                 continue
+            # ---- A3(1)(2)：players 侧对所有助战组合完全相同 --------------------
+            # _make_team_config / _merge_craft_assignment / _fill_remaining_craft_slots
+            # 三者都只读 players / bp / ctx / req（已代码级复核），与 support 无关：
+            # → 每个 (阵容, 礼装组合) 只建一次模板（含配对优化 + 补满空槽），
+            #   助战循环里只换 support 三个字段、并重算阶段。
+            #   原实现是每个助战组合都把这三步重算一遍（实测 ~94% 白烧）。
+            _template = _make_team_config(
+                ctx, req, bp, extras_tuple, mapping, craft_choice, support_id, None,
+                support_second_craft_id=None,
+            )
+            if _template is None:
+                continue
+            if pair_optimize:
+                # 配对优化只依赖 players 与 craft_choice（marginal 不看队伍效果礼装）→ 提到循环外
+                _merge_craft_assignment(
+                    ctx, bp, {p.position: p for p in _template.players}, craft_choice, passes=2
+                )
+            _template = _fill_remaining_craft_slots(ctx, req, bp, _template, craft_pool)
+            _player_tpl = [
+                dict(position=p.position, servant_id=p.servant_id, stage=p.stage,
+                     personal_bonus=p.personal_bonus, max_bond=p.max_bond,
+                     bond_switch1=p.bond_switch1, bond_switch2=p.bond_switch2,
+                     aura_bonus=p.aura_bonus, craft_id=p.craft_id,
+                     second_craft_id=p.second_craft_id, is_crown=p.is_crown,
+                     fixed=p.fixed, stage_locked=p.stage_locked)
+                for p in _template.players
+            ]
             for support_craft_id in team_support_options:
                 # 非冠位助战没有第二礼装位；只有手动/自动给了第二候选才枚举
                 second_ids = team_support_second_options or [None]
@@ -2434,28 +2461,16 @@ def search_top_teams(
                         and support_second_craft_id > 0
                     ):
                         continue
-                    team = _make_team_config(
-                        ctx,
-                        req,
-                        bp,
-                        extras_tuple,
-                        mapping,
-                        craft_choice,
-                        support_id,
-                        support_craft_id,
+                    team = TeamConfig(
+                        players=[PlacedMember(**t) for t in _player_tpl],
+                        support_position=_template.support_position,
+                        support_servant_id=_template.support_servant_id,
+                        support_craft_id=support_craft_id,
                         support_second_craft_id=support_second_craft_id,
+                        crown_positions=_template.crown_positions,
+                        base_bond=_template.base_bond,
+                        activity_bonus=_template.activity_bonus,
                     )
-                    if team is None:
-                        continue
-                    # ④ 配对优化（只在精算轮开启）：按"谁能吃到这张礼装"重新分配
-                    # 自由礼装槽。旧做法是按 Cost 降序贴槽位，不看从者特性，
-                    # 会把"〔Caster〕+20%"贴给非术阶（等于白装）。
-                    if pair_optimize:
-                        _merge_craft_assignment(ctx, bp, {p.position: p for p in team.players},
-                                                craft_choice, passes=2)
-                    # 阶段不再由用户手动指定：根据当前礼装组合自动选择最优阶段/灵衣
-                    # 把 DP/粗搜可能留下的空槽补满，避免“Cost 还有剩余却无礼装”
-                    team = _fill_remaining_craft_slots(ctx, req, bp, team, craft_pool)
                     team = calculator.optimize_team_stages(ctx, team)
 
                     key = tuple(
