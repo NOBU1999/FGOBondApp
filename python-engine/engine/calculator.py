@@ -490,6 +490,48 @@ def _state_score(
     return trait_bonus_for_mask(servant.mask_for(state_key), player_crafts)
 
 
+def _stage_target_for(
+    ctx: DataContext,
+    servant_id: int,
+    trait_crafts: Sequence[CraftInfo],
+) -> Optional[str]:
+    """算"该从者在本队特性礼装下的最优阶段/灵衣"。
+
+    返回 None 表示**不改动**（stage_locked / 无 traits / 无可选阶段）——
+    调用方必须保留原 stage，不能把它当成"设成 None"。
+    抽出来是为了让 optimize_team_stages 能按 (从者, 特性礼装多重集) 缓存。
+    """
+    servant = ctx.servants.get(servant_id)
+    if not servant or not servant.traits:
+        return None
+    asc_keys = [s for s in STAGES if s in servant.traits]
+    costume_keys = sorted(k for k in servant.traits if k.startswith("costume_"))
+    candidates = asc_keys + costume_keys
+    if not candidates:
+        return None
+
+    if not trait_crafts:
+        # 没有任何特性礼装 → 每个阶段收益都是 0：优先取最高普通再临阶段，
+        # 若该从者没有普通再临数据再退到灵衣（与原逻辑等价）。
+        if asc_keys:
+            return asc_keys[-1]
+        return min(costume_keys, key=lambda key: int(key.split("_", 1)[1]))
+
+    scores = {
+        key: trait_bonus_for_mask(servant.mask_for(key), trait_crafts)
+        for key in candidates
+    }
+    max_score = max(scores.values())
+    best_asc = [key for key in asc_keys if scores[key] == max_score]
+    if best_asc:
+        return max(best_asc, key=lambda key: _STAGE_ORDER.get(key, -1))
+
+    best_costume = [key for key in costume_keys if scores[key] == max_score]
+    if best_costume:
+        return min(best_costume, key=lambda key: int(key.split("_", 1)[1]))
+    return None
+
+
 def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
     """根据队伍实际装备的特性礼装，自动为每个玩家从者选择最优阶段/灵衣。
 
@@ -520,46 +562,28 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
         craft for craft in effect_crafts
         if craft.bonus_type == "trait" and craft.is_bond_ce
     ]
+    # 2026-10-07（A1）：本函数一次搜索被调用几十万次，是全引擎第二大热点。
+    # 输出只取决于 (从者, 本队特性礼装**多重集**)：
+    # - 键必须是**多重集**：同名礼装可同时出现在玩家位与助战位，或由用户手动固定两张，
+    #   而 trait_bonus_for_mask 是**按张累加**的 → 集合/位掩码会把"两张"压成"一张"，阶段会选错。
+    # - 缓存值 None = "不改动该从者的阶段"，调用方必须保留原 stage。
+    _stage_cache = getattr(ctx, "_stage_opt_cache", None)
+    if _stage_cache is None:
+        _stage_cache = {}
+        ctx._stage_opt_cache = _stage_cache
+    trait_key = tuple(sorted(c.id for c in trait_crafts))
 
     for p in team.players:
         if p.stage_locked:
-            continue
-        servant = ctx.servants.get(p.servant_id)
-        if not servant or not servant.traits:
-            continue
-        asc_keys = [s for s in STAGES if s in servant.traits]
-        costume_keys = sorted(k for k in servant.traits if k.startswith("costume_"))
-        candidates = asc_keys + costume_keys
-        if not candidates:
-            continue
-
-        if not trait_crafts:
-            # 没有任何特性礼装 → 每个阶段收益都是 0：优先取最高普通再临阶段，
-            # 若该从者没有普通再临数据再退到灵衣（与逐个比分的原逻辑等价）。
-            if asc_keys:
-                p.stage = asc_keys[-1]
-            elif costume_keys:
-                p.stage = min(costume_keys, key=lambda key: int(key.split("_", 1)[1]))
-            continue
-
-        # 每个阶段只算一次（原实现 max() 与列表推导各算一遍，等于算两次）
-        scores = {
-            key: trait_bonus_for_mask(servant.mask_for(key), trait_crafts)
-            for key in candidates
-        }
-        max_score = max(scores.values())
-        best_asc = [key for key in asc_keys if scores[key] == max_score]
-        if best_asc:
-            p.stage = max(best_asc, key=lambda key: _STAGE_ORDER.get(key, -1))
-            continue
-
-        # 普通再临阶段达不到最高收益，才使用灵衣状态
-        best_costume = [key for key in costume_keys if scores[key] == max_score]
-        if best_costume:
-            # 多个灵衣收益相同时取 costume_id 较小的一个，保持稳定
-            p.stage = min(
-                best_costume, key=lambda key: int(key.split("_", 1)[1])
-            )
+            continue  # 用户固定了阶段/灵衣 → 永不改动（不进缓存，省一个键）
+        cache_key = (p.servant_id, trait_key)
+        if cache_key in _stage_cache:
+            target = _stage_cache[cache_key]
+        else:
+            target = _stage_target_for(ctx, p.servant_id, trait_crafts)
+            _stage_cache[cache_key] = target
+        if target is not None:
+            p.stage = target
     return team
 
 
