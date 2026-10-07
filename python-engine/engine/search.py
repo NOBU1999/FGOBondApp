@@ -1742,10 +1742,19 @@ def _dp_top_craft_combinations(
         arr = dp.setdefault(state, [])
         # 同一 (used, raw_cost) 下若 score 更低，不可能在后续非负加成组合中反超，
         # 因此只保留 Top K 即可。
-        arr.append((score, combo))
-        arr.sort(key=lambda x: -x[0])
+        # 2026-10-07（A4-S2）：原来每次插入都 arr.sort()（实测 8.5M 次排序 + 85M 次 key 调用）。
+        # arr 恒为"score 降序 + 等分按插入序"，所以改成**按序插入**完全等价：
+        #   插入点 = 跳过所有 score >= 新分的元素（含等分）→ 落在最后一个等分之后
+        #   （与"稳定排序 + append 在等分之后"一致）；
+        #   超限时 pop() 丢最后那个（等分里插入最晚的）——与原来"稳定排序后截断"一致。
+        # 等价性由 .temp\dp-equiv-test.py 覆盖（400 轮 × 80 次插入，含大量并列）。
+        _ins_at = 0
+        _len = len(arr)
+        while _ins_at < _len and arr[_ins_at][0] >= score:
+            _ins_at += 1
+        arr.insert(_ins_at, (score, combo))
         if len(arr) > top_k:
-            del arr[top_k:]
+            arr.pop()
 
     for cid in candidates:
         craft_cost = ctx.crafts[cid].cost
