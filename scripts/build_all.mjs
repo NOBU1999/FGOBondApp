@@ -218,6 +218,12 @@ function ensureMissingAvatars() {
 function ensureManualJs() {
   step("生成应用内使用说明（使用说明.txt → renderer/manual.js）");
   run(process.execPath, [path.join("scripts", "make_manual_js.mjs")]);
+  // 手册说谎是最容易漏的一类错误（界面改了名，手册还写着旧的）→ 出包时提醒（不阻断出包）
+  try {
+    run(process.execPath, [path.join("scripts", "check_manual_terms.mjs")]);
+  } catch (_) {
+    log("⚠️ 手册自检脚本自身出错（不影响出包）");
+  }
 }
 
 // ---------------------------------------------------------------- 安卓 APK
