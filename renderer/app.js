@@ -3932,7 +3932,7 @@ const App = {
                 <div v-if="m.isFixed" class="mini-fixed">🔒</div>
                 <div v-if="m.isCrown" class="mini-crown-star" title="冠位从者位">✴</div>
               </div>
-              <div v-for="cm in visibleResultCraftItems(m)" :key="'craft-' + cm.index" class="mini-craft-wrap">
+              <div v-for="(cm, ci) in visibleResultCraftItems(m)" :key="'craft-' + cm.index" class="mini-craft-wrap">
                 <div
                   class="mini-cell mini-craft"
                   :class="{ second: cm.index === 1, 'no-img': !cm.hasImage }"
@@ -3941,8 +3941,9 @@ const App = {
                   <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
                   <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
                 </div>
-                <!-- 加成/牵绊文本移到格子外面单独一行：格子是正方形且 overflow:hidden，塞在格内会被裁掉 -->
-                <div v-if="!m.isSupport" class="mini-craft-extra">
+                <!-- 加成/牵绊文本移到格子外面单独一行；冠位从者有两个礼装格，只在**最后一个格子**下面显示一次
+                     （格子是正方形且 overflow:hidden，塞在格内会被裁掉） -->
+                <div v-if="!m.isSupport && ci === visibleResultCraftItems(m).length - 1" class="mini-craft-extra">
                   <span class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
                   <span v-if="showsBondPoints(r) && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
                 </div>
@@ -4734,15 +4735,7 @@ const App = {
     <!-- 使用说明（应用内阅读：左侧目录 + 右侧正文；内容来自 使用说明.txt） -->
     <div v-if="manualVisible" class="modal-mask" @click.self="closeManual">
       <div class="modal-panel manual-panel">
-        <div class="overlay-head">
-          <h2>使用说明</h2>
-          <div style="display:flex;gap:10px;align-items:center">
-            <span v-if="isAndroidPlatform()" class="text-muted" style="max-width:430px">
-              安卓端：「程序目录」「菜单栏」「F1 快捷键」相关的条目请忽略；设置入口在工具栏「设置」按钮
-            </span>
-            <button class="secondary" @click="closeManual">✕</button>
-          </div>
-        </div>
+        <button class="secondary manual-close" @click="closeManual" title="关闭">✕</button>
         <div class="manual-body">
           <nav class="manual-toc">
             <button

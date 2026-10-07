@@ -437,6 +437,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+/* 手册不带顶部标题条（内容自己说话），关闭键浮在右上角 */
+.manual-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  margin: 0;
+  padding: 4px 10px;
+  line-height: 1.2;
 }
 .manual-body { display: flex; gap: 16px; margin-top: 12px; min-height: 0; flex: 1; }
 .manual-toc {
@@ -1513,26 +1524,31 @@ body.drag-selecting .box-cell { cursor: crosshair; }
     gap: 5px;
   }
   .exclusion-cell { height: 52px; }
-  /* 「选择从者」的网格也要固定 6 列（之前只有 Box 管理 / 排除管理改了，选择器还是 auto-fill → 手机上只排 4~5 列） */
+  /* 「选择从者」的网格固定 6 列（Box 管理 / 排除管理也是 6 列）；
+     礼装选择器保持原样（auto-fill 大格，礼装要看清图） */
   .overlay-grid.servant-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
-  .overlay-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 
-  /* 结果明细表：6 列在手机上塞不下 → 每行变成「字段名 + 值」的竖排块
-     信息一条不少，靠换行与纵向排列撑开，字号不缩 */
+  /* 结果明细：每个位置一张**紧凑卡片**，卡内字段用自适应多列排（原来每字段一行，太长且右侧全是空白）。
+     小格最小 132px 自动决定列数 → 窗口宽度用满，信息一条不少，字号不缩。 */
   .detail-table { font-size: 13px; }
   .detail-table thead { display: none; }
   .detail-table,
-  .detail-table tbody,
-  .detail-table tr,
-  .detail-table td { display: block; width: auto; }
+  .detail-table tbody { display: block; width: auto; }
   .detail-table tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 6px 10px;
+    align-items: start;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 10px;
     padding: 8px 10px;
     margin-bottom: 8px;
     background: rgba(255, 255, 255, 0.03);
   }
-  .detail-table td { border: 0; padding: 3px 0; overflow-wrap: anywhere; }
+  .detail-table td { display: block; border: 0; padding: 0; overflow-wrap: anywhere; }
+  /* 「礼装」「加成明细」内容偏长 → 占满整行，其余字段并排 */
+  .detail-table td[data-label="礼装"],
+  .detail-table td[data-label="加成明细"] { grid-column: 1 / -1; }
   .detail-table td::before {
     content: attr(data-label);
     display: block;
