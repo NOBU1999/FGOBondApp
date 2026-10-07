@@ -210,7 +210,18 @@ function ensureMissingAvatars() {
   }
 }
 
+/**
+ * 使用说明：界面里的「使用说明」面板读的是 renderer/manual.js，
+ * 它由 使用说明.txt 生成（scripts/make_manual_js.mjs）→ 出包前必须重跑一次，
+ * 否则改了手册但包里的界面还是旧内容。失败直接中断（内容不一致比出包失败更糟）。
+ */
+function ensureManualJs() {
+  step("生成应用内使用说明（使用说明.txt → renderer/manual.js）");
+  run(process.execPath, [path.join("scripts", "make_manual_js.mjs")]);
+}
+
 // ---------------------------------------------------------------- 安卓 APK
+
 function buildAndroid() {
   step("安卓 APK（Capacitor + Chaquopy，正式签名）");
   if (!JAVA_HOME) {
@@ -465,8 +476,10 @@ function writeManifestAndNotes() {
 
 // ---------------------------------------------------------------- 主流程
 // 出包前自动补齐缺失从者头像（新从者上线后，头像 PNG 需要随包发布）。
-// 失败只警告、不中断出包（断网/源站缺图时不该卡住发版）。
+// 失败只警告、不中断出包（断网/源图缺图时不该卡住发版）。
 ensureMissingAvatars();
+// 使用说明：应用内阅读的内容来自 renderer/manual.js，必须由 使用说明.txt 重新生成（避免两边不同步）
+ensureManualJs();
 if (!SKIP_ANDROID) buildAndroid();
 if (!SKIP_WINDOWS) buildWindows();
 if (artifacts.length) {

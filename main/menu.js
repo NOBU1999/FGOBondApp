@@ -1,7 +1,6 @@
 "use strict";
 
 const { Menu, BrowserWindow, dialog, app, shell } = require("electron");
-const fs = require("fs");
 const path = require("path");
 const { getDbPath, getAppRoot } = require("./paths");
 const { stopActiveEngine } = require("./ipc-handlers");
@@ -10,7 +9,6 @@ const appUpdater = require("./app-updater");
 const GITHUB_URL = "https://github.com/NOBU1999/FGOBondApp";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
 const GITHUB_RELEASES_URL = `${GITHUB_URL}/releases`;
-const MANUAL_NAME = "使用说明.txt";
 
 function sendToFocused(channel, payload) {
   const win = BrowserWindow.getFocusedWindow();
@@ -19,40 +17,8 @@ function sendToFocused(channel, payload) {
   }
 }
 
-/** 操作手册路径（便携目录根下的 使用说明.txt） */
-function getUserManualPath() {
-  return path.join(getAppRoot(), MANUAL_NAME);
-}
-
-/** 用系统默认程序打开操作手册 */
-async function openUserManual(win) {
-  const target = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
-  const file = getUserManualPath();
-  if (!fs.existsSync(file)) {
-    await dialog.showMessageBox(target, {
-      type: "warning",
-      title: "使用说明",
-      message: `找不到 ${MANUAL_NAME}`,
-      detail: `预期位置：${file}\n\n请确认程序目录完整（从官方发布包整体解压，不要只复制 exe）。`,
-      buttons: ["知道了"],
-      noLink: true,
-    });
-    return { ok: false, reason: "missing" };
-  }
-  const error = await shell.openPath(file);
-  if (error) {
-    await dialog.showMessageBox(target, {
-      type: "error",
-      title: "使用说明",
-      message: "无法打开使用说明",
-      detail: `${error}\n\n文件位置：${file}`,
-      buttons: ["知道了"],
-      noLink: true,
-    });
-    return { ok: false, reason: "open-failed", error };
-  }
-  return { ok: true, file };
-}
+// 注：使用说明已改成**应用内阅读**（渲染层「使用说明」面板）——菜单项与 F1 都走
+// `menu:manual` 通道，不再 shell.openPath 丢给记事本。便携包里的 使用说明.txt 照旧保留。
 
 function buildMenu() {
   const template = [
@@ -146,9 +112,7 @@ function buildMenu() {
         {
           label: "使用说明",
           accelerator: "F1",
-          click: async () => {
-            await openUserManual(BrowserWindow.getFocusedWindow());
-          },
+          click: () => sendToFocused("menu:manual"),
         },
         {
           label: "打开程序目录",
@@ -180,7 +144,7 @@ function buildMenu() {
               detail: [
                 "Windows 便携版 · Electron + Vue 3 + Python 引擎",
                 "",
-                `使用说明：${MANUAL_NAME}（程序目录下，可用 F1 打开）`,
+                "使用说明：按 F1 或菜单「帮助 → 使用说明」（应用内打开；程序目录下也有一份 使用说明.txt）",
                 `程序目录：${getAppRoot()}`,
                 "",
                 `GitHub 项目：${GITHUB_URL}`,
@@ -199,7 +163,7 @@ function buildMenu() {
               cancelId: 3,
               noLink: true,
             });
-            if (response === 0) await openUserManual(win);
+            if (response === 0) sendToFocused("menu:manual");
             if (response === 1) shell.openExternal(GITHUB_URL);
             if (response === 2) shell.openExternal(GITHUB_ISSUES_URL);
           },
@@ -211,4 +175,4 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-module.exports = { buildMenu, sendToFocused, stopActiveEngine, openUserManual, getUserManualPath };
+module.exports = { buildMenu, sendToFocused, stopActiveEngine };

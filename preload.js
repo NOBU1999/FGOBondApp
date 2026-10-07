@@ -73,7 +73,7 @@ contextBridge.exposeInMainWorld("fgo", {
     return () => ipcRenderer.removeListener("engine-progress", listener);
   },
   onMenuAction: (callback) => {
-    const channels = ["menu:settings", "menu:update-data", "menu:reset-database"];
+    const channels = ["menu:settings", "menu:manual", "menu:update-data", "menu:reset-database"];
     const listeners = channels.map((channel) => {
       const listener = (_event, data) => callback(Object.assign({}, data || {}, { channel }));
       ipcRenderer.on(channel, listener);

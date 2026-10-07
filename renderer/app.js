@@ -192,6 +192,54 @@ function makeSlots() {
   }));
 }
 
+/**
+ * 把「使用说明」的纯文本切成 章节 → 行块，供界面阅读用（够用即可，不做完整 Markdown）。
+ * 文本来源：window.FGO_MANUAL_TEXT（由 scripts/make_manual_js.mjs 从 使用说明.txt 生成）。
+ */
+function parseManual(raw) {
+  const CHAPTER = /^[一二三四五六七八九十百]+、/;
+  const SEPARATOR = /^[─—\-=]{4,}$/;
+  const sections = [];
+  let cur = null;
+  for (const rawLine of String(raw || "").replace(/\r\n/g, "\n").split("\n")) {
+    const line = rawLine.replace(/\s+$/, "");
+    const text = line.trim();
+    if (SEPARATOR.test(text)) continue;
+    if (!text) {
+      if (cur && cur.blocks.length) cur.blocks.push({ kind: "gap", text: "" });
+      continue;
+    }
+    if (CHAPTER.test(text)) {
+      cur = { title: text, blocks: [] };
+      sections.push(cur);
+      continue;
+    }
+    if (!cur) {
+      cur = { title: "使用说明", blocks: [] };
+      sections.push(cur);
+    }
+    const depth = Math.min(1, Math.floor((line.length - line.trimStart().length) / 2));
+    let kind = "text";
+    let body = text;
+    if (/^【.+】$/.test(text)) {
+      kind = "sub";
+    } else if (/^[·•]\s*/.test(text)) {
+      kind = "bullet";
+      body = text.replace(/^[·•]\s*/, "");
+    } else if (/^[-*]\s+/.test(text)) {
+      kind = "bullet";
+      body = text.replace(/^[-*]\s+/, "");
+    } else if (/^\d+[).、]\s*/.test(text) || /^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]/.test(text)) {
+      kind = "bullet";
+    }
+    cur.blocks.push({ kind, text: body, depth });
+  }
+  for (const s of sections) {
+    while (s.blocks.length && s.blocks[s.blocks.length - 1].kind === "gap") s.blocks.pop();
+  }
+  return sections.filter((s) => s.blocks.length);
+}
+
 const App = {
   data() {
     return {
@@ -289,6 +337,9 @@ const App = {
       verificationTokensFull: [],
       verificationCopied: false,
       settingsVisible: false,
+      // 使用说明（应用内阅读；内容来自 renderer/manual.js ← 使用说明.txt）
+      manualVisible: false,
+      manualActive: 0,
       // PC 端：左上角「设置 ▾」下拉（安卓没有系统菜单，仍用工具栏「设置」按钮开全部分区）
       settingsMenuOpen: false,
       // 当前打开的是哪一区：all（安卓）/ calc 计算设置 / display 结果显示设置 / diag 诊断日志
@@ -335,6 +386,10 @@ const App = {
     };
   },
   computed: {
+    /** 使用说明的章节（内容来自 renderer/manual.js，由 使用说明.txt 生成） */
+    manualSections() {
+      return parseManual(typeof window !== "undefined" ? window.FGO_MANUAL_TEXT : "");
+    },
     /** 简中服未实装从者的 id 集合（日服模式下为空集，等于不生效） */
     cnUnavailableServantSet() {
       if (this.serverRegion !== "cn") return new Set();
@@ -627,6 +682,8 @@ const App = {
         // 窗口菜单栏「设置 → 计算设置 / 结果显示设置 / 诊断日志」会带 section 过来；
         // 不带（老路径）就打开全部分区。
         if (data && data.channel === "menu:settings") this.openSettings(data.section);
+        // 帮助 → 使用说明（F1）/ 关于对话框里的「使用说明」→ 应用内打开，不再丢给记事本
+        if (data && data.channel === "menu:manual") this.openManual();
         if (data && data.channel === "menu:update-data") this.runUpdate();
         if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });
@@ -660,6 +717,25 @@ const App = {
       this.persistResultSettings();
       this.settingsVisible = false;
       this.settingsSection = "all";
+    },
+    openManual() {
+      // 应用内阅读（替代原来的"用记事本打开 使用说明.txt"）
+      this.manualVisible = true;
+      this.manualActive = 0;
+      this.$nextTick(() => {
+        const box = this.$refs.manualContent;
+        if (box) box.scrollTop = 0;
+      });
+    },
+    closeManual() {
+      this.manualVisible = false;
+    },
+    gotoManualSection(index) {
+      this.manualActive = index;
+      const box = this.$refs.manualContent;
+      if (!box) return;
+      const target = box.querySelector(`[data-sec="${index}"]`);
+      if (target) box.scrollTop = target.offsetTop - box.offsetTop;
     },
     resultBonusFormula(member) {
       if (!member || member.isSupport || !member.bonusDetail) return "";
@@ -3564,6 +3640,8 @@ const App = {
         <button v-if="!isAndroidPlatform()" class="secondary" @click.stop="openUpdateModal">更新数据</button>
         <!-- 设置必须能从界面进：安卓没有系统菜单，只能靠这个按钮（PC 端已挪到左上角「设置 ▾」） -->
         <button v-if="isAndroidPlatform()" class="secondary" @click.stop="openSettings()">设置</button>
+        <!-- 使用说明：PC 走菜单「帮助 → 使用说明」(F1)，安卓没有菜单所以给按钮 -->
+        <button v-if="isAndroidPlatform()" class="secondary" @click.stop="openManual">使用说明</button>
       </div>
     </div>
 
@@ -4646,6 +4724,42 @@ const App = {
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:14px">
           <button class="primary" @click="closeSettings">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 使用说明（应用内阅读：左侧目录 + 右侧正文；内容来自 使用说明.txt） -->
+    <div v-if="manualVisible" class="modal-mask" @click.self="closeManual">
+      <div class="modal-panel manual-panel">
+        <div class="overlay-head">
+          <h2>使用说明</h2>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span v-if="isAndroidPlatform()" class="text-muted" style="max-width:430px">
+              安卓端：「程序目录」「菜单栏」「F1 快捷键」相关的条目请忽略；设置入口在工具栏「设置」按钮
+            </span>
+            <button class="secondary" @click="closeManual">✕</button>
+          </div>
+        </div>
+        <div class="manual-body">
+          <nav class="manual-toc">
+            <button
+              v-for="(sec, i) in manualSections"
+              :key="i"
+              :class="{ active: manualActive === i }"
+              @click="gotoManualSection(i)"
+            >{{ sec.title }}</button>
+          </nav>
+          <div class="manual-content" ref="manualContent">
+            <section v-for="(sec, i) in manualSections" :key="i" :data-sec="i">
+              <h3>{{ sec.title }}</h3>
+              <template v-for="(b, j) in sec.blocks" :key="j">
+                <p v-if="b.kind === 'sub'" class="manual-sub">{{ b.text }}</p>
+                <p v-else-if="b.kind === 'bullet'" class="manual-li" :class="'d' + b.depth">{{ b.text }}</p>
+                <p v-else-if="b.kind === 'gap'" class="manual-gap"></p>
+                <p v-else class="manual-p">{{ b.text }}</p>
+              </template>
+            </section>
+          </div>
         </div>
       </div>
     </div>
