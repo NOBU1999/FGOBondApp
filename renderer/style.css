@@ -249,6 +249,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .mini-avatar.fallback { display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--muted); background: var(--panel); }
 .mini-craft-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .mini-mult { display: block; font-size: 10px; color: var(--ok); line-height: 1.2; }
+/* 结果卡：礼装格 + 它下面的「加成 / 牵绊」独立一行
+   （格子是正方形且 overflow:hidden，文字塞在格内会被裁掉 → 挪到格外的独立行） */
+.mini-craft-wrap { display: flex; flex-direction: column; min-width: 0; }
+.mini-craft-wrap .mini-cell.mini-craft { width: 100%; }
+.mini-craft-extra { display: flex; flex-direction: column; line-height: 1.2; margin-top: 2px; }
 .mini-cell.mini-servant.support { border-color: var(--support); }
 .mini-cell.mini-servant.fixed { border-color: var(--danger); }
 .mini-support {
@@ -1435,11 +1440,22 @@ body.drag-selecting .box-cell { cursor: crosshair; }
     height: calc(100% - 12px);
     border-radius: 6px;
   }
-  /* 礼装格：只显示礼装图；名字 / Cost / 效果点开弹层看（用户要求，窄屏才生效） */
-  .cell-craft .cell-name,
-  .cell-craft .cell-meta,
-  .cell-craft .cell-effect { display: none; }
+  /* 礼装格：**有图**时只显示礼装图（名字 / Cost / 效果点开弹层看，用户要求，窄屏才生效）；
+     **没图**（自定义礼装等）时必须显示名字，否则整格是空白 */
+  .cell-craft:not(.no-img) .cell-name,
+  .cell-craft:not(.no-img) .cell-meta,
+  .cell-craft:not(.no-img) .cell-effect { display: none; }
   .cell-craft { justify-content: center; }
+  .cell-craft.no-img .cell-name {
+    font-size: 12px;
+    line-height: 1.25;
+    text-align: center;
+    padding: 0 2px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .cell-craft-img {
     width: 100%;
     height: auto;
@@ -1497,7 +1513,9 @@ body.drag-selecting .box-cell { cursor: crosshair; }
     gap: 5px;
   }
   .exclusion-cell { height: 52px; }
-  .overlay-grid.servant-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+  /* 「选择从者」的网格也要固定 6 列（之前只有 Box 管理 / 排除管理改了，选择器还是 auto-fill → 手机上只排 4~5 列） */
+  .overlay-grid.servant-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .overlay-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 
   /* 结果明细表：6 列在手机上塞不下 → 每行变成「字段名 + 值」的竖排块
      信息一条不少，靠换行与纵向排列撑开，字号不缩 */

@@ -3715,7 +3715,7 @@ const App = {
               v-for="cs in slotCraftItems(slot)"
               :key="cs.index"
               class="cell cell-craft"
-              :class="{ empty: cs.craftId === null || cs.craftId === undefined, second: cs.index === 1, 'drag-over': dragOverSlot === i && dragOverCraft === cs.index }"
+              :class="{ empty: cs.craftId === null || cs.craftId === undefined, second: cs.index === 1, 'no-img': cs.craftId !== null && cs.craftId !== undefined && !hasCraftImage(cs.craft), 'drag-over': dragOverSlot === i && dragOverCraft === cs.index }"
               :draggable="cs.craftId !== null && cs.craftId !== undefined && Number(cs.craftId) !== 0"
               @click="openOverlay(i, 'craft', cs.index)"
               @contextmenu="openContextMenu($event, i, 'craft', cs.index)"
@@ -3932,17 +3932,20 @@ const App = {
                 <div v-if="m.isFixed" class="mini-fixed">🔒</div>
                 <div v-if="m.isCrown" class="mini-crown-star" title="冠位从者位">✴</div>
               </div>
-              <div
-                v-for="cm in visibleResultCraftItems(m)"
-                :key="'craft-' + cm.index"
-                class="mini-cell mini-craft"
-                :class="{ second: cm.index === 1 }"
-                @contextmenu="openResultContext($event, r, m, 'craft', cm.index)"
-              >
-                <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
-                <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
-                <span v-if="!m.isSupport" class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
-                <span v-if="showsBondPoints(r) && !m.isSupport && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
+              <div v-for="cm in visibleResultCraftItems(m)" :key="'craft-' + cm.index" class="mini-craft-wrap">
+                <div
+                  class="mini-cell mini-craft"
+                  :class="{ second: cm.index === 1, 'no-img': !cm.hasImage }"
+                  @contextmenu="openResultContext($event, r, m, 'craft', cm.index)"
+                >
+                  <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
+                  <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
+                </div>
+                <!-- 加成/牵绊文本移到格子外面单独一行：格子是正方形且 overflow:hidden，塞在格内会被裁掉 -->
+                <div v-if="!m.isSupport" class="mini-craft-extra">
+                  <span class="mini-mult">加成 x{{ m.bonusDetail.totalMultiplier.toFixed(2) }}</span>
+                  <span v-if="showsBondPoints(r) && m.bonusDetail" class="mini-points">≈{{ formatBondNumber(m.bonusDetail.bondPoints) }} 绊</span>
+                </div>
               </div>
             </div>
           </div>
