@@ -193,6 +193,18 @@ function makeSlots() {
 }
 
 /**
+ * 手册文本里的行内标记（目前只支持 **加粗**）→ 安全的 HTML。
+ * 先转义再插入自己的 <b>，所以不会因为手册内容而注入标签。
+ */
+function manualInlineHtml(text) {
+  const escaped = String(text == null ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+
+/**
  * 把「使用说明」的纯文本切成 章节 → 行块，供界面阅读用（够用即可，不做完整 Markdown）。
  * 文本来源：window.FGO_MANUAL_TEXT（由 scripts/make_manual_js.mjs 从 使用说明.txt 生成）。
  */
@@ -736,6 +748,10 @@ const App = {
       if (!box) return;
       const target = box.querySelector(`[data-sec="${index}"]`);
       if (target) box.scrollTop = target.offsetTop - box.offsetTop;
+    },
+    /** 手册正文的行内标记渲染（模板里用 v-html，内容已转义，只保留自己的 <b>） */
+    manualInlineHtml(text) {
+      return manualInlineHtml(text);
     },
     resultBonusFormula(member) {
       if (!member || member.isSupport || !member.bonusDetail) return "";
@@ -4749,10 +4765,12 @@ const App = {
             <section v-for="(sec, i) in manualSections" :key="i" :data-sec="i">
               <h3>{{ sec.title }}</h3>
               <template v-for="(b, j) in sec.blocks" :key="j">
-                <p v-if="b.kind === 'sub'" class="manual-sub">{{ b.text }}</p>
-                <p v-else-if="b.kind === 'bullet'" class="manual-li" :class="'d' + b.depth">{{ b.text }}</p>
-                <p v-else-if="b.kind === 'gap'" class="manual-gap"></p>
-                <p v-else class="manual-p">{{ b.text }}</p>
+                <p v-if="b.kind === 'gap'" class="manual-gap"></p>
+                <p
+                  v-else
+                  :class="b.kind === 'sub' ? 'manual-sub' : (b.kind === 'bullet' ? 'manual-li d' + b.depth : 'manual-p')"
+                  v-html="manualInlineHtml(b.text)"
+                ></p>
               </template>
             </section>
           </div>
