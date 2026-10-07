@@ -460,15 +460,10 @@ function writeManifestAndNotes() {
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2), "utf8");
   log(`→ ${path.relative(ROOT, manifestFile)}（含 ${merged.length} 个产物）`);
 
-  const lines = [
-    `# ${PRODUCT} v${VERSION}`,
-    "",
-    "> 本文件是发布说明模板：把「本版更新」补上，就可以直接粘贴到 GitHub / Gitee Release 与网盘说明里。",
-    "",
-    "## 本版更新",
-    "",
-    NOTES ? NOTES : "- （在这里写本版更新内容）",
-    "",
+  // 发布说明：**已手写过的就保留**（只刷新下载表与校验值），没有才出模板。
+  // 踩过（2026-10-08 v0.2.0）：出包会把辛苦写好的说明覆盖回模板。
+  const notesFile = path.join(RELEASE_DIR, `RELEASE_NOTES_v${VERSION}.md`);
+  const autoTail = [
     "## 下载",
     "",
     "| 平台 | 文件 | 大小 | SHA-256 |",
@@ -476,24 +471,20 @@ function writeManifestAndNotes() {
   ];
   for (const a of merged) {
     const platform = a.file.includes("Android") ? "安卓 APK" : a.file.endsWith(".7z") ? "Windows 便携版（推荐）" : a.file.endsWith(".zip") ? "Windows 便携版（zip）" : "其他";
-    lines.push(`| ${platform} | \`${a.file}\` | ${humanSize(a.bytes)} | \`${a.sha256}\` |`);
+    autoTail.push(`| ${platform} | \`${a.file}\` | ${humanSize(a.bytes)} | \`${a.sha256}\` |`);
   }
   const isAndroid = merged.some((a) => a.file.includes("Android"));
-  lines.push(
-    "",
-    "## 安装说明",
-    ""
-  );
+  autoTail.push("", "## 安装说明", "");
   if (artifacts.some((a) => a.file.endsWith(".7z") || a.file.endsWith(".zip"))) {
-    lines.push("**Windows**：解压后运行 `FGO牵绊推荐器.exe`。覆盖旧版本时请解压到**同一个文件夹**（数据自动保留）。");
+    autoTail.push("**Windows**：解压后运行 `FGO牵绊推荐器.exe`。覆盖旧版本时请解压到**同一个文件夹**（数据自动保留）。");
   }
   if (isAndroid) {
-    lines.push(
+    autoTail.push(
       "**安卓**：下载 APK → 允许「安装未知来源应用」→ 安装。",
       "覆盖安装同一签名的旧版本时**数据自动保留**；不要卸载后再装（会清空 Box/账号）。"
     );
   }
-  lines.push(
+  autoTail.push(
     "",
     "## 隐私说明",
     "",
@@ -509,10 +500,42 @@ function writeManifestAndNotes() {
     "```",
     ""
   );
-  const notesFile = path.join(RELEASE_DIR, `RELEASE_NOTES_v${VERSION}.md`);
-  writeFileSync(notesFile, lines.join("\n"), "utf8");
-  log(`→ ${path.relative(ROOT, notesFile)}`);
+
+  const handWritten = loadHandWrittenNotes(notesFile);
+  const head = handWritten || [
+    `# ${PRODUCT} v${VERSION}`,
+    "",
+    "> 本文件是发布说明模板：把「本版更新」补上，就可以直接粘贴到 GitHub / Gitee Release 与网盘说明里。",
+    "",
+    "## 本版更新",
+    "",
+    NOTES ? NOTES : "- （在这里写本版更新内容）",
+    "",
+  ].join("\n");
+  writeFileSync(notesFile, head.replace(/\s+$/, "") + "\n\n" + autoTail.join("\n"), "utf8");
+  log(`→ ${path.relative(ROOT, notesFile)}${handWritten ? "（保留已手写的本版更新）" : ""}`);
   return manifest;
+}
+
+/**
+ * 已手写过的发布说明：保留「## 下载」之前的部分（标题 + 本版更新），
+ * 只让出包刷新「下载表 / 安装 / 隐私 / 校验」这些自动生成的内容。
+ * 文件不存在 / 还是模板 / 读取失败 → 返回 null（照旧出一份模板）。
+ */
+function loadHandWrittenNotes(notesFile) {
+  try {
+    if (!existsSync(notesFile)) return null;
+    const raw = readFileSync(notesFile, "utf8");
+    // 还是没写过的模板 → 重新出模板
+    if (raw.includes("（在这里写本版更新内容）")) return null;
+    // 有「## 下载」就取它之前的部分（标题 + 本版更新 / 分节说明）；
+    // 没有（纯手写、带自己的章节安排）就整份保留，由调用方接上自动生成的下载表。
+    const cut = raw.indexOf("## 下载");
+    const head = (cut > 0 ? raw.slice(0, cut) : raw).replace(/\s+$/, "");
+    return head || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- 主流程
