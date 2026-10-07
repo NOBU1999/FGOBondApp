@@ -624,7 +624,9 @@ const App = {
         }
       });
       window.fgo.onMenuAction((data) => {
-        if (data && data.channel === "menu:settings") this.settingsVisible = true;
+        // 窗口菜单栏「设置 → 计算设置 / 结果显示设置 / 诊断日志」会带 section 过来；
+        // 不带（老路径）就打开全部分区。
+        if (data && data.channel === "menu:settings") this.openSettings(data.section);
         if (data && data.channel === "menu:update-data") this.runUpdate();
         if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });

@@ -70,9 +70,17 @@ function buildMenu() {
       label: "设置",
       submenu: [
         {
+          label: "计算设置...",
+          click: () => sendToFocused("menu:settings", { section: "calc" }),
+        },
+        {
           label: "结果显示设置...",
           accelerator: "CmdOrCtrl+,",
-          click: () => sendToFocused("menu:settings"),
+          click: () => sendToFocused("menu:settings", { section: "display" }),
+        },
+        {
+          label: "诊断日志...",
+          click: () => sendToFocused("menu:settings", { section: "diag" }),
         },
       ],
     },
