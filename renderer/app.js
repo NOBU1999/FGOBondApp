@@ -289,6 +289,10 @@ const App = {
       verificationTokensFull: [],
       verificationCopied: false,
       settingsVisible: false,
+      // PC 端：左上角「设置 ▾」下拉（安卓没有系统菜单，仍用工具栏「设置」按钮开全部分区）
+      settingsMenuOpen: false,
+      // 当前打开的是哪一区：all（安卓）/ calc 计算设置 / display 结果显示设置 / diag 诊断日志
+      settingsSection: "all",
       // 邻域优化档位（v0.1.14 新增）：算完后把靠前队伍互相"换人"再算，捞"混血"更优解。
       // off / standard / deep；跟随队伍预设一起保存与加载。
       neighborhood: "standard",
@@ -643,13 +647,17 @@ const App = {
       this.currentPage = 1;
       if (!this.resultSettings.compareMode) this.compareSelectedRanks = [];
     },
-    openSettings() {
-      // 桌面也能用（原来只能从系统菜单「设置 → 结果显示设置」打开；安卓没有系统菜单，必须有这个入口）
+    openSettings(section) {
+      // 桌面：左上角「设置 ▾」下拉按分区打开（calc / display / diag）；
+      // 安卓：没有系统菜单，工具栏「设置」按钮打开全部分区（section 不传 = all）。
+      this.settingsSection = typeof section === "string" && section ? section : "all";
+      this.settingsMenuOpen = false;
       this.settingsVisible = true;
     },
     closeSettings() {
       this.persistResultSettings();
       this.settingsVisible = false;
+      this.settingsSection = "all";
     },
     resultBonusFormula(member) {
       if (!member || member.isSupport || !member.bonusDetail) return "";
@@ -2368,7 +2376,7 @@ const App = {
       e.preventDefault();
       this.contextMenu = { visible: true, x: e.clientX, y: e.clientY, slotIndex, target, craftIndex };
     },
-    closeContextMenu() { this.contextMenu.visible = false; },
+    closeContextMenu() { this.contextMenu.visible = false; this.settingsMenuOpen = false; },
     ctxSupport() {
       const i = this.contextMenu.slotIndex;
       if (i !== null) this.toggleSupport(i);
@@ -3537,14 +3545,23 @@ const App = {
           </select>
           <button class="secondary" @click="openAccountManager">＋ 新建 / 管理</button>
         </div>
+        <!-- PC 端：设置拆成左上下拉（安卓没有系统菜单，见右侧「设置」按钮） -->
+        <div v-if="!isAndroidPlatform()" class="settings-menu" @click.stop>
+          <button class="secondary" @click.stop="settingsMenuOpen = !settingsMenuOpen">设置 ▾</button>
+          <div v-if="settingsMenuOpen" class="settings-menu-list">
+            <button @click="openSettings('calc')">计算设置</button>
+            <button @click="openSettings('display')">结果显示设置</button>
+            <button v-if="diagLogAvailable()" @click="openSettings('diag')">诊断日志</button>
+          </div>
+        </div>
       </div>
       <div>
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
         <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
         <button v-if="!isAndroidPlatform()" class="secondary" @click.stop="openUpdateModal">更新数据</button>
-        <!-- 设置必须能从界面进：安卓没有系统菜单（原来只有桌面菜单能打开结果显示设置） -->
-        <button class="secondary" @click.stop="openSettings">设置</button>
+        <!-- 设置必须能从界面进：安卓没有系统菜单，只能靠这个按钮（PC 端已挪到左上角「设置 ▾」） -->
+        <button v-if="isAndroidPlatform()" class="secondary" @click.stop="openSettings()">设置</button>
       </div>
     </div>
 
@@ -4538,15 +4555,15 @@ const App = {
       </div>
     </div>
 
-    <!-- 设置（计算 + 结果显示） -->
+    <!-- 设置（PC：左上角「设置 ▾」按分区打开；安卓：工具栏「设置」打开全部分区） -->
     <div v-if="settingsVisible" class="modal-mask" @click.self="closeSettings">
       <div class="modal-panel small">
         <div class="overlay-head">
-          <h2>设置</h2>
+          <h2>{{ settingsSection === 'calc' ? '计算设置' : (settingsSection === 'display' ? '结果显示设置' : (settingsSection === 'diag' ? '诊断日志' : '设置')) }}</h2>
           <button class="secondary" @click="closeSettings">✕</button>
         </div>
-        <div class="settings-group-title">计算设置（影响怎么算）</div>
-        <div class="settings-list">
+        <div v-if="settingsSection === 'all'" class="settings-group-title">计算设置（影响怎么算）</div>
+        <div v-if="settingsSection === 'all' || settingsSection === 'calc'" class="settings-list">
           <label class="settings-row">
             <span>结果完整度</span>
             <select v-model="resultSettings.searchOrder" @change="persistResultSettings">
@@ -4560,8 +4577,8 @@ const App = {
             代价是大约多花 15% 时间，嫌慢可以切「更快」。
           </div>
         </div>
-        <div class="settings-group-title">结果显示设置（只影响显示）</div>
-        <div class="settings-list">
+        <div v-if="settingsSection === 'all'" class="settings-group-title">结果显示设置（只影响显示）</div>
+        <div v-if="settingsSection === 'all' || settingsSection === 'display'" class="settings-list">
           <label class="settings-row">
             <input type="checkbox" v-model="resultSettings.autoExpandFirst" @change="persistResultSettings" />
             <span>计算完成后自动展开第 1 个方案详情</span>
@@ -4615,7 +4632,7 @@ const App = {
             </select>
           </label>
         </div>
-        <div v-if="diagLogAvailable()" style="margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:12px">
+        <div v-if="diagLogAvailable() && (settingsSection === 'all' || settingsSection === 'diag')" style="margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:12px">
           <h4 style="margin:0 0 8px">诊断日志</h4>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="secondary" @click="loadDiagnosticLog">读取</button>
