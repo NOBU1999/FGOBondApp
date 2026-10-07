@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import bisect
 import itertools
 import math
 import time
@@ -2232,6 +2233,20 @@ def search_top_teams(
     )
 
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
+    # 2026-10-07（A6）：剪枝要的是"当前结果集里第 top_n 大的分数"，
+    # 原实现**每个阵容**都 sorted(全部分数) 一遍（结果集几万条 × 几万次调用 ≈ 10%+）。
+    # 这里用升序有序表精确维护同一个值：写入/替换时 insort、删除旧值；查询 = _score_sorted[-top_n]。
+    # ⚠️ 必须精确：用近似值或延迟刷新会改变剪枝判定 → 会改变搜索结果。
+    # ⚠️ 结果集有**两个**改动点（写入新条目 / 自由位优化的原地升级），两处都要同步。
+    _score_sorted: List[float] = []
+
+    def _score_add(value: float) -> None:
+        bisect.insort(_score_sorted, value)
+
+    def _score_remove(value: float) -> None:
+        _i = bisect.bisect_left(_score_sorted, value)
+        if _i < len(_score_sorted) and _score_sorted[_i] == value:
+            _score_sorted.pop(_i)
     seen: Set[Tuple[Any, ...]] = set()
     global_best_score: Optional[float] = None
     # 是否因墙钟兜底而提前结束（正常情况为 False：工作量是确定性的，同样的请求结果一致）
@@ -2434,11 +2449,8 @@ def search_top_teams(
                 # 剪枝目标是“Top-N 阈值”，不是“当前最高分”：
                 # 否则会把所有低于当前第一名的队伍全剪掉，只剩一个结果。
                 if len(best_by_set) >= req.top_n:
-                    cutoff_scores = sorted(
-                        (e["score"] for e in best_by_set.values()),
-                        reverse=True,
-                    )
-                    cutoff = cutoff_scores[req.top_n - 1]
+                    # A6：有序表精确维护"第 top_n 大"（等价于原来的 sorted(...)[top_n-1]）
+                    cutoff = _score_sorted[-req.top_n]
                     if ub < cutoff - 1e-9:
                         return None
             if use_dp:
@@ -2526,6 +2538,9 @@ def search_top_teams(
 
                     old = best_by_set.get(servant_set)
                     if old is None or rank_key > old["rank_key"]:
+                        if old is not None:
+                            _score_remove(old["score"])  # A6：更优解替换旧条目
+                        _score_add(score)
                         best_by_set[servant_set] = {
                             "score": score,
                             "rank_key": rank_key,
@@ -2766,6 +2781,8 @@ def search_top_teams(
             metrics = calculator.calculate_team_metrics(ctx, optimized)
             score, rank_key = _score_from_metrics(metrics, optimized, metrics["multipliers"])
             if rank_key > current["rank_key"]:
+                _score_remove(current["score"])  # A6：原地升级也要同步有序表
+                _score_add(score)
                 current["team"] = optimized
                 current["score"] = score
                 current["rank_key"] = rank_key
