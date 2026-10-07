@@ -788,6 +788,16 @@ def _craft_combo_actual_cost(
     return sum(costs) - discount
 
 
+def _default_craft_set_lineup_budget(req: CalculationRequest) -> int:
+    """「礼装集合优先」这一趟打算评多少条阵容（**整数**，确定性；墙钟只作兜底）。
+
+    与 _default_craft_combo_limit 同风格：按时长档位线性推导（300s 档 ≈ 12,000 条），
+    上下限兜住极端档位。配额再由这个总数按集合数摊分（见 search_top_teams 里那一趟）。
+    """
+    seconds = max(1.0, float(getattr(req, "timeout_ms", 60000) or 60000) / 1000.0)
+    return int(max(600, min(24000, seconds * 40)))
+
+
 def _generate_craft_combinations_with_cost(
     ctx: DataContext,
     candidate_craft_ids: Sequence[int],
@@ -2385,6 +2395,8 @@ def search_top_teams(
                 best_team = candidate
         return best_team
 
+    # 钉死礼装的口径下，基于"礼装自由"算出来的 ub 不适用 → 那一趟评估期间临时关掉剪枝
+    _no_prune = [False]
     def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False, pair_optimize=False):
         nonlocal seen, evaluated_total, global_best_score
         original_craft_combos = craft_combos
@@ -2457,7 +2469,7 @@ def search_top_teams(
                 )
                 # 剪枝目标是“Top-N 阈值”，不是“当前最高分”：
                 # 否则会把所有低于当前第一名的队伍全剪掉，只剩一个结果。
-                if len(best_by_set) >= req.top_n:
+                if len(best_by_set) >= req.top_n and not _no_prune[0]:
                     # A6：有序表精确维护"第 top_n 大"（等价于原来的 sorted(...)[top_n-1]）
                     cutoff = _score_sorted[-req.top_n]
                     if ub < cutoff - 1e-9:
@@ -2691,19 +2703,41 @@ def search_top_teams(
     ):
         # 必须限时：后面还有两轮常规搜索 + 精算 + 邻域。
         # 实测（用户真实预设 90s）不限时会把预算吃光，Top1 从 11.048 掉到 11.016。
-        _craft_first_deadline = start + timeout_seconds * 0.5
+        # ===== 礼装集合优先（v0.1.18 重做）=====================================
+        # 目的："几个人抱团吃同一批礼装"那种阵容，常规轮按单从者排序永远排不进候选池。
+        # 做法（四步）：
+        #   S1 摘掉"人人可吃"的 L1 礼装（只影响"挑人用的礼装"，计分不动）——
+        #      否则并集退化成全体候选，集合失去筛选力；
+        #   S3 把集合礼装**当固定礼装**喂评估（1 组礼装 × 助战组合，而不是枚举 12,001 组）；
+        #   S2' 在并集内**真枚举人选**（配额由 _default_craft_set_lineup_budget 摊分；
+        #      成员先"交错排序"，避免"字典序 + 配额"系统性地只取排名最靠前那几人）；
+        #   S4 给它一段**活着**的预算窗口，且建表/枚举循环里也查截止时间。
+        # 注意：钉死口径下 UB 不适用 → _no_prune[0] 在评估期间置 True（见 evaluate_extras）。
         _table = trait_benefit_table(ctx)
-        _trait_pool = [
+        _pos_trait = [
             cid for cid in craft_pool
             if cid in trait_ids and _table.craft_value(cid) > 0
         ]
+        _l1_dropped = [
+            cid for cid in _pos_trait
+            if all(_table.can_trigger(sid, cid) for sid in player_candidates)
+        ]
+        _trait_pool = [cid for cid in _pos_trait if cid not in _l1_dropped]
         _slots = min(len(bp.free_bond_positions) or len(bp.player_craft_slots), 5)
         _need_players = len(bp.free_servant_positions)
+        _craft_first_deadline = start + timeout_seconds * 0.85
+        _lineup_budget = _default_craft_set_lineup_budget(req)
         if _trait_pool and _need_players > 0:
-            # 1) 先把所有能填满自由位的集合收集起来（成员数 ≥ 需要的玩家数）
+            # 1) 收集集合（并集人数 ≥ 需要的自由位）——建表循环里也查截止时间
             _sets: List[Tuple[float, Tuple[int, ...], List[int]]] = []
+            _built = 0
+            _abort_build = False
             for _n in range(1, _slots + 1):
                 for _combo in itertools.combinations(_trait_pool, _n):
+                    _built += 1
+                    if _built % 200 == 0 and time.time() >= _craft_first_deadline:
+                        _abort_build = True
+                        break
                     _members = [
                         sid for sid in player_candidates
                         if any(_table.can_trigger(sid, _cid) for _cid in _combo)
@@ -2717,30 +2751,51 @@ def search_top_teams(
                         ),
                         reverse=True,
                     )
-                    # 集合价值 = 每张礼装的加成 × 能吃到它的成员数（团队共享收益）
                     _value = sum(
                         _table.craft_value(_cid)
                         * sum(1 for s in _members if _table.can_trigger(s, _cid))
                         for _cid in _combo
                     )
                     _sets.append((_value, _combo, _members))
-            # 2) 价值高的集合优先评估
+                if _abort_build:
+                    break
             _sets.sort(key=lambda x: x[0], reverse=True)
-            # 预算紧的档位多给这一趟一点时间：低档位（35/60s）下常规搜索本身很短，
-            # 如果这里只走到一半就停，最优解可能还没被评估到。
-            _first_share = 0.75 if timeout_seconds <= 70 else 0.5
-            _craft_first_deadline = start + timeout_seconds * _first_share
-            for _value, _combo, _members in _sets:
+            # 2) 每个集合：钉死这一组礼装 + 在并集内真枚举人选（配额按剩余预算摊分）
+            _pass_lineups = 0
+            _no_prune[0] = True
+            for _si, (_value, _combo, _members) in enumerate(_sets):
                 check_cancel()
+                if _pass_lineups >= _lineup_budget:
+                    break
                 if time.time() >= _craft_first_deadline:
                     break
-                _lineup = tuple(_members[:_need_players])
-                _key = tuple(sorted(_lineup))
-                if _key in best_by_set:
-                    continue
-                extras_tuple = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
-                if extras_tuple:
-                    evaluate_extras(extras_tuple, full_combos)
+                _pin_cost = _craft_combo_actual_cost(ctx, _combo, free_bond_zero_cost)
+                _pinned = [(_pin_cost, _combo)]
+                # 成员"交错排序"：质量半区与后半区交替（与粗搜轮的 dual_pass 同思路），
+                # 避免"按序取前 N 条组合"永远只含排名最靠前那几人。
+                _half = (len(_members) + 1) // 2
+                _scan = [
+                    _members[(_i // 2) + (0 if _i % 2 == 0 else _half)]
+                    for _i in range(len(_members))
+                ]
+                _total = math.comb(len(_scan), _need_players)
+                # 取"交错序的前 _quota 条"（不是等距抽样）：交错序的前几条组合天然横跨质量半区与后半区，
+                # 取前缀即得到"多样性靠前"的样本；实测等距抽样会漏掉本 case 的目标组合（见成本文档）。
+                _quota = min(
+                    _total,
+                    max(4, (_lineup_budget - _pass_lineups) // max(1, len(_sets) - _si)),
+                )
+                for _lineup in itertools.islice(
+                    itertools.combinations(_scan, _need_players), _quota
+                ):
+                    if _pass_lineups >= _lineup_budget:
+                        break
+                    extras_tuple = tuple(sorted(set(_lineup) - set(bp.fixed_servant_ids)))
+                    if not extras_tuple:
+                        continue
+                    _pass_lineups += 1
+                    evaluate_extras(extras_tuple, _pinned)
+            _no_prune[0] = False
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
     refine_count = _default_refine_count(req, len(best_by_set))
