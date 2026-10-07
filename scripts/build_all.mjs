@@ -32,7 +32,7 @@
  *   - 隐私检查：若本地存在 scripts/privacy_clean.py，打包前会跑 --check（发现个人数据即中止）
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -274,6 +274,28 @@ function buildAndroid() {
 }
 
 // ---------------------------------------------------------------- Windows 便携版
+
+/**
+ * 出包前拦截「应用还在运行」：Windows 会锁住 exe/dll，
+ * 删 release/MyFGOApp 会删到一半报 EPERM，排查起来莫名其妙（2026-10-07 实测踩过）。
+ * 拿不到进程列表就跳过这层保护（不因为自检本身失败而卡住出包）。
+ */
+function assertAppNotRunning() {
+  const exeName = `${PRODUCT}.exe`;
+  try {
+    const r = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${exeName}`, "/NH"], { encoding: "utf8" });
+    const out = (r && r.stdout) || "";
+    if (out.includes(exeName)) {
+      fatal(
+        `检测到「${exeName}」正在运行 → 出包会先删除 release/MyFGOApp。\n` +
+          "  → 请先关闭应用（含后台残留进程）再重试出包。"
+      );
+    }
+  } catch (_) {
+    /* 忽略：拿不到任务列表就交给后面的 rmSync 兜底 */
+  }
+}
+
 function newestMtime(targets) {
   let newest = 0;
   const walk = (p) => {
@@ -342,7 +364,20 @@ function buildWindows() {
   const unpackedDir = path.join(RELEASE_DIR, "win-unpacked");
   const appDir = path.join(RELEASE_DIR, "MyFGOApp");
   if (!existsSync(unpackedDir)) fatal("electron-builder 没有产出 release/win-unpacked");
-  rmSync(appDir, { recursive: true, force: true });
+  assertAppNotRunning();
+  try {
+    rmSync(appDir, { recursive: true, force: true });
+  } catch (err) {
+    // 应用还开着时 Windows 会锁住 exe/dll（EPERM/EBUSY），而且会删到一半就停 → 给一句人话
+    if (err && (err.code === "EPERM" || err.code === "EBUSY")) {
+      fatal(
+        `删不掉 ${path.relative(ROOT, appDir)}：文件被占用。\n` +
+          "  → 先**关闭正在运行的应用**（含托盘/后台残留）再出包。\n" +
+          "  → 刚才可能已删掉部分文件（都是构建产物，重新出包会重建；用户数据在 db\\ 里，不受影响）。"
+      );
+    }
+    throw err;
+  }
   renameSync(unpackedDir, appDir);
   log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
   if (!existsSync(appDir)) fatal("没有产出 release/MyFGOApp");
