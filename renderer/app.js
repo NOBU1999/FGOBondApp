@@ -293,9 +293,10 @@ const App = {
       // off / standard / deep；跟随队伍预设一起保存与加载。
       neighborhood: "standard",
       resultSettings: {
-        // 搜索顺序（v0.1.14）：属于"结果偏好"，放在「结果显示设置」里，默认先选礼装。
-        //   craft   —— 先枚举礼装组合，再反查"最能吃满这批礼装"的从者阵容（默认，结果通常更好）
-        //   servant —— 先选从者阵容，再给阵容配礼装（原行为，更快）
+        // 结果完整度（原名「搜索顺序」，2026-10-07 改名；字段名沿用 searchOrder 以兼容老预设）：
+        // 只决定"要不要多跑一趟礼装优先覆盖"——
+        //   craft   —— 更全（默认）：多跑一趟（约 +15%），能多出"几个人一起吃同一批礼装"的队伍
+        //   servant —— 更快：不跑那趟，常规最优解都在、第 1 名不变
         searchOrder: "craft",
         autoExpandFirst: false,
         showSearchStats: false,
@@ -4547,15 +4548,16 @@ const App = {
         <div class="settings-group-title">计算设置（影响怎么算）</div>
         <div class="settings-list">
           <label class="settings-row">
-            <span>搜索顺序</span>
+            <span>结果完整度</span>
             <select v-model="resultSettings.searchOrder" @change="persistResultSettings">
-              <option value="craft">先选礼装，再反查从者（默认，结果通常更好）</option>
-              <option value="servant">先选从者，再配礼装（更快）</option>
+              <option value="craft">更全（默认）</option>
+              <option value="servant">更快</option>
             </select>
           </label>
           <div class="text-muted" style="margin:-4px 0 4px">
-            「先选礼装」专门找那种"几个人一起吃同一批礼装"的队伍——按单人评分看不出来、容易漏；
-            「先选从者」则是老算法，速度快一些。两种都保留，可以随时切回来对比。
+            默认的「更全」会多跑一趟"按礼装批次挑人"的搜索：专门捞那种"几个人一起吃同一批礼装"的队伍
+            —— 按单人评分排不进候选池、很容易被漏掉。它不会改变第 1 名，只是让后面的推荐更完整；
+            代价是大约多花 15% 时间，嫌慢可以切「更快」。
           </div>
         </div>
         <div class="settings-group-title">结果显示设置（只影响显示）</div>
