@@ -1232,14 +1232,31 @@ def _choose_support(
     used_servant_ids: Set[int],
     box: Dict[int, BoxServant],
 ) -> Optional[int]:
+    # 2026-10-07（A5）：本函数**每个阵容都被调一次**（几万次），但结果只取决于 ctx + req：
+    # 手动助战 → 固定；自动助战 → 全表扫一遍 ctx.servants 取最小 sid（与阵容无关）。
+    # 而自动那条路每次要跑几千次 _servant_in_class_group（实测占 5~8%）→ 整段缓存。
+    _key = getattr(req, "_support_choice_key", None)
+    if _key is None:
+        _key = (
+            req.support.servant_id if req.support else None,
+            req.class_group,
+            frozenset(req.excluded_servant_ids or ()),
+        )
+        req._support_choice_key = _key
+    _cache = getattr(ctx, "_support_choice_cache", None)
+    if _cache is None:
+        _cache = {}
+        ctx._support_choice_cache = _cache
+    if _key in _cache:
+        return _cache[_key]
+
     if req.support and req.support.servant_id is not None:
         sid = req.support.servant_id
         # 手动指定助战允许与玩家位重复；只校验从者存在于本地数据
-        if sid not in ctx.servants:
-            return None
-        if not _servant_in_class_group(ctx, sid, req.class_group):
-            return None
-        return sid
+        result = sid if (sid in ctx.servants
+                         and _servant_in_class_group(ctx, sid, req.class_group)) else None
+        _cache[_key] = result
+        return result
 
     # 自动助战：按职阶筛选约束选择展示用从者。
     candidates = [
@@ -1247,7 +1264,9 @@ def _choose_support(
         if sid not in req.excluded_servant_ids
         and _servant_in_class_group(ctx, sid, req.class_group)
     ]
-    return min(candidates) if candidates else None
+    result = min(candidates) if candidates else None
+    _cache[_key] = result
+    return result
 
 
 def _servant_can_match_craft_any_stage(
@@ -1255,16 +1274,36 @@ def _servant_can_match_craft_any_stage(
     servant_id: int,
     craft: Any,
 ) -> bool:
-    """该从者是否在某个阶段/灵衣下能满足某张特性礼装的条件。"""
+    """该从者是否在某个阶段/灵衣下能满足某张特性礼装的条件。
+
+    2026-10-07（A7）：纯静态函数（只看 ctx 里从者的 traits 与这张礼装的 trigger_masks），
+    但被补槽内层调用上千万次 → 按 (servant_id, craft.id) 缓存。
+    """
+    _cid = getattr(craft, "id", None)
+    _cache = getattr(ctx, "_any_stage_match_cache", None)
+    if _cache is None:
+        _cache = {}
+        ctx._any_stage_match_cache = _cache
+    if _cid is not None:
+        hit = _cache.get((servant_id, _cid))
+        if hit is not None:
+            return hit
     info = ctx.servants.get(servant_id)
     if not info or not info.traits:
-        return False
-    for state_key in info.traits:
-        mask = info.mask_for(state_key)
-        for group_mask in craft.trigger_masks:
-            if (mask & group_mask) == group_mask:
-                return True
-    return False
+        result = False
+    else:
+        result = False
+        for state_key in info.traits:
+            mask = info.mask_for(state_key)
+            for group_mask in craft.trigger_masks:
+                if (mask & group_mask) == group_mask:
+                    result = True
+                    break
+            if result:
+                break
+    if _cid is not None:
+        _cache[(servant_id, _cid)] = result
+    return result
 
 
 def _free_craft_benefits_team(
