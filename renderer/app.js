@@ -1377,7 +1377,7 @@ const App = {
       return this.avatarSet && this.avatarSet.has(String(servantId));
     },
     /**
-     * 触屏设备（安卓 / MuMu / 手机）上没有"悬停"，但安卓 WebView 会在点按时补发
+     * 触屏设备（安卓 / 安卓模拟器 / 手机）上没有"悬停"，但安卓 WebView 会在点按时补发
      * mouseenter / mousemove，导致提示条弹出后**不会消失**（因为没有 mouseleave）。
      * 用户明确要求安卓端不要这个提示 → 触屏设备直接禁用（桌面端行为不变）。
      */
