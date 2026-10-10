@@ -52,19 +52,13 @@ TEST_DIR = ROOT / "release" / "MyFGOApp"
 ASAR_NAME = "app.asar"
 
 # asar 归档里需要跟随开发区更新的文件（相对 app 根目录）
+# ⚠️ main/ 下的 .js 不用写在这里 —— 由 asar_sync_files() 自动收集（漏写会让测试包起不来）
 ASAR_SYNC_FILES = [
     "renderer/app.js",
     "renderer/style.css",
     "renderer/index.html",
+    "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成
     "preload.js",
-    "main/index.js",
-    "main/ipc-handlers.js",
-    "main/python-process.js",
-    "main/runtime-db.js",
-    "main/database.js",
-    "main/db-reset.js",
-    "main/avatars.js",
-    "main/diag-log.js",
     "shared/bridge/data-bridge.mjs",
     "shared/domain/meta.mjs",
     "shared/domain/accounts.mjs",
@@ -75,6 +69,17 @@ ASAR_SYNC_FILES = [
     "shared/domain/static-data.mjs",
     "shared/domain/index.mjs",
 ]
+
+
+def asar_sync_files() -> list:
+    """asar 里要跟随开发区更新的文件：上面那份清单 + main/ 下全部 .js。
+
+    以前 main/ 也是手写清单，2026-10-08 加 main/render-compat.js 时忘了写 →
+    测试包里缺文件，启动会直接 "Cannot find module"（真实踩过）。
+    """
+    files = [rel for rel in ASAR_SYNC_FILES if not rel.startswith("main/")]
+    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "main").glob("*.js"))
+    return files
 
 # 直接放在 MyFGOApp 下的文件（不进 asar）
 PLAIN_FILES = [
@@ -263,18 +268,16 @@ def main() -> int:
             print(f"[x] 解包 app.asar 失败：{exc}")
             return 2
         touched = []
-        for rel in ASAR_SYNC_FILES:
+        for rel in asar_sync_files():
             src = ROOT / rel
             dst = work / rel
             if not src.exists():
                 continue
-            if not dst.exists():
-                print(f"    [warn] asar 里没有 {rel}（跳过）")
-                continue
-            if src.read_bytes() == dst.read_bytes():
+            if dst.exists() and src.read_bytes() == dst.read_bytes():
                 continue
             touched.append(rel)
             if not args.check:
+                dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(src.read_bytes())
         if touched:
             changes.append(f"app.asar 内 {len(touched)} 个文件：{', '.join(touched)}")
