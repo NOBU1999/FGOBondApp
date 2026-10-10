@@ -639,6 +639,8 @@ const App = {
     },
   },
   async created() {
+    // 系统原生下拉框（<select>）在 Electron 上偶发"弹不出来"→ 换成界面内浮层（见 installSelectShim）
+    this.installSelectShim();
     try {
       const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions, accountInfo] = await Promise.all([
         window.fgo.getAppInfo(),
@@ -3619,6 +3621,116 @@ const App = {
           isCustom: !!c.isCustom,
           trigger: c.bonusType === "trait" ? this.traitGroupsText(c) : "",
         }));
+    },
+    /**
+     * 把系统原生下拉框（<select>）换成**界面内浮层列表**。
+     *
+     * 为什么：Electron 有个一直没修的已知问题 —— 点原生 <select> 时那个弹窗**有时根本不出现**
+     * （electron/electron#44186，Electron 30 起就有人反复报；绕法是"关硬件加速"或"进出全屏"）。
+     * 用户实测：Box 管理里的「职阶 / 满绊筛选 / 活动」点了没反应，其他按钮正常，最小化再打开才出来。
+     * 我们自己画浮层就绕开了这个 bug（不依赖系统弹窗）。
+     *
+     * 做法：**捕获阶段**拦掉 mousedown 并 preventDefault（系统弹窗就不会出来）→ 用原生 <option>
+     * 自己渲染一个列表 → 选中后写回 select.value 并派发 change，Vue 的 v-model 照常工作。
+     * 安卓端不启用（那边是系统原生选择器，行为本来就不同，不去动它）。
+     */
+    installSelectShim() {
+      if (this.isAndroidPlatform()) return;
+      if (this._selectShimInstalled) return;
+      this._selectShimInstalled = true;
+
+      const popup = document.createElement("div");
+      popup.className = "select-shim";
+      popup.style.display = "none";
+      document.body.appendChild(popup);
+
+      /** 当前浮层是给哪个 <select> 打开的（用来实现"再点一下同一个框就收起来"） */
+      let currentSelect = null;
+
+      const close = () => {
+        popup.style.display = "none";
+        popup.innerHTML = "";
+        currentSelect = null;
+      };
+
+      const open = (select) => {
+        currentSelect = select;
+        popup.innerHTML = "";
+        let activeItem = null;
+        for (const opt of Array.from(select.options)) {
+          const item = document.createElement("div");
+          item.className = "select-shim-item";
+          if (opt.disabled) item.classList.add("disabled");
+          if (opt.value === select.value) {
+            item.classList.add("active");
+            activeItem = item;
+          }
+          item.textContent = opt.textContent;
+          item.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (opt.disabled) return;
+            select.value = opt.value;
+            // 走原生 change 事件：v-model / @change 都照旧生效
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            close();
+          });
+          popup.appendChild(item);
+        }
+        const rect = select.getBoundingClientRect();
+        popup.style.display = "block";
+        popup.style.minWidth = Math.max(120, Math.round(rect.width)) + "px";
+        popup.style.left = Math.max(4, Math.round(rect.left)) + "px";
+        popup.style.top = Math.round(rect.bottom + 2) + "px";
+        // 下面放不下就往上弹
+        const height = popup.offsetHeight;
+        if (rect.bottom + 2 + height > window.innerHeight - 4) {
+          popup.style.top = Math.max(4, Math.round(rect.top - 2 - height)) + "px";
+        }
+        if (activeItem && activeItem.scrollIntoView) activeItem.scrollIntoView({ block: "nearest" });
+      };
+
+      document.addEventListener(
+        "mousedown",
+        (ev) => {
+          const target = ev.target;
+          if (popup.contains(target)) return;
+          const select = target && target.closest ? target.closest("select") : null;
+          if (!select) {
+            close();
+            return;
+          }
+          if (select.disabled) return;
+          ev.preventDefault(); // 关键：不让系统弹窗出来
+          ev.stopPropagation();
+          // 再点同一个下拉框 = 收起来（用户要求：不必非得点别处才关）
+          if (currentSelect === select && popup.style.display !== "none") {
+            close();
+            return;
+          }
+          open(select);
+        },
+        true
+      );
+
+      // 点别处 / 窗口失焦 / Esc 都收起来
+      document.addEventListener(
+        "click",
+        (ev) => {
+          const target = ev.target;
+          if (popup.contains(target)) {
+            ev.stopPropagation();
+            return;
+          }
+          if (target && target.closest && target.closest("select")) return;
+          close();
+        },
+        true
+      );
+      window.addEventListener("blur", close);
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") close();
+      });
     },
   },
   template: `
