@@ -25,11 +25,23 @@ BOND_TARGETS = {"questFriendship"}
 
 
 def _load_translations() -> Dict[str, Dict[str, str]]:
-    path = Path(__file__).resolve().parent / "data" / "name_translations.json"
+    base_dir = Path(__file__).resolve().parent / "data"
+    path = base_dir / "name_translations.json"
+    result: Dict[str, Dict[str, str]] = {}
     if path.exists():
         with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            result = json.load(f)
+    # 手工补充表：新活动在社区译名/官方简中上线之前，先用这里顶一个非官方译名。
+    # 单独一个文件是故意的 —— name_translations.json 是脚本生成的，重生成会覆盖掉。
+    extra = base_dir / "event_names_extra.json"
+    if extra.exists():
+        try:
+            with extra.open("r", encoding="utf-8") as f:
+                overrides = (json.load(f) or {}).get("event_names") or {}
+            result.setdefault("event_names", {}).update(overrides)
+        except Exception:
+            pass
+    return result
 
 
 def _translate_event_name(raw_name: str) -> str:
@@ -181,12 +193,16 @@ def _add_bonus(
 def parse_event_bond_bonuses(
     events: List[Dict[str, Any]],
     servants: Optional[List[Dict[str, Any]]] = None,
+    cn_names_by_id: Optional[Dict[int, str]] = None,
 ) -> List[Dict[str, Any]]:
     """生成全部 eventQuest（关卡配置活动）加成表。
 
     每个 eventQuest 输出一条记录，按开始时间从新到旧排序；
     extraPassive（活动限定被动）优先，questFriendship campaign 作为补充。
     相同百分比会按活动合并为一份 servantIds。
+
+    名字：先查内置对照表（社区译名，含手工补充），再按活动 id 查 **CN 官方中文名**
+    （cn_names_by_id，来自 CN basic_event.json，0.44MB），都没有就保留日文原名。
     """
     events = events or []
     event_quests = [
@@ -242,9 +258,15 @@ def parse_event_bond_bonuses(
                     )
 
     result: List[Dict[str, Any]] = []
+    cn_names = cn_names_by_id or {}
     for q in sorted(event_quests, key=lambda e: (e.get("startedAt") or 0), reverse=True):
         qid = int(q.get("id") or 0)
         q_cn = _translate_event_name(q.get("name") or "")
+        # 对照表里没有（一般是刚上的新活动）→ 按 id 找 CN 官方译名
+        if _looks_japanese(q_cn):
+            official = cn_names.get(qid)
+            if official and not _looks_japanese(official):
+                q_cn = official
         # 若 eventQuest 名仍是日文，尝试用关联 questCampaign 的中文活动名，并去掉加成说明尾巴
         event_name = _clean_event_name(q_cn, name_fallback.get(qid, ""))
         event_bucket = bonus_map.get(qid) or {}
@@ -301,7 +323,25 @@ def update_event_bond_bonus(
 
     if progress:
         progress("正在解析活动牵绊加成...")
-    records = parse_event_bond_bonuses(events, servants)
+    # CN 官方中文名（basic 层只有 0.44MB；拿不到就算了，名字退回对照表 / 日文原名）
+    cn_names_by_id: Dict[int, str] = {}
+    try:
+        from .constants import BASIC_EVENT_FILE  # noqa: PLC0415
+
+        cn_basic = data_fetcher._load_json_cached(  # noqa: SLF001
+            "CN",
+            BASIC_EVENT_FILE,
+            RAW_CACHE_DIR,
+            "basic_event_cn",
+            use_cache,
+        )
+        cn_names_by_id = {
+            int(e["id"]): (e.get("name") or "") for e in (cn_basic or []) if e.get("id")
+        }
+    except Exception:
+        cn_names_by_id = {}
+
+    records = parse_event_bond_bonuses(events, servants, cn_names_by_id)
 
     db_path = Path(db_path or DB_PATH)
     out = db_path.parent / "event_bond_bonus.json"
@@ -309,6 +349,20 @@ def update_event_bond_bonus(
         json.dumps(records, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    # 记下这次用的 nice_event.json 的 etag，供「检查刷新」判断"活动有新内容"
+    # （以前检查刷新只看从者/礼装 → 活动上新了它也说"已是最新"）
+    try:
+        from . import database  # noqa: PLC0415
+
+        meta = data_fetcher.get_remote_export_meta(region, NICE_EVENT_FILE)
+        conn = database.connect(db_path)
+        database.set_meta(conn, "event_etag", (meta or {}).get("etag") or "")
+        conn.commit()
+        conn.close()
+    except Exception:
+        # 记不上不影响活动表本身；下次更新再试
+        pass
 
     event_count = len({r["eventId"] for r in records})
     bonus_count = sum(len(r["bonuses"]) for r in records)

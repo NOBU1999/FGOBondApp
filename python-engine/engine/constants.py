@@ -26,6 +26,9 @@ ATLAS_EXPORT_ROOT = f"{ATLAS_API_ROOT}/export/{{region}}"
 NICE_SERVANT_FILE = "nice_servant.json"
 NICE_EQUIP_FILE = "nice_equip.json"
 NICE_EVENT_FILE = "nice_event.json"
+# basic 层只有 id / 名字等浅字段，文件很小（CN 的 event 只有 ~0.44MB）
+# → 用来按活动 id 取官方中文名（活动牵绊加成表的名字补全）
+BASIC_EVENT_FILE = "basic_event.json"
 
 # 工程目录定位（开发态）
 # constants.py 位于 FGOBondApp/python-engine/engine/constants.py
