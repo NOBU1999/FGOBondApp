@@ -309,8 +309,32 @@ if (!gotLock) {
         `启动 Electron ${process.versions.electron} / Chromium ${process.versions.chrome} / ` +
           `软件渲染=${forceSoftwareRendering ? "强制开" : "否"}`
       );
-      const gpuStatus = app.getGPUFeatureStatus ? app.getGPUFeatureStatus() : null;
-      if (gpuStatus) diagLog(`GPU 特性状态: ${JSON.stringify(gpuStatus)}`);
+      // ⚠️ 官方文档明确：getGPUFeatureStatus() 要等 gpu-info-update 之后才准。
+      // 启动时读到的往往还是"什么都 disabled"的初始值，容易被误判成"这机器在软件渲染"。
+      const logGpuStatus = (tag) => {
+        try {
+          const status = app.getGPUFeatureStatus ? app.getGPUFeatureStatus() : null;
+          if (status) diagLog(`GPU 特性状态（${tag}）: ${JSON.stringify(status)}`);
+        } catch (err) {
+          diagLog(`GPU 状态读取失败（${tag}）: ${err.message}`);
+        }
+      };
+      logGpuStatus("启动时，可能还没就绪");
+      app.once("gpu-info-update", () => {
+        logGpuStatus("GPU 信息就绪后");
+        // 顺便记下 Chromium 到底用哪张卡呈现（双显卡笔记本上排查"换卡就正常"用）。
+        // 只记厂商:设备 id（0x10de=NVIDIA / 0x1002=AMD / 0x8086=Intel），不记型号名。
+        app
+          .getGPUInfo("basic")
+          .then((info) => {
+            const devices = (info && info.gpuDevice) || [];
+            const text = devices
+              .map((d) => `${d.vendorId || "?"}:${d.deviceId || "?"}${d.active ? "(使用中)" : ""}`)
+              .join(", ");
+            diagLog(`GPU 设备（厂商:设备 id）: ${text || "未知"}`);
+          })
+          .catch(() => {});
+      });
     } catch (err) {
       diagLog(`GPU 状态读取失败: ${err.message}`);
     }
