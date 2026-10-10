@@ -1372,7 +1372,19 @@ def _filter_support_options_for_team(
 
     - 午茶/通用礼装保留；
     - 特性礼装只保留至少一位玩家能通过某阶段/灵衣满足条件的。
+
+    2026-10-10：按 (礼装候选列表, 玩家集合) 缓存 —— 纯函数（只看 ctx 的静态数据与这两个入参），
+    而实测（杀冠串 cProfile）它被调用 15 万次、累计 10s，绝大多数是同一套阵容的重复过滤。
+    缓存在 ctx 上 → 换请求/换 Box/换数据（新 ctx）自动重算，不会串味。
     """
+    _ckey = (tuple(options), tuple(sorted(player_ids)))
+    _fcache = getattr(ctx, "_support_filter_cache", None)
+    if _fcache is None:
+        _fcache = {}
+        ctx._support_filter_cache = _fcache
+    hit = _fcache.get(_ckey)
+    if hit is not None:
+        return list(hit)
     result: List[int] = []
     trait_scores: List[Tuple[int, int, int]] = []
     player_set = set(player_ids)
@@ -1414,6 +1426,7 @@ def _filter_support_options_for_team(
     # 只保留最可能超过午茶/午餐的特性礼装，避免每套阵容枚举全部特性礼装
     trait_scores.sort(key=lambda x: (-x[0], -x[1], x[2]))
     result.extend(cid for _, _, cid in trait_scores[:2])
+    _fcache[_ckey] = tuple(result)
     return result
 
 
@@ -1678,7 +1691,31 @@ def _support_max_relaxed_add(
     players: Sequence[_RelaxedPlayer],
     repeatable_ids: Set[int],
 ) -> float:
-    """助战主位/第二礼装位能提供的最大松弛加分（不参与玩家礼装 DP）。"""
+    """助战主位/第二礼装位能提供的最大松弛加分（不参与玩家礼装 DP）。
+
+    2026-10-10：按 (请求口径, 玩家侧签名, 助战候选) 缓存 —— 纯函数，输入只来自 args 与 ctx 静态数据。
+    实测（杀冠串 cProfile）：它每次 evaluate_extras 都跑一遍，内部要枚举
+    主位 × 第二礼装 的组合并逐张算松弛分，累计 12s；同一套阵容在多轮里会被反复求同一个值。
+    缓存在 ctx 上 → 换请求/换 Box/换数据（新 ctx）自动失效。
+    ⚠️ 但同一个 ctx 可能被**多个请求**复用（指纹工具、安卓宿主），所以键里必须带上请求口径字段。
+    """
+    _skey = (
+        # `_relaxed_craft_score` 的权重 = 按点数取 base_bond、按倍率取 1；点位口径还决定
+        # flat_bonus 是否计入。漏掉这两个字段就会"上一个请求的值当成这个请求的值"——
+        # 2026-10-10 实测：共用 ctx 跑指纹时 points_base_1200 的 top1 从 12096 掉到 12048。
+        _relaxed_percent_weight(req),
+        _uses_points_scoring(req),
+        tuple(sorted((p.servant_id, p.position, p.front_factor, p.counted) for p in players)),
+        tuple(support_top_options),
+        tuple(support_second_options),
+    )
+    _scache = getattr(ctx, "_support_max_cache", None)
+    if _scache is None:
+        _scache = {}
+        ctx._support_max_cache = _scache
+    hit = _scache.get(_skey)
+    if hit is not None:
+        return hit
     main_scores: List[Tuple[float, int]] = []
     for cid in support_top_options:
         craft = ctx.crafts.get(cid)
@@ -1704,6 +1741,7 @@ def _support_max_relaxed_add(
             total = ms + ss
             if total > best:
                 best = total
+    _scache[_skey] = best
     return best
 
 
@@ -1833,8 +1871,32 @@ def _prepare_dp_craft_combos_for_team(
     cost_budget: int,
     zero_cost_slots: Optional[Sequence[bool]],
     top_k: int = 10,
+    cache: Optional[Dict[Any, Any]] = None,
 ) -> Tuple[List[_RelaxedPlayer], Dict[int, float], List[Tuple[int, Tuple[int, ...]]]]:
-    """生成某套从者阵容的松弛玩家信息、礼装分数与 DP 组合。"""
+    """生成某套从者阵容的松弛玩家信息、礼装分数与 DP 组合。
+
+    2026-10-10：加**跨轮缓存**。同一套阵容（位置 → 从者 的指派）会在多个趟里被反复求 DP
+    ——粗搜两轮、礼装集合优先、精算轮、邻域轮都会再算一次；实测（杀冠串）73,398 次调用
+    只对应 4,946 个被评估阵容 ≈ **15 倍重复**，而 DP 本身占总耗时 21%。
+    DP 结果只依赖「位置→从者指派 + 礼装池 + Cost 预算 + 免费槽位 + top_k」（req 里的口径参数
+    在一次搜索内是常量），所以按这几项缓存即可，结果逐字节不变。
+
+    ⚠️ 缓存字典由调用方创建（**以一次 search 调用为界**），不挂在 ctx 上：
+    ctx 可能被同进程的多次不同请求复用，挂 ctx 会跨请求串味。
+    """
+    key = None
+    if cache is not None:
+        key = (
+            tuple(sorted(mapping.items())),
+            cost_budget,
+            tuple(candidate_craft_ids),
+            tuple(zero_cost_slots or ()),
+            len(bp.free_bond_positions),
+            top_k,
+        )
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
     players = _relaxed_players_from_mapping(ctx, req, bp, box, mapping)
     craft_scores = _make_craft_score_map(ctx, req, players, candidate_craft_ids)
     dp_combos = _dp_top_craft_combinations(
@@ -1847,7 +1909,10 @@ def _prepare_dp_craft_combos_for_team(
         craft_scores,
         top_k=top_k,
     )
-    return players, craft_scores, dp_combos
+    result = (players, craft_scores, dp_combos)
+    if key is not None:
+        cache[key] = result
+    return result
 
 
 def _relaxed_score_upper_bound(
@@ -2261,6 +2326,9 @@ def search_top_teams(
     )
 
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
+    # 每套阵容的松弛 DP 组合跨轮复用（见 _prepare_dp_craft_combos_for_team 的说明）：
+    # 只在本函数内有效，不挂 ctx（避免同进程多次请求之间串味）。
+    _dp_cache: Dict[Any, Any] = {}
     # 2026-10-07（A6）：剪枝要的是"当前结果集里第 top_n 大的分数"，
     # 原实现**每个阵容**都 sorted(全部分数) 一遍（结果集几万条 × 几万次调用 ≈ 10%+）。
     # 这里用升序有序表精确维护同一个值：写入/替换时 insort、删除旧值；查询 = _score_sorted[-top_n]。
@@ -2460,6 +2528,7 @@ def search_top_teams(
                 ce_budget,
                 free_bond_zero_cost,
                 top_k=12,
+                cache=_dp_cache,
             )
             if dp_players:
                 ub = _relaxed_score_upper_bound(
