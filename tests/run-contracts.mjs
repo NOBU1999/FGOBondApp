@@ -251,6 +251,32 @@ async function runBridgeSuite() {
     if (value === "$firstServantId") return firstServantId;
     if (value === "$servantWithTraits") return servantWithTraits;
     if (value === "$captureJson") return JSON.stringify(capture);
+    // 抓包工具「导出响应」的形态：HTTP 报文头 + 空行 + base64 正文（2026-10-09 加）
+    if (value === "$captureHttpDump") {
+      const body = Buffer.from(JSON.stringify(capture), "utf8").toString("base64");
+      return (
+        "HTTP/1.1 200 OK\r\n" +
+        "Server: Tengine\r\n" +
+        "Content-Type: text/html; charset=utf-8\r\n" +
+        "Transfer-Encoding: chunked\r\n" +
+        "Content-Encoding: gzip\r\n" +
+        "\r\n" +
+        body
+      );
+    }
+    if (value === "$captureHttpDumpNoData") {
+      const body = Buffer.from(JSON.stringify({ hello: "world" }), "utf8").toString("base64");
+      return "HTTP/1.1 200 OK\r\nServer: Tengine\r\n\r\n" + body;
+    }
+    // 正文被 URL 转义（%2B / %2F / %3D）+ 76 列折行 —— 真实反馈者文件就是这个形态（2026-10-09）
+    if (value === "$captureUrlEncoded") {
+      const body = Buffer.from(JSON.stringify(capture), "utf8")
+        .toString("base64")
+        .replace(/\+/g, "%2B")
+        .replace(/\//g, "%2F")
+        .replace(/=/g, "%3D");
+      return "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + body.replace(/(.{76})/g, "$1\r\n");
+    }
     if (Array.isArray(value)) return value.map(resolveToken);
     if (value && typeof value === "object") {
       const out = {};

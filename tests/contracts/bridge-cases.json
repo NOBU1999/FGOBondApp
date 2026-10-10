@@ -291,6 +291,33 @@
       ]
     },
     {
+      "name": "box.importCaptureContent（抓包「导出响应」带 HTTP 头也能导入：正文同样是 base64）",
+      "method": "box.importCaptureContent",
+      "args": ["$captureHttpDump", 2],
+      "expect": [
+        { "path": "result.servants", "eq": 3 },
+        { "path": "result.maxBond", "eq": 3 }
+      ]
+    },
+    {
+      "name": "box.importCaptureContent（带 HTTP 头但正文里没有从者数据 → 照样报错）",
+      "method": "box.importCaptureContent",
+      "args": ["$captureHttpDumpNoData", 2],
+      "expect": [
+        { "path": "ok", "eq": false },
+        { "path": "error", "matches": "没有找到从者数据" }
+      ]
+    },
+    {
+      "name": "box.importCaptureContent（正文被 URL 转义 + 折行也能导入：%2B/%2F/%3D）",
+      "method": "box.importCaptureContent",
+      "args": ["$captureUrlEncoded", 2],
+      "expect": [
+        { "path": "result.servants", "eq": 3 },
+        { "path": "result.maxBond", "eq": 3 }
+      ]
+    },
+    {
       "name": "box.getUserBox（选错文件后 Box 必须保持原样，不能被清空）",
       "method": "box.getUserBox",
       "args": [2],

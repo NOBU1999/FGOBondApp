@@ -11,6 +11,25 @@
  */
 
 export function createBoxDomain({ sql, accounts, codec }) {
+  /**
+   * 剥掉 HTTP 报文头，只留正文。
+   *
+   * 抓包工具导出的文件有两种：
+   *   ① 只导出响应体（正文，通常 base64）—— 一直都能导入；
+   *   ② 导出完整「响应」，正文前面多一段报文头：
+   *      HTTP/1.1 200 OK\r\nServer: Tengine\r\n...\r\n\r\n<base64 正文>
+   *      —— 以前会把整段当 base64 解 → 解出乱码 → 报"读不出抓包数据"（2026-10-09 用户/反馈者踩到）。
+   * 只认确实以「状态行 / 请求行」开头的文本，避免把正文误伤。
+   */
+  function stripHttpMessageHead(text) {
+    const withStatus = /^\s*HTTP\/\d(?:\.\d)?\s+\d{3}/i.test(text);
+    const withRequest = /^\s*(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\S+\s+HTTP\//i.test(text);
+    if (!withStatus && !withRequest) return text;
+    const match = text.match(/\r?\n\r?\n/);
+    if (!match || match.index === undefined) return text;
+    return text.slice(match.index + match[0].length);
+  }
+
   function getUserBox(accountId) {
     const id = accounts.resolveAccountId(accountId);
     return sql.all(
@@ -51,16 +70,26 @@ export function createBoxDomain({ sql, accounts, codec }) {
     const raw = String(content || "").trim();
     let jsonText = raw;
     if (!raw.startsWith("{") && !raw.startsWith("[")) {
-      // 抓包文件通常是 base64，末尾可能是 URL 编码的 %3D
-      const normalized = raw.replace(/%3D/gi, "").trim();
-      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+      // 抓包文件通常是 base64。三件事都要先处理（2026-10-09 实测）：
+      //   ① 有些工具（如 Reqable 的「导出响应」）会在正文前带 HTTP 状态行 + 响应头，先剥掉；
+      //   ② 有些链路会把正文里的 + / = 做 URL 转义（%2B / %2F / %3D）。以前只处理 %3D，
+      //      结果**正文里混进一个 %2B 就让整段 base64 错位**，后面全变乱码、长度也不再是 4 的倍数
+      //      —— 这正是"导出响应体也导入失败"的真因。
+      //   ③ 有些工具会把 base64 按 76 列折行，先去掉空白再按 4 补齐。
+      const body = stripHttpMessageHead(raw);
+      const unescaped = body.replace(/%2B/gi, "+").replace(/%2F/gi, "/").replace(/%3D/gi, "=");
+      const compact = unescaped.replace(/\s+/g, "").replace(/=+$/, "");
+      const padded = compact + "=".repeat((4 - (compact.length % 4)) % 4);
       jsonText = codec.decodeBase64ToUtf8(padded);
     }
     const data = (() => {
       try {
         return JSON.parse(jsonText);
       } catch (_) {
-        throw new Error("这个文件读不出抓包数据，请确认选的是抓包导出的那个文件");
+        throw new Error(
+          "这个文件读不出抓包数据，请确认选的是抓包导出的那个文件" +
+            "（若导出的是带 HTTP 头的「响应」，可改选「响应体」再试）"
+        );
       }
     })();
     const replaced = ((data || {}).cache || {}).replaced || {};
