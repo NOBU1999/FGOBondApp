@@ -3900,7 +3900,7 @@ const App = {
               <option value="fast">快速（约 35 秒上限）</option>
               <option value="standard">标准（约 60 秒上限）</option>
               <option value="balanced">平衡（默认，约 90 秒上限）</option>
-              <option value="high">高质量（约 135 秒上限，多一步「自由位排列优化」）</option>
+              <option value="high">高质量（约 135 秒上限）</option>
               <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
             </select>
             <div class="text-muted">
@@ -4495,7 +4495,7 @@ const App = {
             <option value="fast">快速（约 35 秒上限）</option>
             <option value="standard">标准（约 60 秒上限）</option>
             <option value="balanced">平衡（默认，约 90 秒上限）</option>
-            <option value="high">高质量（约 135 秒上限，多一步「自由位排列优化」）</option>
+            <option value="high">高质量（约 135 秒上限）</option>
             <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
           </select>
           <div class="text-muted">
