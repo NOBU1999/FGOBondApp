@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import email.utils
 import gzip
 import json
 import os
@@ -31,6 +32,7 @@ from .constants import (
     ATLAS_EXPORT_ROOT,
     DEFAULT_REGION,
     NICE_EQUIP_FILE,
+    NICE_EVENT_FILE,
     NICE_SERVANT_FILE,
     RAW_CACHE_DIR,
     STAGES,
@@ -205,6 +207,35 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
     return dest
 
 
+def _cache_is_fresh(cache_path: Path, region: str, filename: str) -> bool:
+    """本地缓存还算不算新：拿远端的 Last-Modified 跟缓存文件的时间比。
+
+    ⚠️ 这条是 2026-10-08 补上的关键修复。以前 `_load_json_cached()` 的逻辑是
+    "缓存文件存在就直接用"（只有文件缺失才下载），而「更新数据」固定 use_cache=True，
+    缓存又从来不会被刷新 → **第一次下载之后，以后每次点「更新数据」都只是拿旧快照重建一遍**，
+    新从者 / 新礼装 / 新活动永远进不来（用户实测：活动牵绊加成表停在 9/20 那版）。
+
+    判据：远端 Last-Modified 比缓存文件写入时间新 ⇒ 缓存旧了，重新下载。
+    拿不准（网络失败 / 没有 Last-Modified）时返回 True（继续用缓存）——
+    宁可先用旧数据，也不要让整个「更新数据」挂掉。
+    """
+    try:
+        meta = get_remote_export_meta(region, filename)
+    except Exception:
+        return True
+    last_modified = (meta or {}).get("last_modified") or ""
+    if not last_modified:
+        return True
+    try:
+        remote_ts = email.utils.parsedate_to_datetime(last_modified).timestamp()
+    except Exception:
+        return True
+    try:
+        return cache_path.stat().st_mtime >= remote_ts
+    except OSError:
+        return False
+
+
 def _load_json_cached(
     region: str,
     filename: str,
@@ -213,9 +244,11 @@ def _load_json_cached(
     use_cache: bool,
 ) -> List[Dict[str, Any]]:
     cache_path = cache_dir / f"{region}_{filename}"
-    if use_cache and cache_path.exists():
+    if use_cache and cache_path.exists() and _cache_is_fresh(cache_path, region, filename):
         with cache_path.open("r", encoding="utf-8") as f:
             return json.load(f)
+    if use_cache and cache_path.exists():
+        print(f"[data_fetcher] {label}: 本地缓存已过期，重新下载", file=sys.stderr)
 
     url = export_url(region, filename)
     print(f"[data_fetcher] downloading {url}", file=sys.stderr)
@@ -894,6 +927,7 @@ def check_update(
     local_etag = database.get_meta(conn, "servant_etag") or ""
     local_cn_equip_etag = database.get_meta(conn, "cn_equip_etag") or ""
     local_cn_servant_etag = database.get_meta(conn, "cn_servant_etag") or ""
+    local_event_etag = database.get_meta(conn, "event_etag") or ""
     local_updated_at = database.get_meta(conn, "updated_at") or ""
     conn.close()
 
@@ -908,6 +942,11 @@ def check_update(
             reasons.append("简中服礼装有更新")
         if cn_servant_meta["etag"] and local_cn_servant_etag != cn_servant_meta["etag"]:
             reasons.append("简中服从者有更新")
+    # 活动牵绊加成走的是 nice_event.json（跟从者/礼装不是同一份文件）→ 单独比一次，
+    # 否则"活动上新了但检查说已是最新"（2026-10-08 查实）
+    event_meta = _safe_remote_meta(region, NICE_EVENT_FILE)
+    if event_meta["etag"] and local_event_etag != event_meta["etag"]:
+        reasons.append("活动牵绊加成有更新")
 
     available = bool(reasons)
     return {
