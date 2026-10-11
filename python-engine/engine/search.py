@@ -19,7 +19,7 @@ import bisect
 import itertools
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from . import calculator
@@ -475,6 +475,206 @@ def _split_extras_for_slots(
         yield mapping
 
 
+def _craft_stage_sets(
+    ctx: DataContext,
+    servant_id: int,
+    trait_craft_ids: Sequence[int],
+) -> Tuple[frozenset, ...]:
+    """该从者每个可选形态能触发的特性礼装集合（按形态去重）。
+
+    值优先剪枝用的「家族」口径：**一个形态一份集合**。
+    换人安全的判据是"Y 的每个形态都能被 X 的某个形态盖住"——
+    形态是引擎自己替每个从者选的、且每人只站一个，
+    只看"任意形态的并集"会剪错（已有引擎级反例）。
+    """
+    info = ctx.servants.get(servant_id)
+    if not info or not info.traits:
+        return (frozenset(),)
+    sets = set()
+    for key in info.traits:
+        mask = info.mask_for(key)
+        if not mask:
+            sets.add(frozenset())
+            continue
+        sets.add(
+            frozenset(
+                cid
+                for cid in trait_craft_ids
+                if any((mask & gm) == gm for gm in ctx.crafts[cid].trigger_masks)
+            )
+        )
+    return tuple(sets)
+
+
+def _dominance_map(
+    ctx: DataContext,
+    box: Dict[int, BoxServant],
+    candidate_ids: Sequence[int],
+    trait_craft_ids: Sequence[int],
+) -> Dict[int, frozenset]:
+    """池内的支配关系：x 支配 y ⇒ 含 y 不含 x 的阵容可以换成 x 那一支。
+
+    判据（可证明安全、与搜索顺序无关）：
+      ∀ 形态 sy∈y，∃ 形态 sx∈x 使 M(x@sx) ⊇ M(y@sy)（特性礼装可触发集合）
+      ＋ Cost(x) ≤ Cost(y) ＋ 个人加成/光环/满绊开关都不更差
+    ⇒ 把阵容里的 y 换成 x（站同一个位置、同一套礼装）不会更低分。
+    ⚠️ 只在**当前这个池**内算：替身必须也在池里，否则根本枚举不到。
+    """
+    fams = {sid: _craft_stage_sets(ctx, sid, trait_craft_ids) for sid in candidate_ids}
+    dom: Dict[int, frozenset] = {}
+    for y in candidate_ids:
+        by = box.get(y)
+        ys = ctx.servants.get(y)
+        if by is None or ys is None:
+            continue
+        doms = []
+        for x in candidate_ids:
+            if x == y:
+                continue
+            bx, xs = box.get(x), ctx.servants.get(x)
+            if bx is None or xs is None or xs.cost > ys.cost:
+                continue
+            if bx.personal_bonus < by.personal_bonus or bx.aura_bonus < by.aura_bonus:
+                continue
+            if by.count_personal_bond and not bx.count_personal_bond:
+                continue
+            if by.count_in_team_bonus and not bx.count_in_team_bonus:
+                continue
+            if all(any(my <= mx for mx in fams[x]) for my in fams[y]):
+                doms.append(x)
+        if doms:
+            dom[y] = frozenset(doms)
+    return dom
+
+
+def _canonical_map(
+    candidate_ids: Sequence[int],
+    dom_by: Dict[int, frozenset],
+) -> Dict[int, int]:
+    """每个从者的「值优先代表」（等价类先合并，避免互支配的两个互相指来指去）。
+
+    - 互支配 = 等价 → 并查集合并，代表取**原顺序里最靠前**的那个；
+    - 其余沿支配关系往上走，直到代表最靠前的那一级。
+    """
+    idx = {sid: i for i, sid in enumerate(candidate_ids)}
+    parent = {sid: sid for sid in candidate_ids}
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for y, doms in dom_by.items():
+        if y not in parent:
+            continue
+        for x in doms:
+            if x not in parent or y not in dom_by.get(x, ()):
+                continue
+            ry, rx = find(y), find(x)
+            if ry == rx:
+                continue
+            if idx[ry] <= idx[rx]:
+                parent[rx] = ry
+            else:
+                parent[ry] = rx
+
+    members: Dict[int, List[int]] = {}
+    for sid in candidate_ids:
+        members.setdefault(find(sid), []).append(sid)
+    canon = {
+        sid: min(members[find(sid)], key=lambda m: idx[m]) for sid in candidate_ids
+    }
+    # 沿支配关系继续往上（代表必须"最靠前"），改进一定让 idx 严格变小 → 必然终止
+    changed = True
+    while changed:
+        changed = False
+        for sid in candidate_ids:
+            doms = dom_by.get(sid)
+            if not doms:
+                continue
+            cand = min((canon.get(x, x) for x in doms), key=lambda m: idx.get(m, 1 << 30))
+            if idx.get(cand, 1 << 30) < idx.get(canon[sid], 1 << 30):
+                canon[sid] = cand
+                changed = True
+    return canon
+
+
+def _canonical_combo(
+    combo: Sequence[int],
+    dom_by: Dict[int, frozenset],
+    canon: Dict[int, int],
+) -> Tuple[int, ...]:
+    """把阵容映射到值优先代表：含被支配者、且它一个支配者都不在队里 → 换成代表。"""
+    out = list(combo)
+    for _ in range(len(out) + 1):
+        changed = False
+        for i, sid in enumerate(out):
+            doms = dom_by.get(sid)
+            if not doms:
+                continue
+            if any(x in out for x in doms):
+                continue
+            rep = canon.get(sid)
+            if rep is None or rep == sid or rep in out:
+                continue
+            out[i] = rep
+            changed = True
+            break
+        if not changed:
+            break
+    out.sort()
+    return tuple(out)
+
+
+def _canonicalize_list(
+    combos: Sequence[Tuple[int, ...]],
+    dom_by: Dict[int, frozenset],
+    canon: Dict[int, int],
+) -> List[Tuple[int, ...]]:
+    """把一批组合换成代表并去重（保持原顺序）。无损：代表不更差。"""
+    if not dom_by or not canon:
+        return list(combos)
+    seen = set()
+    out: List[Tuple[int, ...]] = []
+    for combo in combos:
+        rep = _canonical_combo(combo, dom_by, canon)
+        if rep not in seen:
+            seen.add(rep)
+            out.append(rep)
+    return out
+
+
+def _canonicalize_refill(
+    picked: Sequence[Tuple[int, ...]],
+    combos: Sequence[Tuple[int, ...]],
+    limit: int,
+    dom_by: Optional[Dict[int, frozenset]],
+    canon: Optional[Dict[int, int]],
+) -> List[Tuple[int, ...]]:
+    """规范化 + 去重，并把条数**补回 limit**。
+
+    为什么必须补：去重会把多支收敛成同一个代表（这是省时间的来源），但条数一少，
+    "每轮评 limit 支"的预算就提前走完 → 覆盖条数下降（实测 Bug反馈3 的 200 名之后
+    有 508 处变差、Bug反馈1 的第 8~10 名少了 3 支并列最高分）。
+    补法：从**原枚举顺序**继续往下取，取到的代表只要没出现过就收下，直到 limit 条。
+    这既保住了"被评估条数"，又让每一支都是（不更差的）代表。
+    """
+    out = _canonicalize_list(picked, dom_by, canon)
+    if not dom_by or not canon or len(out) >= limit:
+        return out
+    seen = set(out)
+    for combo in combos:
+        if len(out) >= limit:
+            break
+        rep = _canonical_combo(combo, dom_by, canon)
+        if rep in seen:
+            continue
+        seen.add(rep)
+        out.append(rep)
+    return out
+
+
 def _generate_servant_combinations(
     candidate_ids: Sequence[int],
     choose_count: int,
@@ -530,6 +730,8 @@ def _sample_servant_combinations(
     trait_craft_ids: Optional[Sequence[int]] = None,
     craft_slots: int = 5,
     dual_pass: bool = False,
+    dom_by: Optional[Dict[int, frozenset]] = None,
+    canon: Optional[Dict[int, int]] = None,
 ) -> List[Tuple[int, ...]]:
     """抽取要完整评估的从者组合。
 
@@ -541,13 +743,18 @@ def _sample_servant_combinations(
     dual_pass=True 时返回「质量优先 ∪ 等距抽样」的去重并集（各占一半预算），
     兼顾"挑好的"与"不整片漏掉某个特性方向"。
     """
+    # 选择逻辑（长度判断 / 等距抽样 / 质量优先）**一字不动**：
+    # 动了列表就等于换了抽样样本（实测 r7 的 Top1 会从 10.888 掉到 10.712）。
+    # 值优先剪枝只在最后一步做：把选中的每一支换成它的代表并去重（代表不更差 → 无损）。
     combos = list(_generate_servant_combinations(candidate_ids, choose_count))
     if len(combos) <= limit:
-        return combos
+        return _canonicalize_list(combos, dom_by, canon)
 
     if ctx is None or not trait_craft_ids:
         step = len(combos) / max(1, limit)
-        return [combos[int(i * step)] for i in range(limit)]
+        return _canonicalize_refill(
+            [combos[int(i * step)] for i in range(limit)], combos, limit, dom_by, canon
+        )
 
     def potential(lineup: Tuple[int, ...]) -> float:
         return _lineup_trait_potential(ctx, lineup, trait_craft_ids, craft_slots)
@@ -556,7 +763,7 @@ def _sample_servant_combinations(
     ranked = sorted(combos, key=potential, reverse=True)
     picked = ranked[:quality_budget]
     if not dual_pass:
-        return picked
+        return _canonicalize_refill(picked, combos, limit, dom_by, canon)
 
     # 多样性补充：等距抽样，保证每个方向都有代表
     stride_budget = limit - len(picked)
@@ -567,7 +774,7 @@ def _sample_servant_combinations(
         if cand not in seen:
             seen.add(cand)
             picked.append(cand)
-    return picked
+    return _canonicalize_refill(picked, combos, limit, dom_by, canon)
 
 
 def _is_merged_generic_universal5(ctx: DataContext, craft_id: int) -> bool:
@@ -762,16 +969,20 @@ def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
     return max(2, min(15, pool_size, by_budget))
 
 
+# 榜上"每行站位复核"（2026-10-10 第三轮）：
+#   第一道＝读引擎自己算好的每人倍率、按"去掉前排加成后的倍率"排序换位（几乎零成本，覆盖整榜）；
+#   第二道＝对榜前若干行再做一次全排列枚举兜底（防将来新增"跟位置有关"的项时排序键覆盖不到）。
+_POSFIX_ENUM_ROWS = 50
+# 同分可替换阵容在每一行里最多列多少支（2026-10-10：100 → 500，避免补算后同分组变大时被截得太狠）
+_ALT_CAP = 500
+
+
 def _optimize_free_positions_enabled(req: CalculationRequest) -> bool:
     """是否对精算阵容再做一次自由位全排列优化。
 
-    2026-10-10：**改成全档位开启**（原来只在 `timeout_ms >= 135000` 的两档开，怕"额外算力成本"）。
-    实测成本 **+0.2~0.3s**：它只对精算名单里 ≤15 套阵容做 ≤120 种排列 ≈ 1800 次评估，
-    而前面那些趟动辄评 10 万+ 个队伍 —— 摊薄之后可以忽略。
-    收益是把"启发式放位"漏掉的换位补回来（2026-10-10 反馈：90s 档把贞德放后排 → 10.848；
-    换到前排 → 10.888，且 35/60/90s 三档都修好）。
-
-    ⚠️ 这个门控留着是为了将来真要按档位裁剪时有个落点；现在直接返回 True。
+    2026-10-10：**改成全档位开启**（原来只在 `timeout_ms >= 135000` 的两档开）。
+    实测成本 +0.2~0.3s，收益是把"启发式放位"漏掉的换位补回来（90s 档贞德后排 10.848
+    → 前排 10.888）。
     """
     return True
 
@@ -1474,6 +1685,174 @@ def _support_craft_options(ctx: DataContext, req: CalculationRequest) -> List[in
     return _auto_support_craft_options(ctx, req)
 
 
+def _servant_craft_effect_max(
+    ctx: DataContext,
+    servant_id: int,
+    crafts: Sequence[Any],
+) -> Tuple[float, float]:
+    """某从者在"这套礼装"下能达到的**最大**（特性%合计, 固定值合计）。
+
+    引擎给每个人选阶段/灵衣时，就是挑"让这个人收益最大"的那个形态
+    （`calculator._stage_target_for`）。这里取同样的口径：遍历该从者的所有形态，
+    取收益最大的那一个 —— 它决定了这个人在本队的加成，也就决定了整队分数。
+    """
+    info = ctx.servants.get(servant_id)
+    if info is None or not info.traits:
+        return 0.0, 0.0
+    best = (0.0, 0.0)
+    for key in info.traits:
+        mask = info.mask_for(key)
+        if not mask:
+            continue
+        pct = calculator.trait_bonus_for_mask(mask, crafts)
+        flat = calculator.flat_bonus_for_mask(mask, crafts)
+        if (pct, flat) > best:
+            best = (pct, flat)
+    return best
+
+
+def _same_score_team_alternatives(
+    ctx: DataContext,
+    box: Dict[int, BoxServant],
+    pool: Sequence[int],
+    fixed_ids: Set[int],
+    team: TeamConfig,
+    cache: Optional[Dict[Any, Any]] = None,
+    limit: int = 100,
+) -> Tuple[List[Dict[str, int]], int]:
+    """与给定阵容**分数完全相同**的可替换阵容（含原阵容本身）+ 组的真实规模。
+
+    用途：界面把"同分队"合并成一栏，下拉展开列出全部，并允许点选把某一支顶到该栏首位。
+
+    返回：([{位置: 从者 id}, ...]（最多 limit 条）, 组内总条数)。
+
+    为什么可以**不补评**就断言同分：真实打分是
+        Σ_p (1 + 前排系数_p) × (1 + 通用 + 助战 + 特性_p + 满绊 + 活动 + 光环 + 个人_p)
+    于是同位置把 x 换成 y 时，只要
+        · Cost、`personal_bonus`、`aura_bonus`、满绊开关、全队加成开关**全都一样**；
+        · 在本队这套礼装下，y 能达到的最大 (特性%, 固定值) 与 x 的**完全相同**；
+    那么每个位置的乘数逐项相同 ⇒ 整队分数恒等（换位优化取的也是同一组排列的最大值）。
+    这是恒等式，不是"估计"。
+
+    ⚠️ 只在本队礼装**已定**的场合用（上界/剪枝那几趟礼装还没定，口径不成立）。
+    ⚠️ 替身只在引擎真正枚举过的池里找 —— 池外的人本来就不会出现。
+    ⚠️ 这里只管"**就地换人**"（礼装、站位不动）。少数同分队是靠**另一套礼装**才追平的
+      （光换人换不满），那种要单独跑一趟礼装搜索才算得出来，成本高，不在这里管。
+    """
+    players = [p for p in team.players]
+    if not players:
+        return [], 0
+    crafts: List[Any] = []
+    for p in players:
+        for cid in (p.craft_id, p.second_craft_id):
+            if cid is not None and cid in ctx.crafts:
+                crafts.append(ctx.crafts[cid])
+    for cid in (team.support_craft_id, team.support_second_craft_id):
+        if cid is not None and cid in ctx.crafts:
+            crafts.append(ctx.crafts[cid])
+
+    cache = cache if cache is not None else {}
+    key = tuple(sorted(c.id for c in crafts))
+
+    def effect(sid: int) -> Tuple[float, float]:
+        ck = (key, sid)
+        hit = cache.get(ck)
+        if hit is None:
+            hit = _servant_craft_effect_max(ctx, sid, crafts)
+            cache[ck] = hit
+        return hit
+
+    def meta(sid: int) -> Tuple[Any, ...]:
+        bs = box.get(sid)
+        info = ctx.servants.get(sid)
+        if bs is None or info is None:
+            return (None,)
+        return (
+            info.cost,
+            round(float(bs.personal_bonus or 0.0), 9),
+            round(float(bs.aura_bonus or 0.0), 9),
+            bool(bs.count_personal_bond),
+            bool(bs.count_in_team_bonus),
+        )
+
+    # 逐位：谁能替（本人 + 收益/口径完全一致的人）
+    choices: List[List[int]] = []
+    for p in players:
+        sid = p.servant_id
+        if sid in fixed_ids:
+            choices.append([sid])
+            continue
+        base = (meta(sid), effect(sid))
+        same = [sid]
+        for other in pool:
+            if other == sid or other in fixed_ids:
+                continue
+            if (meta(other), effect(other)) == base:
+                same.append(other)
+        choices.append(same)
+
+    out: List[Dict[str, Any]] = []
+    total = 0
+    seen_teams: Set[Any] = set()
+    for combo in itertools.product(*choices):
+        if len(set(combo)) != len(combo):
+            continue
+        assign = {
+            p.position: (sid, p.craft_id, p.second_craft_id)
+            for p, sid in zip(players, combo)
+        }
+        # 同一"前排配置集合 + 后排配置集合"就是**同一支队**（前排内部、后排内部换位既不影响分数，
+        # 也不影响用户看到的东西）→ 去重，否则下拉里会出现"只是后排两个人换了个位置"的假分支。
+        team_key = _config_partition_key(assign)
+        if team_key in seen_teams:
+            continue
+        seen_teams.add(team_key)
+        total += 1
+        if len(out) < limit:
+            out.append(assign)
+    return out, total
+
+
+def _config_partition_key(assign: Dict[str, Any]) -> Any:
+    """一支配置的规范键：前排的 (从者, 主礼装, 第二礼装) 集合 + 后排的同样集合。
+
+    前排内部 / 后排内部互换位置不改变分数，也不改变用户看到的东西 → 视为同一支队。
+    """
+    front = frozenset(
+        v for pos, v in assign.items() if pos in FRONT_POSITIONS
+    )
+    back = frozenset(
+        v for pos, v in assign.items() if pos not in FRONT_POSITIONS
+    )
+    return (front, back)
+
+
+def _craft_multiset_key(item: Dict[str, Any]) -> Any:
+    """一支队伍用到的礼装**多重集**（含助战；不区分放在哪个位置/谁拿 —— 用户口径：位置无伤大雅）。"""
+    crafts = []
+    for m in item.get("team") or []:
+        for cid in (m.get("craftId"), m.get("secondCraftId")):
+            if cid is not None:
+                crafts.append(cid)
+    return tuple(sorted(crafts))
+
+
+def _entry_key(entry: Dict[str, Any], slot_order: Sequence[str]) -> Any:
+    """下拉里一条"同分阵容"的规范键：**前排成员集合 + 后排成员集合**。
+
+    用户口径（2026-10-10 第三次确认）：
+      · 合并条件 = **分数相同 且 礼装一模一样**（礼装放在哪个位置/谁拿，无伤大雅）；
+      · 组内**不要**出现"只是交换了位置"的队伍同时出现，但**前后排要分开算**
+        （同一批人，谁站前排是**真区别**：前排 +20% 先发加成）。
+    所以键里只有"前排是谁、后排是谁"，没有礼装、也没有前排内部/后排内部的次序。
+    """
+    front = set()
+    back = set()
+    for pos, sid in zip(slot_order, entry.get("servantIds") or []):
+        (front if pos in FRONT_POSITIONS else back).add(sid)
+    return (frozenset(front), frozenset(back))
+
+
 def _solution_dict(result: Dict[str, Any], rank: int) -> Dict[str, Any]:
     return {
         "rank": rank,
@@ -1523,6 +1902,12 @@ class _RelaxedPlayer:
     aura_bonus: float
     counted: bool          # 自身是否计入牵绊收益（满绊关开关二为 False）
     counts_max_bond: bool  # 是否计入全队 25% 满绊人数
+    # 2026-10-10（§4.7 收紧）：位置未钉死的人，真实评估可以在自由位上换前后排 →
+    # 上界必须按"同样能换"来取最大，但又不能所有人一律用前排系数（会把上界吹高、剪枝失效）。
+    movable: bool = False          # 该位置是否未钉死（可换）
+    ff_front: float = 0.0          # 换到前排时的位置系数
+    ff_back: float = 0.0           # 换到后排时的位置系数
+    movable_front_slots: int = 0   # 本队"可动的前排位数"＝配对时的前排名额
 
 
 def _relaxed_players_from_mapping(
@@ -1532,9 +1917,21 @@ def _relaxed_players_from_mapping(
     box: Dict[int, BoxServant],
     mapping: Dict[str, int],
 ) -> List[_RelaxedPlayer]:
-    """按“固定从者 + 本次抽样映射”还原 5 个玩家位，生成松弛评分用条目。"""
+    """按“固定从者 + 本次抽样映射”还原 5 个玩家位，生成松弛评分用条目。
+
+    `front_factor` 仍是**贪心放位**下的实际系数；另外记下"可换位"信息（`movable` /
+    `ff_front` / `ff_back` / `movable_front_slots`），供上界按"评估时能换位"取最大
+    （见 `_relaxed_member_sum`）。
+    """
     players: List[_RelaxedPlayer] = []
     support_in_front = bool(bp.support_position in FRONT_POSITIONS)
+    free_positions = set(bp.free_servant_positions)
+    ff_front = 1.0 + max(
+        calculator.frontline_bonus(pos, support_in_front) for pos in FRONT_POSITIONS
+    )
+    back_positions = [pos for pos in POSITIONS if pos not in FRONT_POSITIONS]
+    ff_back = 1.0 + calculator.frontline_bonus(back_positions[0], support_in_front)
+    movable_front_slots = sum(1 for pos in free_positions if pos in FRONT_POSITIONS)
     for slot in bp.player_slots:
         sid = slot.fixed_servant_id
         if sid is None:
@@ -1553,6 +1950,10 @@ def _relaxed_players_from_mapping(
                 aura_bonus=bs.aura_bonus,
                 counted=bs.count_personal_bond,
                 counts_max_bond=bs.count_in_team_bonus,
+                movable=slot.position in free_positions,
+                ff_front=ff_front,
+                ff_back=ff_back,
+                movable_front_slots=movable_front_slots,
             )
         )
     return players
@@ -1563,6 +1964,40 @@ def _relaxed_team_constants(players: Sequence[_RelaxedPlayer]) -> Tuple[int, flo
     max_bond_count = sum(1 for p in players if p.counts_max_bond)
     aura_total = sum(float(p.aura_bonus or 0.0) for p in players)
     return max_bond_count, aura_total
+
+
+def _relaxed_member_sum(
+    players: Sequence[_RelaxedPlayer],
+    values: Sequence[float],
+) -> float:
+    """Σ_p 位置系数_p × values_p，其中"可换位的人"按**能换到的最有利放位**取最大。
+
+    为什么必须这样（2026-10-10，坑 113）：真实打分对**所有放位取最优**
+    （`_optimize_free_positions` 会枚举自由位排列，v0.2.1 起所有档位都做），
+    所以上界也必须按"能换"来算；但**不能所有人一律用前排系数** ——
+    实测那样会把 r7 的上界从 10.848 吹到 12.028（+1.14），剪枝随之失效
+    （被评估阵容 673→35,232、杀冠撞满 300s）。
+
+    重排不等式：位置系数只有 {前排, 后排} 两档，且前排名额只有 `movable_front_slots` 个
+    → 把**分值最大的那几个**放前排即得最大（仍是合法上界，但比一刀切紧得多）。
+    """
+    total = 0.0
+    movable: List[Tuple[float, float, float]] = []
+    slots = 0
+    for p, v in zip(players, values):
+        if not p.counted:
+            continue
+        if p.movable:
+            movable.append((float(v), p.ff_front, p.ff_back))
+            slots = p.movable_front_slots
+        else:
+            total += p.front_factor * v
+    if not movable:
+        return total
+    movable.sort(key=lambda t: -t[0])
+    for i, (v, ff, fb) in enumerate(movable):
+        total += (ff if i < slots else fb) * v
+    return total
 
 
 def _uses_points_scoring(req: CalculationRequest) -> bool:
@@ -1591,23 +2026,24 @@ def _relaxed_base_score(
     req: CalculationRequest,
     players: Sequence[_RelaxedPlayer],
 ) -> float:
-    """没有任何自由礼装/助战礼装时的松弛总分基线。"""
+    """没有任何自由礼装/助战礼装时的松弛总分基线。
+
+    ⚠️ 位置系数按"可换位的人能换到的最有利放位"取（`_relaxed_member_sum`），
+    否则不是合法上界（r7 实测：贪心放位 10.848 < 真值 10.888）。
+    """
     max_bond_count, aura_total = _relaxed_team_constants(players)
     activity = req.activity_bonus or 0.0
     weight = _relaxed_percent_weight(req)
-    total = 0.0
+    inners: List[float] = []
     for p in players:
-        if not p.counted:
-            continue
-        inner = (
+        inners.append(
             1.0
             + max_bond_count * 0.25
             + activity
             + aura_total
             + p.personal_bonus
         )
-        total += p.front_factor * inner
-    return weight * total
+    return weight * _relaxed_member_sum(players, inners)
 
 
 def _relaxed_craft_score(
@@ -1619,14 +2055,17 @@ def _relaxed_craft_score(
     """单张玩家位礼装的松弛总分贡献。
 
     特性礼装按“该从者任一阶段/灵衣可满足条件”计入，可能高估，但保证不低估。
+    位置系数同样按"可换位的人能换到的最有利放位"取（`_relaxed_member_sum`）；
+    注意"固定数值加成"（flat）不吃位置系数，仍按人头直接累加。
     """
     if craft is None:
         return 0.0
     weight = _relaxed_percent_weight(req)
-    percent_score = 0.0
+    values: List[float] = []
     flat_score = 0.0
     for p in players:
         if not p.counted:
+            values.append(0.0)
             continue
         can_match = craft.bonus_type == "universal"
         if craft.bonus_type == "trait":
@@ -1634,10 +2073,11 @@ def _relaxed_craft_score(
         if craft.bonus_type == "support_only" and craft.bonus_value > 0:
             can_match = True
         if not can_match:
+            values.append(0.0)
             continue
-        percent_score += float(craft.bonus_value) * p.front_factor
+        values.append(float(craft.bonus_value))
         flat_score += float(craft.flat_bonus or 0.0)
-    score = weight * percent_score
+    score = weight * _relaxed_member_sum(players, values)
     if _uses_points_scoring(req):
         # 只有点数口径才把「固定数值加成」计入分数；倍率口径下它不参与排序，
         # 上界里也不该算（排除后上界依然只高不低，剪枝仍然安全）。
@@ -1745,6 +2185,54 @@ def _support_max_relaxed_add(
     return best
 
 
+def _exact_best_craft_score(
+    ctx: DataContext,
+    candidate_craft_ids: Sequence[int],
+    free_slots_count: int,
+    cost_budget: int,
+    repeatable_ids: Set[int],
+    zero_cost_slots: Optional[Sequence[bool]],
+    craft_scores: Dict[int, float],
+) -> float:
+    """礼装组合的**最高松弛分**（单值背包 DP，无 beam）——只给上界用。
+
+    为什么需要它：原来上界的礼装项取自 beam 限宽的 DP（每状态只留 top_k 条组合），
+    那不是"最大可能值"，因此**不是合法上界**（2026-10-10 实测：53% 的配对里真实分 > 上界，
+    最差差 1.32 —— 这正是坑 94，也是 11.096 被误剪的根因）。
+    而上界只需要**分数**、不需要组合 → 用最朴素的背包 DP（每个 (槽位数, 原始 Cost) 状态只存一个最大值）
+    即可，既**可证明 ≥ 真值**，又比维护 12 条组合列表更便宜。
+
+    ⚠️ 真实 Cost 这里做**放宽**（raw_cap = 预算 + 免费槽位数 × 最大礼装 Cost）；放宽只会让最大值更大 →
+    仍然是上界，只是稍微松一点。
+    """
+    candidates = [cid for cid in candidate_craft_ids if cid in craft_scores]
+    if free_slots_count <= 0 or not candidates:
+        return 0.0
+    zero_count = sum(1 for z in (zero_cost_slots or []) if z)
+    max_cost = max((ctx.crafts[cid].cost for cid in candidates), default=0)
+    raw_cap = min(free_slots_count * max_cost, max(0, cost_budget) + zero_count * max_cost)
+    dp: Dict[Tuple[int, int], float] = {(0, 0): 0.0}
+    for cid in candidates:
+        value = craft_scores[cid]
+        if value <= 0:
+            continue
+        cost = ctx.crafts[cid].cost
+        if cost <= 0:
+            continue
+        max_copies = free_slots_count if cid in repeatable_ids else 1
+        for (used, raw), score in list(dp.items()):
+            for copies in range(1, max_copies + 1):
+                new_used = used + copies
+                new_raw = raw + cost * copies
+                if new_used > free_slots_count or new_raw > raw_cap:
+                    break
+                key = (new_used, new_raw)
+                cand = score + value * copies
+                if cand > dp.get(key, float("-inf")):
+                    dp[key] = cand
+    return max(dp.values()) if dp else 0.0
+
+
 def _combo_relaxed_score(
     combo: Sequence[int],
     craft_scores: Dict[int, float],
@@ -1824,6 +2312,14 @@ def _dp_top_craft_combinations(
         old_items = list(dp.items())
         for (used, raw_cost), entries in old_items:
             for base_score, base_combo in entries:
+                # ⚠️ 不可重复的礼装必须在**生成时**就拦住，不能只靠最后那道校验：
+                # 每个状态只留 top_k 条，而"同一张礼装重复出现"的非法组合分数最高
+                # （等于把单张分数乘了几倍），会把合法组合全挤出 beam ——
+                # 结果 DP 只剩"装 2~3 张"的残缺组合，最后校验再把它们当非法丢掉。
+                # 2026-10-09 实测（杀冠反馈）：预算 63 / 6 槽时，DP 最高只给到 3 张
+                # （多个状态最高分正好是 k×1.12 = k 张同一张 1.12 的礼装）。
+                if cid not in repeatable_ids and cid in base_combo:
+                    continue
                 # 同一种礼装一次性加 copies 张，避免同轮内重复使用该类型。
                 for copies in range(1, max_copies + 1):
                     new_used = used + copies
@@ -1928,6 +2424,7 @@ def _relaxed_score_upper_bound(
     cost_budget: int = 0,
     zero_cost_slots: Optional[Sequence[bool]] = None,
     fixed_bond_craft_ids: Optional[Sequence[int]] = None,
+    exact_craft_score: Optional[float] = None,
 ) -> float:
     """计算一套从者阵容的保守总分上界（对应 _score_from_metrics 的口径）。
 
@@ -1941,9 +2438,14 @@ def _relaxed_score_upper_bound(
     # 固定礼装已经占用了槽位，效果恒定存在；上界必须包含它们，否则会低估可达到分数。
     for cid in (fixed_bond_craft_ids or []):
         baseline += _relaxed_craft_score(ctx, req, ctx.crafts.get(cid), players)
-    best_craft_score = max(
-        (_combo_relaxed_score(combo, craft_scores) for _, combo in dp_combos),
-        default=0.0,
+    # 有精确值就用精确值（合法上界）；没有就退回 DP 结果里的最大值（老行为）
+    best_craft_score = (
+        exact_craft_score
+        if exact_craft_score is not None
+        else max(
+            (_combo_relaxed_score(combo, craft_scores) for _, combo in dp_combos),
+            default=0.0,
+        )
     )
     support_add = _support_max_relaxed_add(
         ctx, req, support_top_options, support_second_options, players, repeatable_ids
@@ -1962,7 +2464,9 @@ def _relaxed_score_upper_bound(
         target_inner += (req.activity_bonus or 0.0)
         target_inner += sum(float(p.aura_bonus or 0.0) for p in players)
         target_inner += target.personal_bonus
-        target_base = _relaxed_percent_weight(req) * target.front_factor * target_inner
+        target_base = _relaxed_percent_weight(req) * (
+            target.ff_front if target.movable else target.front_factor
+        ) * target_inner
         target_scores = _make_craft_score_map(ctx, req, target_players, candidate_craft_ids or [])
         target_dp = _dp_top_craft_combinations(
             ctx,
@@ -2326,14 +2830,21 @@ def search_top_teams(
     )
 
     best_by_set: Dict[Tuple[int, ...], Dict[str, Any]] = {}
+    # best-first 第一趟收集的"枚举全集里出现过的特性礼装"（供二轮补池用，与剪枝解耦）
+    _enum_trait_cids: Set[int] = set()
+    # 每套阵容的松弛 DP 组合跨轮复用（见 _prepare_dp_craft_combos_for_team 的说明）
+    _dp_cache: Dict[Any, Any] = {}
     # 每套阵容的松弛 DP 组合跨轮复用（见 _prepare_dp_craft_combos_for_team 的说明）：
     # 只在本函数内有效，不挂 ctx（避免同进程多次请求之间串味）。
     _dp_cache: Dict[Any, Any] = {}
+    # 值优先剪枝的 (支配关系, 代表表) 缓存（同上：以一次 search 为界，不挂 ctx）
+    _dom_cache: Dict[Any, Any] = {}
     # 2026-10-07（A6）：剪枝要的是"当前结果集里第 top_n 大的分数"，
     # 原实现**每个阵容**都 sorted(全部分数) 一遍（结果集几万条 × 几万次调用 ≈ 10%+）。
     # 这里用升序有序表精确维护同一个值：写入/替换时 insort、删除旧值；查询 = _score_sorted[-top_n]。
     # ⚠️ 必须精确：用近似值或延迟刷新会改变剪枝判定 → 会改变搜索结果。
-    # ⚠️ 结果集有**两个**改动点（写入新条目 / 自由位优化的原地升级），两处都要同步。
+    # ⚠️ 结果集有**三个**改动点（写入新条目 / 自由位优化的原地升级 / 礼装 1-换局部搜索的原地升级），
+    # 每处都要同步。
     _score_sorted: List[float] = []
 
     def _score_add(value: float) -> None:
@@ -2472,9 +2983,88 @@ def search_top_teams(
                 best_team = candidate
         return best_team
 
+    def _craft_local_search(team):
+        """礼装组合的后置 1-换局部搜索（2026-10-10，玩家反馈①的第一条）。
+
+        精算轮虽然把完整礼装组合跑过一遍，但那趟的取舍仍带着松弛排序 + 组合上限截断的痕迹，
+        可能停在「整队实际分数更高、只差一格」的解旁边（实测：把一张只有一人能吃的特性礼装
+        换成第二张可重复的通用 5%，整队 +0.04）。这里以精算出的队伍为起点，在自由礼装格上
+        做一次廉价的 1-换爬坡：逐格换成候选池里的另一张礼装，用引擎自己的真实分
+        （optimize_team_stages + calculate_team_metrics）判定，只接受严格更优的解。
+
+        ⚠️ 邻域必须允许「再用一张已经用过的可重复礼装」，否则拿不到「两张通用 5%」那类解。
+        ⚠️ 每个候选都重建全部 PlacedMember：optimize_team_stages 会**原地改 stage**，
+           复用对象会把候选的阶段写回原队伍。
+        ⚠️ 只接受严格更优 → 名次只会变好或不变。
+        """
+        if not craft_pool or not team.players:
+            return team
+        free_slots = [cs for cs in bp.player_craft_slots if cs.fixed_craft_id is None]
+        if not free_slots:
+            return team
+
+        def build_with(position, index, cid):
+            players = []
+            for p in team.players:
+                if p.position == position:
+                    players.append(replace(
+                        p,
+                        craft_id=cid if index == 0 else p.craft_id,
+                        second_craft_id=cid if index == 1 else p.second_craft_id,
+                    ))
+                else:
+                    players.append(replace(p))
+            return replace(team, players=players)
+
+        best_team = team
+        metrics = calculator.calculate_team_metrics(ctx, best_team)
+        best_score, _ = _score_from_metrics(metrics, best_team, metrics["multipliers"])
+        for _round in range(2):
+            improved = False
+            for cs in free_slots:
+                player = next(
+                    (p for p in best_team.players if p.position == cs.position), None
+                )
+                if player is None:
+                    continue
+                current = player.second_craft_id if cs.index == 1 else player.craft_id
+                used: Dict[int, int] = {}
+                for p in best_team.players:
+                    for cid in (p.craft_id, p.second_craft_id):
+                        if cid is not None:
+                            used[cid] = used.get(cid, 0) + 1
+                base_cost = calculator.team_cost(ctx, best_team)
+                old_cost = ctx.crafts[current].cost if current in ctx.crafts else 0
+                for cid in craft_pool:
+                    if cid == current:
+                        continue
+                    craft = ctx.crafts.get(cid)
+                    if craft is None or not craft.is_bond_ce:
+                        continue
+                    # 可重复礼装（通用 5%）允许在多个格子上同时出现
+                    if used.get(cid, 0) > 0 and cid not in repeatable_ids:
+                        continue
+                    if cs.index == 0:
+                        new_cost = base_cost - old_cost + craft.cost
+                        if new_cost > req.cost_limit and new_cost > base_cost:
+                            continue
+                    candidate = calculator.optimize_team_stages(
+                        ctx, build_with(cs.position, cs.index, cid)
+                    )
+                    m = calculator.calculate_team_metrics(ctx, candidate)
+                    score, _rk = _score_from_metrics(m, candidate, m["multipliers"])
+                    if score > best_score + 1e-9:
+                        best_score = score
+                        best_team = candidate
+                        improved = True
+            if not improved:
+                break
+        return best_team
+
     # 钉死礼装的口径下，基于"礼装自由"算出来的 ub 不适用 → 那一趟评估期间临时关掉剪枝
     _no_prune = [False]
-    def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False, pair_optimize=False):
+    def evaluate_extras(extras_tuple, craft_combos=None, use_dp=False, pair_optimize=False,
+                        ub_only=False, ub_out=None, trait_out=None):
         nonlocal seen, evaluated_total, global_best_score
         original_craft_combos = craft_combos
         used_players = set(bp.fixed_servant_ids) | set(extras_tuple)
@@ -2544,7 +3134,29 @@ def search_top_teams(
                     cost_budget=ce_budget,
                     zero_cost_slots=free_bond_zero_cost,
                     fixed_bond_craft_ids=bp.fixed_bond_craft_ids,
+                    exact_craft_score=(
+                        _exact_best_craft_score(
+                            ctx, craft_pool, free_slots_count, ce_budget, repeatable_ids,
+                            free_bond_zero_cost, craft_scores,
+                        )
+                        if dp_players
+                        else None
+                    ),
                 )
+                if ub_out is not None:
+                    ub_out[extras_tuple] = ub
+                if trait_out is not None and dp_combos:
+                    # 二轮补池的解耦：把这套阵容 DP 组合里出现过的**特性礼装**记下来。
+                    # 它在"枚举全集"上收集，与"这套阵容最终有没有被评估"无关 →
+                    # 剪枝调度不再影响二轮补池的输入（2026-10-10：这正是 best-first 丢档的原因）。
+                    for _cost0, _combo0 in dp_combos:
+                        for _cid0 in _combo0:
+                            _cr0 = ctx.crafts.get(_cid0)
+                            if _cr0 is not None and _cr0.bonus_type == "trait":
+                                trait_out.add(_cid0)
+                if ub_only:
+                    # best-first 第一趟：只算上界、不评估
+                    return None
                 # 剪枝目标是“Top-N 阈值”，不是“当前最高分”：
                 # 否则会把所有低于当前第一名的队伍全剪掉，只剩一个结果。
                 if len(best_by_set) >= req.top_n and not _no_prune[0]:
@@ -2661,6 +3273,14 @@ def search_top_teams(
     ):
         nonlocal processed_total
         processed = 0
+        # 值优先剪枝：池内算一次支配关系 + 代表表（只取决于池与 Box 口径，同一次搜索内不变）
+        _dom_key = tuple(candidate_ids)
+        _prep = _dom_cache.get(_dom_key)
+        if _prep is None:
+            _dom = _dominance_map(ctx, box, candidate_ids, trait_ids)
+            _prep = (_dom, _canonical_map(candidate_ids, _dom)) if _dom else ({}, {})
+            _dom_cache[_dom_key] = _prep
+        _dom, _canon = _prep
         combos_iter = (
             _sample_servant_combinations(
                 candidate_ids,
@@ -2670,10 +3290,19 @@ def search_top_teams(
                 trait_craft_ids=trait_ids,
                 craft_slots=max(1, len(bp.free_bond_positions) or len(bp.player_craft_slots)),
                 dual_pass=(len(candidate_ids) > choose_count * 3),
+                dom_by=_dom,
+                canon=_canon,
             )
             if servant_limit is not None
             else _generate_servant_combinations(candidate_ids, choose_count)
         )
+        # ===== best-first（2026-10-10）=====
+        # 旧做法：按枚举顺序逐队"算 DP → 剪枝 → 评估"，cutoff 从低往高涨，
+        # 早期队伍在低阈值下混进全量评估（实测 4,946 个被评估阵容里只有 1,007 个是"必须评"的）。
+        # 新做法：① 先只算上界（DP 反正每队都要算）② 按上界降序评估，ub < cutoff 整批跳过。
+        # ✅ 安全性依赖"上界合法"：配合 _exact_best_craft_score（单值精确背包 DP）成立；
+        #    二轮补池的输入已改为从枚举全集收集（_enum_trait_cids），不再受剪枝影响。
+        pending: List[Tuple[float, Tuple[int, ...]]] = []
         for extras_tuple in combos_iter:
             # 工作量优先：先按确定性数量跑（同样的请求 → 同样的搜索量 → 同样的结果），
             # 墙钟只作为兜底安全网（真机上机器特别慢时才会触发，此时结果会标 truncated）。
@@ -2690,7 +3319,11 @@ def search_top_teams(
                 processed += 1
                 processed_total += 1
                 continue
-            evaluate_extras(extras_tuple, craft_combos, use_dp=use_dp)
+            ub_box: Dict[Any, float] = {}
+            evaluate_extras(extras_tuple, craft_combos, use_dp=use_dp, ub_only=True,
+                            ub_out=ub_box, trait_out=_enum_trait_cids)
+            # 拿不到上界（例如该阵容没法组队）→ 当 +inf，保证它仍然会被评估，不丢覆盖
+            pending.append((ub_box.get(extras_tuple, float("inf")), extras_tuple))
             processed += 1
             processed_total += 1
             if processed % 10 == 0 or processed == 1:
@@ -2703,6 +3336,19 @@ def search_top_teams(
                         f"已评估 {evaluated_total:,} 个队伍配置"
                         f"（时间预算 {timeout_seconds:.0f}s，当前 {elapsed:.1f}s）"
                     )
+
+        # 第二趟：按上界降序评估（稳定排序 → 等上界保持原枚举顺序，可复现）
+        pending.sort(key=lambda item: -item[0])
+        for ub, extras_tuple in pending:
+            if time.time() >= deadline:
+                truncated[0] = True
+                break
+            check_cancel()
+            if len(best_by_set) >= req.top_n and not _no_prune[0]:
+                cutoff = _score_sorted[-req.top_n]
+                if ub < cutoff - 1e-9:
+                    break  # 降序 → 后面的上界只会更低，整批跳过（上界合法 ⇒ 它们进不了 Top-N）
+            evaluate_extras(extras_tuple, craft_combos, use_dp=use_dp)
 
     # 复现模式：用原计算的“分阶段处理数量”代替墙钟时间作为停止条件。
     # 这样即使短验证串搜索更快，也会在完全相同的进度点停下，结果可精确复现。
@@ -2732,13 +3378,16 @@ def search_top_teams(
     # 第二轮：根据第一轮实际用到的特性礼装 + 固定队协同补人后再粗搜。
     second_ran = False
     second_processed = 0
+    # 第二轮补进来的候选（算"同分可替换"时要一并当替身候选）
+    _second_pool_ids: List[int] = []
     if phase_limits is not None:
         should_run_second = bool(phase_limits.get("secondRan"))
     else:
         # 确定性：只要第一轮有结果、且没有触发墙钟兜底，就跑第二轮（不再看剩余时间）
         should_run_second = bool(best_by_set) and not truncated[0]
     if should_run_second:
-        used_trait_craft_ids = _collect_used_trait_craft_ids(ctx, best_by_set)
+        # 二轮补池的输入 = 被评队伍用到的 + **枚举全集里出现过的**（后者与剪枝调度无关）
+        used_trait_craft_ids = _collect_used_trait_craft_ids(ctx, best_by_set) | _enum_trait_cids
         expanded = _expand_reduced_for_trait_synergy(
             ctx,
             req,
@@ -2765,6 +3414,7 @@ def search_top_teams(
             )
             second_processed = processed_total - before_second
             second_ran = True
+            _second_pool_ids = list(expanded)
 
     # ① 礼装集合优先（v0.1.14，req.search_order == "craft"）
     # 以「礼装集合」为单位覆盖：一个集合 = 能触发该组合中任意一张的从者。
@@ -2838,6 +3488,10 @@ def search_top_teams(
                 if _abort_build:
                     break
             _sets.sort(key=lambda x: x[0], reverse=True)
+            # 值优先剪枝（这趟礼装是钉死的，换人同样保证不更差）
+            _dom_pc = _dominance_map(ctx, box, player_candidates, trait_ids)
+            _canon_pc = _canonical_map(player_candidates, _dom_pc) if _dom_pc else {}
+            _pc_seen: set = set()
             # 2) 每个集合：钉死这一组礼装 + 在并集内真枚举人选（配额按剩余预算摊分）
             _pass_lineups = 0
             _no_prune[0] = True
@@ -2868,6 +3522,10 @@ def search_top_teams(
                 ):
                     if _pass_lineups >= _lineup_budget:
                         break
+                    _lineup = _canonical_combo(_lineup, _dom_pc, _canon_pc)
+                    if _lineup in _pc_seen:
+                        continue
+                    _pc_seen.add(_lineup)
                     extras_tuple = tuple(sorted(set(_lineup) - set(bp.fixed_servant_ids)))
                     if not extras_tuple:
                         continue
@@ -2884,6 +3542,7 @@ def search_top_teams(
     )[:refine_count]
     refine_deadline = start + timeout_seconds
     refine_processed = 0
+    refined_entries: List[Dict[str, Any]] = []
     for entry in refine_entries:
         check_cancel()
         if phase_limits is not None:
@@ -2894,6 +3553,7 @@ def search_top_teams(
             truncated[0] = True
             break
         refine_processed += 1
+        refined_entries.append(entry)
         servant_set = entry.get("servant_set")
         if not servant_set:
             continue
@@ -3072,12 +3732,23 @@ def search_top_teams(
                                         break
             if not swaps:
                 break
+            # 值优先剪枝（2026-10-10）：邻域轮会把"被剪掉的阵容"当成新候选重新收进来
+            # （判据是 `key not in best_by_set`，而剪枝恰恰让它们不在结果集里）——
+            # 实测杀冠串因此白烧 4.25M 次组件调用、总耗时 70s→136s。
+            # 这里同样把候选换成代表：代表已在结果集里就跳过，否则只评代表。
+            _nb_dom = _dominance_map(ctx, box, neighbor_ids, trait_ids)
+            _nb_canon = _canonical_map(neighbor_ids, _nb_dom) if _nb_dom else {}
+            _nb_seen: set = set()
             new_best_before = global_best_score
             for key in list(swaps.keys()):
                 check_cancel()
                 if time.time() >= refine_deadline:
                     truncated[0] = True
                     break
+                key = _canonical_combo(key, _nb_dom, _nb_canon)
+                if key in best_by_set or key in _nb_seen:
+                    continue
+                _nb_seen.add(key)
                 extras_tuple = tuple(sorted(set(key) - set(bp.fixed_servant_ids)))
                 if not extras_tuple:
                     continue
@@ -3086,22 +3757,251 @@ def search_top_teams(
                 if global_best_score <= new_best_before + 1e-12:
                     break  # 本轮没有改进，提前收手
 
+    # 礼装层后置 1-换局部搜索（2026-10-10，玩家反馈①的第一条）。
+    # **必须放在所有搜索趟之后**：它只提高结果集里已有阵容的分数，不新增阵容；
+    # 若放在精算之后就做，抬高第 top_n 名的分数会改变后面几趟的截止阈值
+    # （`ub < cutoff` 那道剪枝）→ 别的阵容被剪得不一样 → 名次变差（实测 r7 的 5/6 名
+    # 10.712 → 10.504）。放到最后，它读写的就只是"最终结果集"，与评估顺序解耦。
+    # 只对真正精算过的阵容（≤15 套）做，成本毫秒级；换完礼装若真有改进，再回炉做一次
+    # 位置优化（礼装一变，最优站位可能跟着变）。
+    for entry in refined_entries:
+        if time.time() >= refine_deadline:
+            truncated[0] = True
+            break
+        servant_set = entry.get("servant_set")
+        if not servant_set:
+            continue
+        current = best_by_set.get(servant_set)
+        if not current:
+            continue
+        upgraded = _craft_local_search(current["team"])
+        if upgraded is current["team"]:
+            continue
+        if _optimize_free_positions_enabled(req):
+            upgraded = _optimize_free_positions(upgraded)
+        metrics = calculator.calculate_team_metrics(ctx, upgraded)
+        score, rank_key = _score_from_metrics(metrics, upgraded, metrics["multipliers"])
+        if rank_key > current["rank_key"]:
+            _score_remove(current["score"])  # A6：原地升级也要同步有序表
+            _score_add(score)
+            current["team"] = upgraded
+            current["score"] = score
+            current["rank_key"] = rank_key
+            if global_best_score is None or score > global_best_score:
+                global_best_score = score
+
     report("排序输出...")
     best_items = sorted(
         best_by_set.values(),
         key=lambda x: x["rank_key"],
         reverse=True,
     )[: req.top_n]
+
+    # 榜上"每行站位复核"（2026-10-10 第三轮）。背景：上面那道自由位排列优化只覆盖精算名单
+    # （≤15 支），榜上其余行还停在搜索时的启发式放位 —— 实测 Bug2 第 1 名报 9.80、本可 9.84，
+    # r7 低档第 1 名报 10.848、本可 10.888。这里把同一件事补到整榜。
+    # 纪律与 ①（礼装后置局部搜索）一致：放在所有搜索趟之后，只抬分、不新增阵容，
+    # 不回头影响任何一趟的 cutoff ⇒ 榜上逐名次只升不降。
+    def _rearrange_by_bonus(team):
+        """第一道：按"与站位无关的那部分加成"排序，把强的排进前排自由位。
+
+        排序键 = 该成员在这支队里的倍率 ÷ (1 + 前排加成)。**必须除以前排加成整项**：
+        那个倍率 = (1 + 前排加成) × (1 + 其余加成)，含前排加成在内的话，站在前排的人会
+        显得更强、排完还是原地不动（实测 20 行里只修得动 15 行）。分子分母都取自引擎
+        自己的计算结果，不自己拼"哪些项算前排加成"。
+        """
+        free_positions = sorted(bp.free_servant_positions, key=POSITIONS.index)
+        if len(free_positions) <= 1:
+            return team
+        by_pos = {p.position: p for p in team.players}
+        if any(pos not in by_pos for pos in free_positions):
+            return team
+        metrics = calculator.calculate_team_metrics(ctx, team)
+        mults = list(metrics.get("multipliers") or [])
+        if len(mults) != len(team.players):
+            return team
+        support_in_front = bool(
+            team.support_position is not None and team.support_position in FRONT_POSITIONS)
+        free_set = set(free_positions)
+        key: Dict[str, float] = {}
+        for player, mult in zip(team.players, mults):
+            if player.position not in free_set:
+                continue
+            front = calculator.frontline_bonus(player.position, support_in_front)
+            key[player.position] = (float(mult) / (1.0 + front)) if (1.0 + front) else 0.0
+        if len(key) != len(free_positions):
+            return team
+        ranked = sorted(free_positions, key=lambda pos: key[pos], reverse=True)
+        # 目标位置：前排自由位排在前面（前排位置之间可互换，后排同理）
+        target = [pos for pos in free_positions if pos in FRONT_POSITIONS] + \
+                 [pos for pos in free_positions if pos not in FRONT_POSITIONS]
+        assigned = {target[i]: by_pos[ranked[i]].servant_id for i in range(len(free_positions))}
+        if all(assigned[pos] == by_pos[pos].servant_id for pos in free_positions):
+            return team  # 已经是这个顺序，不用动
+        players = []
+        for player in team.players:
+            if player.position not in assigned:
+                players.append(player)
+                continue
+            slot = by_pos[player.position]
+            sid = assigned[player.position]
+            bs = box.get(sid)
+            players.append(PlacedMember(
+                position=player.position,
+                servant_id=sid,
+                stage=bs.stage if bs else player.stage,
+                personal_bonus=bs.personal_bonus if bs else player.personal_bonus,
+                aura_bonus=bs.aura_bonus if bs else player.aura_bonus,
+                max_bond=bs.max_bond if bs else player.max_bond,
+                bond_switch1=bs.bond_switch1 if bs else player.bond_switch1,
+                bond_switch2=bs.bond_switch2 if bs else player.bond_switch2,
+                craft_id=slot.craft_id,
+                second_craft_id=slot.second_craft_id,
+                is_crown=slot.is_crown,
+                fixed=False,
+                stage_locked=False,
+            ))
+        candidate = TeamConfig(
+            players=players,
+            support_position=team.support_position,
+            support_servant_id=team.support_servant_id,
+            support_craft_id=team.support_craft_id,
+            support_second_craft_id=team.support_second_craft_id,
+            crown_positions=team.crown_positions,
+            base_bond=team.base_bond,
+            activity_bonus=team.activity_bonus,
+        )
+        return calculator.optimize_team_stages(ctx, candidate)
+
+    if _optimize_free_positions_enabled(req):
+        posfix_fixed = 0
+        posfix_t0 = time.time()
+        # 第一道：整榜（成本 ≈ 每行两次轻量评估，与"结果条数"同阶、约 0.1 秒/千行）
+        for entry in list(best_items):
+            current = entry["team"]
+            candidate = _rearrange_by_bonus(current)
+            if candidate is current:
+                continue
+            metrics = calculator.calculate_team_metrics(ctx, candidate)
+            score, rank_key = _score_from_metrics(metrics, candidate, metrics["multipliers"])
+            if rank_key > entry["rank_key"]:
+                entry["team"] = candidate
+                entry["score"] = score
+                entry["rank_key"] = rank_key
+                posfix_fixed += 1
+        if posfix_fixed:
+            best_items.sort(key=lambda x: x["rank_key"], reverse=True)
+        # 第二道：榜前若干行用全排列枚举兜底（防将来新增"跟位置有关"的项时排序键覆盖不到）
+        for entry in list(best_items[:_POSFIX_ENUM_ROWS]):
+            current = entry["team"]
+            optimized = _optimize_free_positions(current)
+            if optimized is current:
+                continue
+            metrics = calculator.calculate_team_metrics(ctx, optimized)
+            score, rank_key = _score_from_metrics(metrics, optimized, metrics["multipliers"])
+            if rank_key > entry["rank_key"]:
+                entry["team"] = optimized
+                entry["score"] = score
+                entry["rank_key"] = rank_key
+                posfix_fixed += 1
+        if posfix_fixed:
+            best_items.sort(key=lambda x: x["rank_key"], reverse=True)
+        report("站位复核：%d 行改好了（%.2fs）" % (posfix_fixed, time.time() - posfix_t0))
+    # 同分可替换阵容（2026-10-10）：给界面"同分合并一栏 + 下拉展开"用。
+    # 判据是**恒等式**（不是补评）：同一位换成"在本队这套礼装下收益完全相同、
+    # 且 Cost／个人加成／光环／满绊开关都一样"的从者，整队分数必然一模一样。
+    # 所以这里零额外评估；只是把池内可互替的人组合出来。
+    _alts_cache: Dict[Any, Any] = {}
+    _alts_pool = sorted(set(reduced) | set(_second_pool_ids))
+    # 完整性标注用的一对数：候选池多大、池内可能组合多少。
+    # 实测（Bug1/Bug3）"每行未展开的等价阵容"恒为 0 —— 下拉已经把该行的等价类列全了；
+    # 真正"没展开"的是**压根没被评估**的阵容，那是全局属性，所以标在结果面板上：
+    #   "候选池 23 人 ｜ 可能组合 8,855 支 ｜ 本次评估 1,508 支（17%）"
+    # 这一对数同时是将来"超级模式"进度（已算 X / 共 Y）要用的同一个口径。
+    _pool_combos = 0
+    if 0 < choose_count:
+        try:
+            _pool_combos = math.comb(len(_alts_pool), choose_count)
+        except (ValueError, OverflowError):
+            _pool_combos = 0
     top = []
     for i, entry in enumerate(best_items, start=1):
         result = calculator.evaluate_team(ctx, entry["team"])
         item = _solution_dict(result, i)
+        groups, total = _same_score_team_alternatives(
+            ctx, box, _alts_pool, bp.fixed_servant_ids, entry["team"], _alts_cache,
+        )
+        # 每条同分阵容**自带它那一套礼装**（合并同分行以后，不同支的礼装可能不一样），
+        # 数组一律按本行 team 的位置顺序给出；界面点选时整支配置一起换（从者 + 礼装）。
+        slot_order = [m["position"] for m in item["team"] if not m.get("isSupport")]
+        sup = next((m for m in item["team"] if m.get("isSupport")), None)
+        item["sameScoreTeams"] = [
+            {
+                "servantIds": [g[pos][0] for pos in slot_order],
+                "craftIds": [g[pos][1] for pos in slot_order],
+                "secondCraftIds": [g[pos][2] for pos in slot_order],
+                "supportCraftId": (sup or {}).get("craftId"),
+                "supportSecondCraftId": (sup or {}).get("secondCraftId"),
+            }
+            for g in groups if all(pos in g for pos in slot_order)
+        ]
+        item["sameScoreTotal"] = total
         top.append(item)
+
+    # 「同分 + 礼装一模一样」的多支队伍合并成一栏（2026-10-10 用户口径）：
+    # 不同方案之间会大量重复 —— 同一支队既可能是 A 的"同分替补"、又自己占一行 B。
+    # 合并键 =（分数, **礼装多重集**）；礼装放哪个位置/谁拿不算区别。
+    # 组内只按"前排成员 / 后排成员"去重（前后排要分开：谁站前排是真区别）。
+    merged_items: List[Dict[str, Any]] = []
+    head_by_key: Dict[Any, Dict[str, Any]] = {}
+    slot_order_ref: List[str] = []
+    for item in top:
+        if not slot_order_ref:
+            slot_order_ref = [m.get("position") for m in (item.get("team") or []) if not m.get("isSupport")]
+        key = (
+            round(float(item.get("totalMultiplier") or 0.0), 9),
+            _craft_multiset_key(item),
+        )
+        head = head_by_key.get(key)
+        if head is None:
+            head_by_key[key] = item
+            merged_items.append(item)
+            continue
+        union = list(head.get("sameScoreTeams") or [])
+        seen = {_entry_key(a, slot_order_ref) for a in union}
+        for alt in item.get("sameScoreTeams") or []:
+            k = _entry_key(alt, slot_order_ref)
+            if k in seen:
+                continue
+            seen.add(k)
+            union.append(alt)
+        head["sameScoreTeams"] = union[:_ALT_CAP]
+        head["sameScoreTotal"] = max(int(head.get("sameScoreTotal") or 0), len(union))
+    # 最后统一按"前排成员 / 后排成员"去重（合并进来的那些行各自也带着自己的排列，
+    # 不在这一步收一遍的话，仍会看到"只是换了个位置"的重复条目）。
+    for item in merged_items:
+        deduped: List[Dict[str, Any]] = []
+        seen_entry: Set[Any] = set()
+        for alt in item.get("sameScoreTeams") or []:
+            k = _entry_key(alt, slot_order_ref)
+            if k in seen_entry:
+                continue
+            seen_entry.add(k)
+            deduped.append(alt)
+        item["sameScoreTeams"] = deduped[:_ALT_CAP]
+        item["sameScoreTotal"] = len(deduped)
+    for i, item in enumerate(merged_items, start=1):
+        item["rank"] = i
+    top = merged_items
 
     total_candidates = len(best_by_set)
     return {
         "status": "success",
         "totalCandidates": total_candidates,
+        # 完整性标注：候选池人数 + 池内可能组合数（界面用它与 totalCandidates 一起
+        # 说清"这次评估了多少"；也是将来超级模式进度"已算 X / 共 Y"的同口径）
+        "poolSize": len(_alts_pool),
+        "poolCombos": _pool_combos,
         "top20": top,
         "sortMode": req.sort_mode,
         # 是否因时间兜底提前结束：False = 本次结果是"跑完确定工作量"得到的，可复现
