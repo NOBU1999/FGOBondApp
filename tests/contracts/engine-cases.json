@@ -193,6 +193,23 @@
         "top20LengthGte": 1,
         "top20MultiplierGt": 0
       }
+    },
+    {
+      "name": "超级模式：请求里带非 ASCII 路径（stopFile）也必须能解析",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 8000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "superMode": 2.5,
+        "stopFile": "C:\\Users\\示例用户\\AppData\\Roaming\\FGO牵绊推荐器\\super-stop.flag",
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "top20LengthGte": 1
+      }
     }
   ]
 }
