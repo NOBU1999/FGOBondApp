@@ -32,7 +32,6 @@ APP_ID = "fgo-bond-recommender"
 DB_SCHEMA = 2  # v0.1.10 起：user_box/user_exclusions 带 account_id
 
 DEFAULT_APP_DIR = PROJECT_ROOT / "release" / "MyFGOApp"
-SEVENZIP_LICENSE = Path(r"C:\Program Files\7-Zip\License.txt")
 
 
 def read_package_version() -> str:
@@ -94,12 +93,6 @@ def main() -> int:
         problems.append("缺少 db/fgo_data.seed.db（静态数据种子库）")
     for item in problems:
         print(f"[warn] {item}")
-
-    # ---- 7-Zip 许可说明（包里带 7z 解压能力时一并附上） ----
-    if SEVENZIP_LICENSE.exists():
-        notice = app_dir / "NOTICE-7zip.txt"
-        shutil.copy2(SEVENZIP_LICENSE, notice)
-        print(f"[copy] {notice}（7-Zip LGPL 许可说明）")
 
     # ---- 元数据 ----
     write_json(
