@@ -3969,23 +3969,6 @@ const App = {
         </div>
       </div>
       <div>
-        <div class="super-toggle" :class="{ on: superOn }" @click.stop>
-          <label class="super-switch" :title="'超级模式：不设时间上限，按最大覆盖面搜索。开启后「计算档位 / 结果完整度 / 邻域」由它接管（固定走最大覆盖），其余设置照旧可用。'">
-            <input
-              type="checkbox"
-              :checked="superOn"
-              :disabled="calculating"
-              @change="toggleSuperMode($event.target.checked)"
-            />
-            <span>🚀 超级模式</span>
-          </label>
-          <select v-if="superOn" v-model.number="superLevel" :disabled="calculating" title="覆盖倍数：越大越全，也越慢">
-            <option :value="2.5">×2.5</option>
-            <option :value="5">×5</option>
-            <option :value="10">×10</option>
-          </select>
-          <span v-if="superOn" class="super-hint">不设时限</span>
-        </div>
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
         <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
@@ -4092,7 +4075,29 @@ const App = {
 
       <!-- 队伍配置（一级页面） -->
       <div class="team-config panel">
-        <div class="team-config-title">队伍配置</div>
+        <div class="team-config-head">
+          <div class="team-config-title">队伍配置</div>
+          <div class="super-toggle" :class="{ on: superOn }" @click.stop>
+            <label
+              class="super-switch"
+              :title="'超级模式：不设时间上限，按最大覆盖面搜索。开启后「计算档位 / 结果完整度 / 邻域」由它接管（固定走最大覆盖），其余设置照旧可用。'"
+            >
+              <input
+                type="checkbox"
+                :checked="superOn"
+                :disabled="calculating"
+                @change="toggleSuperMode($event.target.checked)"
+              />
+              <span>🚀 超级模式</span>
+            </label>
+            <select v-if="superOn" v-model.number="superLevel" :disabled="calculating" title="覆盖倍数：越大越全，也越慢">
+              <option :value="2.5">×2.5</option>
+              <option :value="5">×5</option>
+              <option :value="10">×10</option>
+            </select>
+            <span v-if="superOn" class="super-hint">不设时限</span>
+          </div>
+        </div>
         <div class="team-config-fields">
           <div class="field">
             <label>Cost上限</label>

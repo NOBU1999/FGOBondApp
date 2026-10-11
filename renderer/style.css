@@ -22,27 +22,40 @@ body.super-mode {
   --text: #f6e9ee;
   --muted: #c0a4ae;
 }
+/* 超级模式开关（队伍配置框右上角）——刻意做得比普通控件醒目 */
 .super-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-right: 8px;
-  padding: 2px 6px;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 10px;
   border: 1px solid var(--border);
+  background: var(--panel2);
+  transition: border-color 0.15s, background 0.15s;
 }
-.super-toggle.on { border-color: var(--accent); }
+.super-toggle.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel2));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .super-switch {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12.5px;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
 }
-.super-toggle.on .super-switch span { color: var(--accent); font-weight: 600; }
-.super-toggle select { font-size: 12px; padding: 2px 4px; }
-.super-hint { font-size: 11px; color: var(--muted); }
+.super-switch input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.super-toggle.on .super-switch span { color: var(--accent); }
+.super-toggle select { font-size: 14px; padding: 4px 8px; border-radius: 8px; }
+.super-hint { font-size: 12.5px; color: var(--muted); }
 .super-progress { margin: 6px 0 0; font-size: 12.5px; color: var(--accent); }
 .super-note { border-left: 3px solid var(--accent); padding-left: 8px; color: var(--text); }
 
@@ -1020,7 +1033,15 @@ body.drag-selecting .box-cell { cursor: crosshair; }
 
 /* 一级页队伍配置 */
 .team-config { margin-top: 10px; }
-.team-config-title { font-weight: 700; margin-bottom: 8px; }
+.team-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.team-config-title { font-weight: 700; }
 .team-config-fields {
   display: flex;
   flex-wrap: wrap;
