@@ -11,6 +11,41 @@
   --ok: #a6e3a1;
 }
 
+/* ---------------- 超级模式（扩大覆盖版） ----------------
+   红主题只换颜色变量：所有图片（头像 / 礼装图标）一律不动。 */
+body.super-mode {
+  --bg: #1c1218;
+  --panel: #241621;
+  --panel2: #33202c;
+  --border: rgba(255, 122, 150, 0.28);
+  --accent: #ff5f7e;
+  --text: #f6e9ee;
+  --muted: #c0a4ae;
+}
+.super-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.super-toggle.on { border-color: var(--accent); }
+.super-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.super-toggle.on .super-switch span { color: var(--accent); font-weight: 600; }
+.super-toggle select { font-size: 12px; padding: 2px 4px; }
+.super-hint { font-size: 11px; color: var(--muted); }
+.super-progress { margin: 6px 0 0; font-size: 12.5px; color: var(--accent); }
+.super-note { border-left: 3px solid var(--accent); padding-left: 8px; color: var(--text); }
+
 * { box-sizing: border-box; }
 
 body {

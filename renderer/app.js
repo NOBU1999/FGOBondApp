@@ -297,6 +297,12 @@ const App = {
       costLimit: 116,
       strategy: "total_max",
       qualityMode: "balanced",
+      // 超级模式（扩大覆盖版）：0 = 关闭；2.5 / 5 / 10 = 覆盖倍数。
+      // 开启后"计算档位 / 结果完整度 / 邻域"由它接管（固定走最大覆盖、不设时间上限）。
+      superLevel: 0,
+      superProgress: null,
+      superStopping: false,
+      superPartial: false,
       targetServantId: null,
       targetServantKeyword: "",
       overlay: { visible: false, slotIndex: null, target: "servant", craftIndex: 0, keyword: "", classFilter: "all", rarityFilter: "all", ownedOnly: true, craftType: "bond", sortBy: "collectionNo", sortOrder: "desc" },
@@ -402,6 +408,10 @@ const App = {
     };
   },
   computed: {
+    /** 超级模式是否开启（覆盖倍数 > 1） */
+    superOn() {
+      return Number(this.superLevel) > 1;
+    },
     /** 使用说明的章节（内容来自 renderer/manual.js，由 使用说明.txt 生成） */
     manualSections() {
       return parseManual(typeof window !== "undefined" ? window.FGO_MANUAL_TEXT : "");
@@ -700,9 +710,19 @@ const App = {
         const msg = data.message || "";
         if (this.updateRunning) {
           this.handleUpdateProgress(msg);
-        } else {
-          this.progress = msg;
+          return;
         }
+        // 超级模式的机读进度：`[progress] [super] {"processed":…,"elapsed":…}`
+        const m = /\[super\]\s*(\{.*\})\s*$/.exec(msg);
+        if (m) {
+          try {
+            this.superProgress = JSON.parse(m[1]);
+            return; // 这一行只喂进度条，不覆盖文字进度
+          } catch (_) {
+            // 解析失败就按普通进度文本处理
+          }
+        }
+        this.progress = msg;
       });
       window.fgo.onMenuAction((data) => {
         // 窗口菜单栏「设置 → 计算设置 / 结果显示设置 / 诊断日志」会带 section 过来；
@@ -3255,9 +3275,13 @@ const App = {
         teaBonus: 1,
         topN: Number(this.resultSettings.resultTopN) || 200,
         craftPoolSize: 60,
-        timeoutMs: this.timeoutForQuality(this.qualityMode),
-        neighborhood: this.neighborhood || "standard",
-        searchOrder: this.resultSettings.searchOrder === "servant" ? "servant" : "craft",
+        timeoutMs: this.superOn ? 3600000 : this.timeoutForQuality(this.qualityMode),
+        neighborhood: this.superOn ? "deep" : (this.neighborhood || "standard"),
+        searchOrder: this.superOn
+          ? "craft"
+          : (this.resultSettings.searchOrder === "servant" ? "servant" : "craft"),
+        // 超级模式：只放大搜索覆盖面、不设时间上限（停止由界面按钮触发）
+        superMode: this.superOn ? Number(this.superLevel) : 0,
       };
     },
     buildPresetPayload(preset) {
@@ -3355,6 +3379,18 @@ const App = {
     },
     async cancelCalculation() {
       if (!this.calculating) return;
+      // 超级模式：点"停止"是**协作式**的 —— 引擎会把已经算出来的结果收尾后返回，
+      // 所以这里只发停止请求，然后等正常的 promise 带着 status="partial" 回来。
+      if (this.superOn) {
+        this.superStopping = true;
+        this.progress = "正在收尾（已算出的结果会保留）...";
+        try {
+          await window.fgo.cancelEngine();
+        } catch (_) {
+          // 引擎可能已经自行结束，忽略取消失败
+        }
+        return;
+      }
       this.progress = "正在终止计算...";
       try {
         await window.fgo.cancelEngine();
@@ -3365,9 +3401,23 @@ const App = {
       this.progress = "";
       this.error = "计算已终止";
     },
+    /** 超级模式开关（右上角）：开启后档位/完整度/邻域由它接管 */
+    toggleSuperMode(on) {
+      if (this.calculating) return;
+      this.superLevel = on ? (Number(this.superLevel) > 1 ? Number(this.superLevel) : 2.5) : 0;
+      this.superProgress = null;
+      this.superPartial = false;
+      // 红主题挂在 body 上（页面背景在 .board-app 之外，只挂组件上换不到底色）
+      if (typeof document !== "undefined") {
+        document.body.classList.toggle("super-mode", this.superOn);
+      }
+    },
     async calculate() {
       this.error = "";
       this.results = [];
+      this.superPartial = false;
+      this.superStopping = false;
+      this.superProgress = null;
       this.verificationTokens = [];
       this.verificationTokensFull = [];
       this.verificationCopied = false;
@@ -3391,9 +3441,15 @@ const App = {
         if (result.verificationToken) this.verificationTokens.push(result.verificationToken);
         if (result.verificationTokenFull) this.verificationTokensFull.push(result.verificationTokenFull);
         const allResults = [...(result.top20 || [])];
+        // 超级模式下用户点了"停止"：引擎返回的是"已算出来并排好序"的部分结果
+        this.superPartial = result.status === "partial";
+        if (this.superPartial && !allResults.length) {
+          this.error = "已停止：这次还没来得及算出任何队伍，下次可以多等一会儿再点停止";
+        }
         // 把你保存过的完整预设作为“种子队伍”一并计算并合并进结果，
         // 避免完整预设因为搜索抽样/时间不足而完全不出现在结果里。
-        for (const preset of this.seedablePresets()) {
+        // ⚠️ 超级模式跳过这一步：它自己的覆盖面已经足够，再逐条跑一遍要多花好几倍时间。
+        for (const preset of (this.superOn ? [] : this.seedablePresets())) {
           try {
             const seedResult = await window.fgo.calculate(plainClone(this.buildPresetPayload(preset)));
             if (seedResult && seedResult.verificationToken) this.verificationTokens.push(seedResult.verificationToken);
@@ -3416,6 +3472,9 @@ const App = {
           timeoutMs: payload.timeoutMs,
           // 引擎的时间上限兜底：true = 还没跑完就被砍了（换更高档位可能更好）
           truncated: !!result.truncated,
+          // 超级模式：本次是不是"用户中途停止"得到的部分结果
+          partial: result.status === "partial",
+          superLevel: this.superOn ? Number(this.superLevel) : 0,
         };
         this.currentPage = 1;
         if (this.resultSettings.autoExpandFirst && this.results.length) {
@@ -3882,7 +3941,7 @@ const App = {
     },
   },
   template: `
-  <div class="board-app" @click="closeContextMenu">
+  <div class="board-app" :class="{ 'super-mode': superOn }" @click="closeContextMenu">
     <!-- 顶部工具栏 -->
     <div class="topbar">
       <div class="topbar-brand">
@@ -3910,6 +3969,23 @@ const App = {
         </div>
       </div>
       <div>
+        <div class="super-toggle" :class="{ on: superOn }" @click.stop>
+          <label class="super-switch" :title="'超级模式：不设时间上限，按最大覆盖面搜索。开启后「计算档位 / 结果完整度 / 邻域」由它接管（固定走最大覆盖），其余设置照旧可用。'">
+            <input
+              type="checkbox"
+              :checked="superOn"
+              :disabled="calculating"
+              @change="toggleSuperMode($event.target.checked)"
+            />
+            <span>🚀 超级模式</span>
+          </label>
+          <select v-if="superOn" v-model.number="superLevel" :disabled="calculating" title="覆盖倍数：越大越全，也越慢">
+            <option :value="2.5">×2.5</option>
+            <option :value="5">×5</option>
+            <option :value="10">×10</option>
+          </select>
+          <span v-if="superOn" class="super-hint">不设时限</span>
+        </div>
         <button class="secondary" @click.stop="boxModalVisible = true">Box管理</button>
         <button class="secondary" @click.stop="exclusionModalVisible = true">排除管理</button>
         <button class="secondary" @click.stop="openCustomManager">自定义礼装</button>
@@ -4030,9 +4106,13 @@ const App = {
               <option value="balanced">均衡模式</option>
             </select>
           </div>
+          <div v-if="superOn" class="field super-note">
+            🚀 超级模式已开启：下面的「邻域优化 / 计算质量 / 结果完整度」由它接管
+            （固定按最大覆盖面搜索、不设时间上限）。关掉右上角的超级模式即可恢复手动设置。
+          </div>
           <div class="field">
             <label>邻域优化（换人再算）</label>
-            <select v-model="neighborhood">
+            <select v-model="neighborhood" :disabled="calculating || superOn">
               <option value="off">关闭（最快）</option>
               <option value="standard">标准（默认）</option>
               <option value="deep">深入（最多同时换 3 人，最慢）</option>
@@ -4044,7 +4124,7 @@ const App = {
           </div>
           <div class="field">
             <label>计算质量 / 等待时间</label>
-            <select v-model="qualityMode">
+            <select v-model="qualityMode" :disabled="calculating || superOn">
               <option value="fast">快速（约 35 秒上限）</option>
               <option value="standard">标准（约 60 秒上限）</option>
               <option value="balanced">平衡（默认，约 90 秒上限）</option>
@@ -4118,7 +4198,15 @@ const App = {
           <button class="secondary" @click="saveTeam">保存队伍</button>
           <button class="secondary" @click="presetModalVisible = true; presets = presets">加载预设</button>
           <button class="primary main-action" :disabled="calculating" @click="calculate">🚀 开始计算</button>
-          <button class="secondary danger" :disabled="!calculating" @click="cancelCalculation">⏹ 终止计算</button>
+          <button class="secondary danger" :disabled="!calculating" @click="cancelCalculation">
+            {{ superOn ? '⏹ 停止（保留已算结果）' : '⏹ 终止计算' }}
+          </button>
+        </div>
+        <div v-if="calculating && superOn" class="super-progress">
+          🚀 超级模式 ×{{ superLevel }}：已评
+          {{ superProgress ? formatCount(superProgress.processed) : 0 }} 支 ｜ 已用
+          {{ superProgress ? Math.round(superProgress.elapsed) : 0 }} 秒
+          <template v-if="superStopping">｜ 正在收尾，已算出的结果会保留…</template>
         </div>
         <progress-bar :visible="calculating" :message="progress"></progress-bar>
       </div>
@@ -4165,7 +4253,14 @@ const App = {
             </span>
           </div>
         </div>
-        <div v-if="lastSearchStats && lastSearchStats.truncated" class="search-stats warn">
+        <div v-if="lastSearchStats && lastSearchStats.superLevel" class="search-stats">
+          🚀 超级模式 ×{{ lastSearchStats.superLevel }}：不设时间上限、按最大覆盖面搜索
+          <span class="text-muted">（覆盖面越大越慢；中途点"停止"已算出的结果会保留）</span>
+        </div>
+        <div v-if="lastSearchStats && lastSearchStats.partial" class="search-stats warn">
+          ⏹ 你在中途点了停止：下面是**已经算出来并排好序**的部分结果，没有丢
+        </div>
+        <div v-if="lastSearchStats && lastSearchStats.truncated && !lastSearchStats.partial" class="search-stats warn">
           ⚠️ 本次搜索被时间上限截断（还没算完）：换更高的「计算质量」档位可能找到更好的队伍
         </div>
         <div v-if="resultSettings.showSearchStats && lastSearchStats" class="search-stats text-muted">
@@ -4981,7 +5076,7 @@ const App = {
         <div v-if="settingsSection === 'all' || settingsSection === 'calc'" class="settings-list">
           <label class="settings-row">
             <span>结果完整度</span>
-            <select v-model="resultSettings.searchOrder" @change="persistResultSettings">
+            <select v-model="resultSettings.searchOrder" :disabled="superOn" @change="persistResultSettings">
               <option value="craft">更全（默认）</option>
               <option value="servant">更快</option>
             </select>
