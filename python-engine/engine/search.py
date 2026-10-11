@@ -882,7 +882,31 @@ def _generate_multiset_combinations(
             yield tuple(combo)
 
 
+def _super_mult(req: CalculationRequest) -> float:
+    """超级模式的覆盖倍数（1.0 = 普通档位）。
+
+    超级模式只放大"枚举上限"，必要的优化（合法上界剪枝、支配剪枝、best-first、
+    精修、站位复核）一个都不减；它不是"全枚举"。
+    """
+    try:
+        mult = float(getattr(req, "super_mode", 0) or 0)
+    except (TypeError, ValueError):
+        mult = 0.0
+    return mult if mult > 1.0 else 1.0
+
+
+def _super_enabled(req: CalculationRequest) -> bool:
+    return _super_mult(req) > 1.0
+
+
+# 超级模式的时间预算：不设上限（跑到跑完，或用户点停止）。
+# 仍保留一个很大的数值，是为了让"阶段截止时间"这类派生量仍有意义。
+SUPER_BUDGET_SECONDS = 3600.0
+
+
 def _time_budget_seconds(req: CalculationRequest) -> float:
+    if _super_enabled(req):
+        return max(SUPER_BUDGET_SECONDS, req.timeout_ms / 1000.0)
     return max(1.0, req.timeout_ms / 1000.0)
 
 
@@ -902,7 +926,12 @@ def _combos_budget_for(req: CalculationRequest) -> int:
 
 
 # 单轮组合枚举的硬上限：约 20s 计算量，避免极端配置把内存/时间炸掉。
+# 超级模式按请求里的倍数放大（这个数同时决定候选池大小与每轮评估量）。
 _MAX_COMBOS_PER_ROUND = 40000
+
+
+def _max_combos_per_round(req: CalculationRequest) -> int:
+    return int(_MAX_COMBOS_PER_ROUND * _super_mult(req))
 
 
 def _default_servant_combo_limit(req: CalculationRequest, choose_count: int = 5) -> int:
@@ -920,7 +949,7 @@ def _default_servant_combo_limit(req: CalculationRequest, choose_count: int = 5)
     宁可池子小一点但**全枚举**，也不要池子大却只抽样 10%。
     """
     choose = max(1, choose_count)
-    budget = min(_combos_budget_for(req), _MAX_COMBOS_PER_ROUND)
+    budget = min(_combos_budget_for(req), _max_combos_per_round(req))
     k = choose
     while math.comb(k + 1, choose) <= budget:
         k += 1
@@ -939,7 +968,7 @@ def _default_sweep_limit(req: CalculationRequest, choose_count: int = 5) -> int:
     实测正是这个覆盖率不足导致 10.048 那个解被漏掉。
     """
     choose = max(1, choose_count)
-    budget = min(_combos_budget_for(req), _MAX_COMBOS_PER_ROUND)
+    budget = min(_combos_budget_for(req), _max_combos_per_round(req))
     k = choose
     while math.comb(k + 1, choose) <= budget:
         k += 1
@@ -954,9 +983,10 @@ def _default_craft_combo_limit(req: CalculationRequest) -> int:
 
     需要保留足够多的“少装一两张礼装”的组合：当 Cost 不够放满全部礼装时，
     如果只截断在高数量组合，容易漏掉末尾的特性礼装（如杀阶 20% 礼装）。
+    超级模式把上限按倍数放大（单组从者试更多套礼装 = 更准，但也更贵）。
     """
     dynamic = int(_time_budget_seconds(req) * 200)
-    return max(4000, min(12000, dynamic))
+    return max(4000, min(int(12000 * _super_mult(req)), dynamic))
 
 
 def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
@@ -966,7 +996,8 @@ def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
     这里按“精算阶段最多占预算 30%”反推，上限 15。
     """
     by_budget = max(2, int(_time_budget_seconds(req) * 0.3 / 0.35))
-    return max(2, min(15, pool_size, by_budget))
+    # 超级模式把精算套数放大（上限 100）
+    return max(2, min(int(min(100, 15 * _super_mult(req))), pool_size, by_budget))
 
 
 # 榜上"每行站位复核"（2026-10-10 第三轮）：
@@ -1013,9 +1044,13 @@ def _default_craft_set_lineup_budget(req: CalculationRequest) -> int:
 
     与 _default_craft_combo_limit 同风格：按时长档位线性推导（300s 档 ≈ 12,000 条），
     上下限兜住极端档位。配额再由这个总数按集合数摊分（见 search_top_teams 里那一趟）。
+    超级模式把上下限一起按倍数放大。
     """
+    mult = _super_mult(req)
     seconds = max(1.0, float(getattr(req, "timeout_ms", 60000) or 60000) / 1000.0)
-    return int(max(600, min(24000, seconds * 40)))
+    if _super_enabled(req):
+        seconds = max(SUPER_BUDGET_SECONDS, seconds)
+    return int(max(600, min(int(24000 * mult), seconds * 40 * mult)))
 
 
 def _generate_craft_combinations_with_cost(
@@ -2640,6 +2675,8 @@ def search_top_teams(
     if not req.box:
         raise ValueError("请至少勾选一位从者")
 
+    stop_flag = [False]
+
     def cancel_requested() -> bool:
         if should_cancel is None:
             return False
@@ -2648,16 +2685,45 @@ def search_top_teams(
         except Exception:
             return False
 
+    def stopped() -> bool:
+        """宿主是否请求停止。
+
+        - 超级模式：**体面收尾** —— 把"停止"当成"时间到"，各阶段按既有路径提前结束，
+          最后仍然排序、精修、复核站位并返回已算出的结果（`status="partial"`）。
+        - 普通档位：保持原语义（抛 SearchCancelled，桌面宿主本来就是直接杀进程）。
+        """
+        if not stop_flag[0] and cancel_requested():
+            if _super_enabled(req):
+                stop_flag[0] = True
+            else:
+                raise SearchCancelled("已取消")
+        return stop_flag[0]
+
     def check_cancel() -> None:
-        if cancel_requested():
-            raise SearchCancelled("已取消")
+        stopped()
+
+    def expired(deadline: float) -> bool:
+        """某个阶段是否该收尾：到点，或宿主点了停止（超级模式）。"""
+        return time.time() >= deadline or stopped()
+
+    last_tick = [0.0]
 
     def report(msg: str) -> None:
         check_cancel()
         if progress:
             progress(msg)
-        else:
-            pass
+            # 超级模式：每 2 秒给宿主一行**机读进度**（界面显示"已评 X / 已用 Y 秒"）
+            if _super_enabled(req):
+                now = time.time()
+                if now - last_tick[0] >= 2.0:
+                    last_tick[0] = now
+                    try:
+                        progress(
+                            '[super] {"processed": %d, "candidates": %d, "elapsed": %.1f}'
+                            % (processed_total, len(best_by_set), now - start)
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
     bp = prepare_blueprint(req, ctx)
 
@@ -3308,7 +3374,7 @@ def search_top_teams(
             # 墙钟只作为兜底安全网（真机上机器特别慢时才会触发，此时结果会标 truncated）。
             if max_processed is not None and processed >= max_processed:
                 break
-            if time.time() >= deadline:
+            if expired(deadline):
                 truncated[0] = True
                 report("达到时间预算，提前结束当前轮搜索")
                 break
@@ -3340,7 +3406,7 @@ def search_top_teams(
         # 第二趟：按上界降序评估（稳定排序 → 等上界保持原枚举顺序，可复现）
         pending.sort(key=lambda item: -item[0])
         for ub, extras_tuple in pending:
-            if time.time() >= deadline:
+            if expired(deadline):
                 truncated[0] = True
                 break
             check_cancel()
@@ -3463,7 +3529,7 @@ def search_top_teams(
             for _n in range(1, _slots + 1):
                 for _combo in itertools.combinations(_trait_pool, _n):
                     _built += 1
-                    if _built % 200 == 0 and time.time() >= _craft_first_deadline:
+                    if _built % 200 == 0 and expired(_craft_first_deadline):
                         _abort_build = True
                         break
                     _members = [
@@ -3499,7 +3565,7 @@ def search_top_teams(
                 check_cancel()
                 if _pass_lineups >= _lineup_budget:
                     break
-                if time.time() >= _craft_first_deadline:
+                if expired(_craft_first_deadline):
                     break
                 _pin_cost = _craft_combo_actual_cost(ctx, _combo, free_bond_zero_cost)
                 _pinned = [(_pin_cost, _combo)]
@@ -3549,7 +3615,7 @@ def search_top_teams(
             if refine_processed >= int(phase_limits.get("refineProcessed", 0)):
                 break
         # 精算数量是确定性的（refine_entries 已按预算截断）；墙钟只作兜底
-        if time.time() >= refine_deadline:
+        if expired(refine_deadline):
             truncated[0] = True
             break
         refine_processed += 1
@@ -3569,7 +3635,7 @@ def search_top_teams(
                 if optimize_processed >= int(phase_limits.get("optimizeProcessed", 0)):
                     break
             # 同样是确定性数量；墙钟只作兜底
-            if time.time() >= refine_deadline:
+            if expired(refine_deadline):
                 truncated[0] = True
                 break
             optimize_processed += 1
@@ -3742,7 +3808,7 @@ def search_top_teams(
             new_best_before = global_best_score
             for key in list(swaps.keys()):
                 check_cancel()
-                if time.time() >= refine_deadline:
+                if expired(refine_deadline):
                     truncated[0] = True
                     break
                 key = _canonical_combo(key, _nb_dom, _nb_canon)
@@ -3765,7 +3831,7 @@ def search_top_teams(
     # 只对真正精算过的阵容（≤15 套）做，成本毫秒级；换完礼装若真有改进，再回炉做一次
     # 位置优化（礼装一变，最优站位可能跟着变）。
     for entry in refined_entries:
-        if time.time() >= refine_deadline:
+        if expired(refine_deadline):
             truncated[0] = True
             break
         servant_set = entry.get("servant_set")
@@ -3996,7 +4062,9 @@ def search_top_teams(
 
     total_candidates = len(best_by_set)
     return {
-        "status": "success",
+        # 超级模式下宿主点了"停止"：这是"已经算出来并排好序的结果"，标记为 partial
+        # （普通档位永远是 success；停止的语义在那边是"丢掉这次计算"）。
+        "status": "partial" if stop_flag[0] else "success",
         "totalCandidates": total_candidates,
         # 完整性标注：候选池人数 + 池内可能组合数（界面用它与 totalCandidates 一起
         # 说清"这次评估了多少"；也是将来超级模式进度"已算 X / 共 Y"的同口径）

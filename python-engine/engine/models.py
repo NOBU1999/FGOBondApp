@@ -148,6 +148,13 @@ class CalculationRequest:
     #   "servant" 更快：不跑那趟，只走常规轮（两轮粗搜 + 精算 + 排列 + 邻域）。
     #   ⚠️ 引擎侧默认保持 "servant"（老验证串不带该字段 → 行为不变）；界面默认发 "craft"。
     search_order: str = "servant"
+    # 超级模式（扩大覆盖版）：0 = 关闭（默认；不带该字段的老客户端/老预设行为完全不变）；
+    # >1  = 覆盖倍数（界面给 2.5 / 5 / 10）。只放大"枚举上限"，必要的优化（上界剪枝、
+    # 支配剪枝、best-first、精修、站位复核）一个都不减；时间上限同时放开。
+    super_mode: float = 0.0
+    # 超级模式下宿主请求"体面停止"的文件路径：引擎发现它出现就收尾并返回 status="partial"。
+    # 桌面宿主（子进程）用它替代"直接杀进程"；安卓宿主走 should_cancel 回调，语义相同。
+    stop_file: Optional[str] = None
 
 
 @dataclass
@@ -314,6 +321,15 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         req.search_order = "servant"
     if req.class_group in (None, "", "all"):
         req.class_group = None
+    # 超级模式：0/缺省 = 关闭（行为与普通档位完全一致）；>1 = 覆盖倍数
+    try:
+        req.super_mode = max(0.0, float(data.get("superMode") or 0))
+    except (TypeError, ValueError):
+        req.super_mode = 0.0
+    if req.super_mode <= 1.0:
+        req.super_mode = 0.0
+    raw_stop = str(data.get("stopFile") or "").strip()
+    req.stop_file = raw_stop or None
     if strategy == STRATEGY_TARGET_MAX:
         req.target_servant_id = data.get("targetServantId") or data.get(TARGET_SERVANT_KEY)
     return req

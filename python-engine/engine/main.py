@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Any, Dict, Optional
@@ -39,7 +40,23 @@ def calculate_from_stdin(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not raw.strip():
         raise ValueError("stdin 中没有收到 JSON 输入")
     data = json.loads(raw)
-    return calculate(data, db_path=db_path)
+    # 超级模式：宿主（桌面宿主点了"停止"）会建一个停止文件；引擎发现它就把当前搜索收尾，
+    # 返回已经算出来的结果（status="partial"），而不是被直接杀掉、白算一场。
+    # ⚠️ 只在超级模式下接这个开关：普通档位保持原来的"杀进程"语义，避免误伤。
+    should_cancel = None
+    try:
+        super_on = float(data.get("superMode") or 0) > 1.0
+    except (TypeError, ValueError):
+        super_on = False
+    stop_file = str(data.get("stopFile") or "").strip()
+    if super_on and stop_file:
+        def should_cancel() -> bool:  # noqa: ANN001
+            try:
+                return os.path.exists(stop_file)
+            except Exception:  # noqa: BLE001
+                return False
+
+    return calculate(data, db_path=db_path, should_cancel=should_cancel)
 
 
 def calculate(
@@ -60,7 +77,9 @@ def calculate(
 
     _progress("正在准备队伍布局...")
     result = search.search_top_teams(ctx, req, progress=_progress, should_cancel=should_cancel)
-    if not result.get("top20"):
+    # 超级模式下用户点了"停止"：这时可能还一支队伍都没评出来 —— 那也是有效结果
+    # （返回部分结果，界面会说明"已停止、还没算出队伍"），不要当成配置错误。
+    if not result.get("top20") and result.get("status") != "partial":
         raise ValueError("当前配置下无法组成任何队伍，请提高Cost上限或调整Box/固定配置")
 
     _progress("生成验证串...")
