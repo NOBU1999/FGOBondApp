@@ -160,6 +160,39 @@
         "sortModeEq": "multiplier",
         "top20MonotonicBy": "multiplier"
       }
+    },
+    {
+      "name": "超级模式：倍数不大于 1 时按普通档位处理（等于关闭）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 5000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "superMode": 1.5,
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "top20LengthGte": 1
+      }
+    },
+    {
+      "name": "超级模式：开启时仍返回标准结构（老客户端可忽略新字段）",
+      "request": {
+        "costLimit": 120,
+        "timeoutMs": 8000,
+        "topN": 20,
+        "strategy": "total_max",
+        "serverRegion": "jp",
+        "superMode": 2.5,
+        "$boxRefs": 8
+      },
+      "expect": {
+        "statusEq": "success",
+        "top20LengthGte": 1,
+        "top20MultiplierGt": 0
+      }
     }
   ]
 }

@@ -89,6 +89,8 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `topN` | `int` | `20` | 返回前几名 |
 | `timeoutMs` | `int` | `10000` | 计算时限（墙钟兜底；实际工作量按它标定成**确定性**数量） |
 | `targetServantId` | `int \| null` | `null` | 指定从者最大化策略必填 |
+| `superMode` | `number` | `0` | **超级模式（扩大覆盖版，可选）**：`0`/缺省 = 关闭（行为与普通档位**完全一致**）；`>1` = 覆盖倍数（界面给 `2.5 / 5 / 10`）。只放大"枚举上限"（候选池、礼装组合、精算套数），必要的优化一个不减；开启后**不设时间上限**。老客户端不发该字段即得旧行为 |
+| `stopFile` | `string` | 无 | 仅超级模式用：宿主建这个文件 = 请求停止。引擎发现它就把当前搜索收尾、排序并**正常返回已算出的结果**（`status: "partial"`）；桌面宿主用它替代"直接杀进程" |
 
 **`sortMode` 口径（v1 起）**
 
@@ -114,7 +116,7 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 
 | 键 | 说明 |
 |---|---|
-| `status` | `"success"` |
+| `status` | `"success"`；超级模式下用户中途停止时为 `"partial"`（结果是"已经算完并排好序"的部分，结构完全相同） |
 | `topN`（如 `top20`） | `TeamSolution[]`，按分数降序 |
 | `sortMode` | 本次**实际生效**的排序口径（`multiplier` / `points`） |
 | `totalCandidates` | 入榜的从者阵容数 |
@@ -138,6 +140,10 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 `TeamMember`：`{position, servantId, name, stage, isSupport, isFixed, isMaxBond, isCrown, craftId, craftName, craftType, secondCraftId, secondCraftName, secondCraftType, bonusDetail}`
 
 失败：`{"status": "error", "message": "...", "elapsed": 秒}`（宿主把它转成异常抛给界面）
+
+> **超级模式的进度行**（可选，2026-10-10 新增）：开启后引擎每约 2 秒往 stderr 多打一行
+> `[progress] [super] {"processed": 已评阵容数, "candidates": 候选数, "elapsed": 已用秒数}`，
+> 宿主照常转发，界面据此显示"已评 X / 已用 Y 秒"。非超级模式不打这一行。
 
 内部诊断字段以 `_` 开头（`_elapsed` / `_processed` / `_verifyPhase` 等）：**界面不许依赖**，随时可能变。
 
