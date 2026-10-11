@@ -734,6 +734,11 @@ const App = {
         if (data && data.channel === "menu:settings") this.openSettings(data.section);
         // 帮助 → 使用说明（F1）/ 关于对话框里的「使用说明」→ 应用内打开，不再丢给记事本
         if (data && data.channel === "menu:manual") this.openManual();
+        // 帮助 → 关于 → 「检查软件更新」：直接打开版本与更新信息并立刻查一次
+        if (data && data.channel === "menu:version") {
+          this.openVersionModal();
+          if (!this.appUpdateChecking) this.checkAppUpdate();
+        }
         if (data && data.channel === "menu:update-data") this.runUpdate();
         if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });
@@ -4939,9 +4944,6 @@ const App = {
             <button class="secondary" :disabled="appUpdateChecking" @click="checkAppUpdate">
               {{ appUpdateChecking ? '正在检查…' : '🔍 检查软件更新' }}
             </button>
-            <span class="text-muted" style="align-self:center">
-              依次尝试 清华 GitHub 镜像 → GitHub Releases → jsDelivr CDN（只查版本号，不下载）
-            </span>
           </div>
           <div v-if="appUpdateError" class="panel error" style="margin-top:8px">{{ appUpdateError }}</div>
           <div v-if="appUpdate" class="app-update-result" :class="appUpdate.hasUpdate ? 'newer' : 'latest'">
@@ -4950,10 +4952,6 @@ const App = {
             </template>
             <template v-else-if="appUpdate.hasUpdate">
               <div class="app-update-title">🎉 发现新版本 v{{ appUpdate.latest }}（当前 v{{ appUpdate.current }}）</div>
-              <div class="text-muted">
-                <span v-if="appUpdate.publishedAt">发布时间 {{ appUpdate.publishedAt.slice(0, 10) }} ｜ </span>
-                来源：{{ appUpdate.source && appUpdate.source.label }}
-              </div>
               <div class="filters" style="margin-top:8px">
                 <button class="primary" @click="openExternalLink(appUpdate.releaseUrl)">⬇️ 打开发布页</button>
                 <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 查看更新动态（B 站）</button>
@@ -4962,18 +4960,11 @@ const App = {
             </template>
             <template v-else>
               <div class="app-update-title">✅ 已经是最新版本（v{{ appUpdate.current }}）</div>
-              <div class="text-muted">来源：{{ appUpdate.source && appUpdate.source.label }}</div>
               <div class="filters" style="margin-top:8px">
                 <button class="secondary" @click="openExternalLink(appUpdate.githubUrl)">打开发布页</button>
                 <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 关注更新动态（B 站）</button>
               </div>
             </template>
-            <details v-if="appUpdate.checks && appUpdate.checks.length" class="app-update-checks">
-              <summary>各更新源结果</summary>
-              <div v-for="c in appUpdate.checks" :key="c.key" class="text-muted">
-                {{ c.ok ? '✅' : '❌' }} {{ c.label }}{{ c.ok ? '（v' + c.version + '）' : '：' + c.detail }}
-              </div>
-            </details>
             <div v-if="appUpdate.androidNote" class="text-muted" style="margin-top:6px">{{ appUpdate.androidNote }}</div>
           </div>
         </div>
