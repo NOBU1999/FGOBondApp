@@ -32,7 +32,6 @@ APP_ID = "fgo-bond-recommender"
 DB_SCHEMA = 2  # v0.1.10 起：user_box/user_exclusions 带 account_id
 
 DEFAULT_APP_DIR = PROJECT_ROOT / "release" / "MyFGOApp"
-DEFAULT_UPDATER = PROJECT_ROOT / "updater" / "dist" / "updater.exe"
 SEVENZIP_LICENSE = Path(r"C:\Program Files\7-Zip\License.txt")
 
 
@@ -45,9 +44,7 @@ def read_package_version() -> str:
 
 
 def detect_exe(app_dir: Path) -> str:
-    candidates = [
-        p for p in app_dir.glob("*.exe") if p.name.lower() != "updater.exe"
-    ]
+    candidates = list(app_dir.glob("*.exe"))
     if not candidates:
         raise SystemExit(f"[FAIL] 程序目录里找不到主程序 exe：{app_dir}")
     candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
@@ -63,8 +60,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="生成发布包元数据（version.json / update.json）")
     parser.add_argument("--app-dir", type=Path, default=DEFAULT_APP_DIR,
                         help=f"便携发布目录（默认 {DEFAULT_APP_DIR}）")
-    parser.add_argument("--updater", type=Path, default=DEFAULT_UPDATER,
-                        help=f"更新器 exe 路径（默认 {DEFAULT_UPDATER}）")
     parser.add_argument("--version", default="", help="版本号（默认读 package.json）")
     parser.add_argument("--compatible-from", default="0.1.9",
                         help="支持基于该版本及以上安装（兼容区间下限）")
@@ -74,9 +69,8 @@ def main() -> int:
     parser.add_argument(
         "--stage",
         default="beta",
-        help="阶段标记：beta=测试阶段（更新器会提示先备份）；传空字符串表示正式版",
+        help="阶段标记：beta=测试阶段；传空字符串表示正式版",
     )
-    parser.add_argument("--no-updater", action="store_true", help="不投放 updater.exe")
     args = parser.parse_args()
 
     app_dir = args.app_dir.expanduser().resolve()
@@ -101,19 +95,11 @@ def main() -> int:
     for item in problems:
         print(f"[warn] {item}")
 
-    # ---- 更新器 ----
-    if not args.no_updater:
-        updater = args.updater.expanduser().resolve()
-        if not updater.exists():
-            print(f"[warn] 没有找到更新器 {updater}（先跑 updater/build_updater.ps1）")
-        else:
-            target = app_dir / "updater.exe"
-            shutil.copy2(updater, target)
-            print(f"[copy] {target}（{target.stat().st_size / 1024 / 1024:.1f} MB）")
-        if SEVENZIP_LICENSE.exists():
-            notice = app_dir / "NOTICE-7zip.txt"
-            shutil.copy2(SEVENZIP_LICENSE, notice)
-            print(f"[copy] {notice}（7-Zip LGPL 许可说明）")
+    # ---- 7-Zip 许可说明（包里带 7z 解压能力时一并附上） ----
+    if SEVENZIP_LICENSE.exists():
+        notice = app_dir / "NOTICE-7zip.txt"
+        shutil.copy2(SEVENZIP_LICENSE, notice)
+        print(f"[copy] {notice}（7-Zip LGPL 许可说明）")
 
     # ---- 元数据 ----
     write_json(

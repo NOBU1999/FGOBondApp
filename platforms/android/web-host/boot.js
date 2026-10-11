@@ -157,7 +157,7 @@
     Promise.reject(new Error("安卓版不支持联网更新数据；数据随安装包发布（更新请下载新版 APK）"));
   api.resetStaticData = () =>
     Promise.reject(new Error("安卓版暂不支持重置静态数据；可卸载重装以恢复初始数据"));
-  // ---- 检查软件更新：安卓没有 updater.exe，只查"最新版本号"并给发布页/动态链接 ----
+  // ---- 检查软件更新：安卓本来就没有桌面那套更新器（更新＝覆盖安装 APK），只查最新版本号并给链接 ----
   const UPDATE_SOURCES = [
     {
       key: "jsdelivr",

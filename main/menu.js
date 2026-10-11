@@ -4,7 +4,6 @@ const { Menu, BrowserWindow, dialog, app, shell } = require("electron");
 const path = require("path");
 const { getDbPath, getAppRoot } = require("./paths");
 const { stopActiveEngine } = require("./ipc-handlers");
-const appUpdater = require("./app-updater");
 
 const GITHUB_URL = "https://github.com/NOBU1999/FGOBondApp";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
@@ -53,31 +52,6 @@ function buildMenu() {
     {
       label: "工具",
       submenu: [
-        {
-          label: "安装新包...",
-          click: async () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (!win) return;
-            await appUpdater.installPackage(win);
-          },
-        },
-        {
-          label: "回滚到上一版...",
-          click: async () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (!win) return;
-            await appUpdater.rollback(win);
-          },
-        },
-        {
-          label: "版本与更新信息...",
-          click: async () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (!win) return;
-            await appUpdater.showVersionInfo(win);
-          },
-        },
-        { type: "separator" },
         {
           label: "重置数据库",
           click: async () => {
@@ -158,14 +132,15 @@ function buildMenu() {
                 "",
                 "本工具仅用于非商业学习与游戏辅助用途。",
               ].join("\n"),
-              buttons: ["使用说明", "打开 GitHub", "打开 Issues", "关闭"],
+              buttons: ["检查软件更新", "使用说明", "打开 GitHub", "打开 Issues", "关闭"],
               defaultId: 0,
-              cancelId: 3,
+              cancelId: 4,
               noLink: true,
             });
-            if (response === 0) sendToFocused("menu:manual");
-            if (response === 1) shell.openExternal(GITHUB_URL);
-            if (response === 2) shell.openExternal(GITHUB_ISSUES_URL);
+            if (response === 0) sendToFocused("menu:version");
+            if (response === 1) sendToFocused("menu:manual");
+            if (response === 2) shell.openExternal(GITHUB_URL);
+            if (response === 3) shell.openExternal(GITHUB_ISSUES_URL);
           },
         },
       ],
