@@ -1,6 +1,8 @@
 "use strict";
 
-const { ipcMain, BrowserWindow, clipboard } = require("electron");
+const { ipcMain, BrowserWindow, clipboard, app } = require("electron");
+const fs = require("fs");
+const path = require("path");
 const database = require("./database");
 const { PythonProcess } = require("./python-process");
 const { getAppRoot, getDbPath } = require("./paths");
@@ -10,12 +12,34 @@ const avatars = require("./avatars");
 const { createDataBridge, BRIDGE_METHOD_NAMES } = require("../shared/bridge/data-bridge.mjs");
 
 let activeEngine = null;
+// 超级模式当前这次计算的"停止文件"路径（普通计算为 null）
+let activeStopFile = null;
 
 function stopActiveEngine() {
   if (activeEngine) {
     activeEngine.stop();
     activeEngine = null;
   }
+}
+
+/**
+ * 超级模式的"停止"：不杀进程，而是写一个停止文件。
+ * 引擎在自己的循环里发现它出现，就把当前搜索收尾、排序、返回已经算出来的结果
+ * （`status: "partial"`）—— 用户点停止不再白算一场。
+ */
+function requestStopActiveEngine() {
+  if (!activeEngine || !activeStopFile) return false;
+  try {
+    fs.writeFileSync(activeStopFile, "1");
+    return true;
+  } catch (err) {
+    diagLog(`写停止文件失败：${(err && err.message) || err}`);
+    return false;
+  }
+}
+
+function superStopFilePath() {
+  return path.join(app.getPath("userData"), "super-stop.flag");
 }
 
 /** 引擎失败时记日志：错误信息 + 引擎输出尾部（用户反馈时能看到真正原因） */
@@ -123,6 +147,17 @@ function registerIpcHandlers() {
   // ---------------- Python 引擎 ----------------
   ipcMain.handle("engine:calculate", async (event, payload) => {
     stopActiveEngine();
+    // 超级模式：给引擎一个"停止文件"路径 —— 用户点停止时写它，引擎收尾后正常返回结果
+    activeStopFile = null;
+    if (payload && Number(payload.superMode) > 1) {
+      activeStopFile = superStopFilePath();
+      try {
+        fs.rmSync(activeStopFile, { force: true });
+      } catch (_) {
+        // 残留文件删不掉也没关系：下面会先清一次，引擎只在本次计算期间读它
+      }
+      payload.stopFile = activeStopFile;
+    }
     const engine = new PythonProcess({ dbPath: getDbPath() });
     activeEngine = engine;
     engine.on("progress", (text) => sendProgress(event, text));
@@ -134,6 +169,7 @@ function registerIpcHandlers() {
       throw err;
     } finally {
       if (activeEngine === engine) activeEngine = null;
+      activeStopFile = null;
     }
   });
 
@@ -200,8 +236,17 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle("engine:cancel", () => {
+    // 超级模式：先请求"体面停止"（引擎收尾、保住已算出的结果）；
+    // 若一段时间后还没结束，再兜底杀掉，保证这个按钮一定有效。
+    if (requestStopActiveEngine()) {
+      const engine = activeEngine;
+      setTimeout(() => {
+        if (activeEngine === engine) stopActiveEngine();
+      }, 20000);
+      return { ok: true, graceful: true };
+    }
     stopActiveEngine();
-    return { ok: true };
+    return { ok: true, graceful: false };
   });
 }
 

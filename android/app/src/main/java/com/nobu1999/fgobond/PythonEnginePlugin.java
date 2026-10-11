@@ -82,7 +82,12 @@ public class PythonEnginePlugin extends Plugin {
                 ensurePythonStarted();
                 String dbPath = ensureDatabase();
                 String resultJson = pythonCalculate(dbPath, requestJson);
-                if (cancelled) {
+                // 超级模式：取消是"协作式收尾"，引擎会把已经算出来的结果正常返回
+                // （status="partial"）—— 这种情况要把结果交给界面，不能当取消丢掉。
+                // 普通档位仍是老的"取消即丢弃"语义。
+                boolean partial = resultJson != null
+                        && resultJson.replace(" ", "").contains("\"status\":\"partial\"");
+                if (cancelled && !partial) {
                     call.reject("已取消");
                     return;
                 }
