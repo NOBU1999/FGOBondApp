@@ -4953,16 +4953,14 @@ const App = {
             <template v-else-if="appUpdate.hasUpdate">
               <div class="app-update-title">🎉 发现新版本 v{{ appUpdate.latest }}（当前 v{{ appUpdate.current }}）</div>
               <div class="filters" style="margin-top:8px">
-                <button class="primary" @click="openExternalLink(appUpdate.releaseUrl)">⬇️ 打开发布页</button>
-                <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 查看更新动态（B 站）</button>
+                <button class="primary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 关注动态及更新信息</button>
               </div>
               <pre v-if="appUpdate.notes" class="app-update-notes">{{ appUpdate.notes }}</pre>
             </template>
             <template v-else>
               <div class="app-update-title">✅ 已经是最新版本（v{{ appUpdate.current }}）</div>
               <div class="filters" style="margin-top:8px">
-                <button class="secondary" @click="openExternalLink(appUpdate.githubUrl)">打开发布页</button>
-                <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 关注更新动态（B 站）</button>
+                <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 关注动态及更新信息</button>
               </div>
             </template>
             <div v-if="appUpdate.androidNote" class="text-muted" style="margin-top:6px">{{ appUpdate.androidNote }}</div>
