@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""生成发布包所需的元数据，并投放更新器。
+"""生成发布包所需的元数据。
 
 发布包根目录需要两个文件：
-    version.json   记录「已安装的版本」（程序自己读；更新器用它判断当前版本）
-    update.json    安装包标记（更新器用它判断包内版本与兼容区间）
+    version.json   记录「已安装的版本」（程序自己读：版本与更新信息面板、检查软件更新都用它）
+    update.json    发布标记（版本号 / 兼容区间 / 数据库结构版本；出包时写入，供人工核对与后续工具使用）
 
 做法：打包完成后（release/MyFGOApp 已就绪）执行本脚本，
 再把整个 MyFGOApp 文件夹压缩成 zip / 7z 发布。
@@ -11,7 +11,7 @@
 用法：
     python scripts/make_release_meta.py
     python scripts/make_release_meta.py --version 0.1.10 --compatible-from 0.1.9 \\
-        --notes "多账号 + 独立更新器"
+        --notes "多账号与数据更新"
 """
 
 from __future__ import annotations

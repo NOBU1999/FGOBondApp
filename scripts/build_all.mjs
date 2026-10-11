@@ -370,7 +370,7 @@ function buildWindows() {
   run(electronBuilder, electronArgs);
 
   // electron-builder 的 dir 目标输出到 release/win-unpacked，
-  // 而既有流程（make_release_meta / privacy_clean / fetch_missing_avatars / 更新器）都约定
+  // 而既有流程（make_release_meta / privacy_clean / fetch_missing_avatars）都约定
   // 应用目录是 release/MyFGOApp → 这里改名到位。不这么做会打到上一次的旧目录里（实测踩过：
   // 会产出"标签新版本、内容却是旧版本"的错包）。
   const unpackedDir = path.join(RELEASE_DIR, "win-unpacked");
