@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld("fgo", {
   getAvatarData: (id) => ipcRenderer.invoke("avatars:data", toPlain(id)),
   getDiagnosticLog: () => ipcRenderer.invoke("log:read"),
   clearDiagnosticLog: () => ipcRenderer.invoke("log:clear"),
+  checkAppUpdate: () => ipcRenderer.invoke("app:check-update"),
+  openExternal: (url) => ipcRenderer.invoke("app:open-external", toPlain(url)),
 
   // 主进程推送事件
   onEngineProgress: (callback) => {

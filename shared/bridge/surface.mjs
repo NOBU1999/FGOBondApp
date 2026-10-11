@@ -23,6 +23,8 @@ export const PLATFORM_METHODS = Object.freeze([
   "ensureAvatars",
   "getDiagnosticLog",
   "clearDiagnosticLog",
+  "checkAppUpdate",
+  "openExternal",
 ]);
 
 /** 只做事件订阅：渲染侧本地实现（preload.js / boot.js），不走 IPC */

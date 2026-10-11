@@ -157,6 +157,119 @@
     Promise.reject(new Error("安卓版不支持联网更新数据；数据随安装包发布（更新请下载新版 APK）"));
   api.resetStaticData = () =>
     Promise.reject(new Error("安卓版暂不支持重置静态数据；可卸载重装以恢复初始数据"));
+  // ---- 检查软件更新：安卓没有 updater.exe，只查"最新版本号"并给发布页/动态链接 ----
+  const UPDATE_SOURCES = [
+    {
+      key: "jsdelivr",
+      label: "jsDelivr CDN",
+      url: "https://fastly.jsdelivr.net/gh/NOBU1999/FGOBondApp@main/package.json",
+      kind: "package",
+    },
+    {
+      key: "github",
+      label: "GitHub Releases",
+      url: "https://api.github.com/repos/NOBU1999/FGOBondApp/releases/latest",
+      kind: "github",
+    },
+    {
+      key: "tuna",
+      label: "清华 GitHub 镜像",
+      url: "https://mirrors.tuna.tsinghua.edu.cn/github-release/NOBU1999/FGOBondApp/LatestRelease/",
+      kind: "html",
+    },
+  ];
+  const GITHUB_RELEASES_URL = "https://github.com/NOBU1999/FGOBondApp/releases";
+  const BILIBILI_DYNAMIC_URL = "https://space.bilibili.com/431124482/dynamic";
+
+  function parseVersion(text) {
+    const m = String(text || "").match(/(\d+)\.(\d+)\.(\d+)/);
+    return m ? { raw: m[0], parts: [Number(m[1]), Number(m[2]), Number(m[3])] } : null;
+  }
+
+  function versionNewer(a, b) {
+    const pa = parseVersion(a);
+    const pb = parseVersion(b);
+    if (!pa || !pb) return false;
+    for (let i = 0; i < 3; i += 1) {
+      if (pa.parts[i] !== pb.parts[i]) return pa.parts[i] > pb.parts[i];
+    }
+    return false;
+  }
+
+  api.checkAppUpdate = async () => {
+    const current = String((api.info && api.info.version) || "0.0.0");
+    const checks = [];
+    let found = null;
+    for (const source of UPDATE_SOURCES) {
+      try {
+        const resp = await fetch(source.url, { cache: "no-store" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        if (source.kind === "package") {
+          const data = JSON.parse(text);
+          const v = parseVersion(data.version);
+          if (!v) throw new Error("没有版本号");
+          checks.push({ key: source.key, label: source.label, ok: true, version: v.raw });
+          if (!found) found = { version: v.raw, releaseUrl: GITHUB_RELEASES_URL, notes: "", source };
+        } else if (source.kind === "github") {
+          const data = JSON.parse(text);
+          const v = parseVersion(data.tag_name || data.name);
+          if (!v) throw new Error("没有版本号");
+          checks.push({ key: source.key, label: source.label, ok: true, version: v.raw });
+          if (!found) {
+            found = {
+              version: v.raw,
+              releaseUrl: data.html_url || GITHUB_RELEASES_URL,
+              notes: String(data.body || "").slice(0, 500),
+              source,
+            };
+          }
+        } else {
+          const v = parseVersion(text);
+          if (!v) throw new Error("镜像页里没有版本号");
+          checks.push({ key: source.key, label: source.label, ok: true, version: v.raw });
+          if (!found) found = { version: v.raw, releaseUrl: GITHUB_RELEASES_URL, notes: "", source };
+        }
+      } catch (err) {
+        checks.push({
+          key: source.key,
+          label: source.label,
+          ok: false,
+          detail: String((err && err.message) || err),
+        });
+      }
+    }
+    if (!found) {
+      return {
+        ok: false,
+        current,
+        checks,
+        message: "所有更新源都连不上（可能是网络问题）",
+        githubUrl: GITHUB_RELEASES_URL,
+        bilibiliUrl: BILIBILI_DYNAMIC_URL,
+      };
+    }
+    return {
+      ok: true,
+      current,
+      latest: found.version,
+      hasUpdate: versionNewer(found.version, current),
+      source: { key: found.source.key, label: found.source.label },
+      releaseUrl: found.releaseUrl || GITHUB_RELEASES_URL,
+      notes: found.notes || "",
+      checks,
+      githubUrl: GITHUB_RELEASES_URL,
+      bilibiliUrl: BILIBILI_DYNAMIC_URL,
+      androidNote: "安卓版请下载新版 APK 覆盖安装（个人数据保留）",
+    };
+  };
+  // 用系统浏览器打开链接（安卓走 WebView 的外链处理）
+  api.openExternal = async (url) => {
+    const target = String(url || "");
+    if (!/^https:\/\//i.test(target)) throw new Error("不允许打开的链接");
+    window.open(target, "_blank");
+    return { ok: true, url: target };
+  };
   api.copyText = async (text) => {
     const value = String(text ?? "");
     try {

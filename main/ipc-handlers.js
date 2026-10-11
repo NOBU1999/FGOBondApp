@@ -1,9 +1,10 @@
 "use strict";
 
-const { ipcMain, BrowserWindow, clipboard, app } = require("electron");
+const { ipcMain, BrowserWindow, clipboard, app, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const database = require("./database");
+const appUpdate = require("./app-update-check");
 const { PythonProcess } = require("./python-process");
 const { getAppRoot, getDbPath } = require("./paths");
 const { resetStaticData } = require("./db-reset");
@@ -143,6 +144,25 @@ function registerIpcHandlers() {
   // ---------------- 平台能力：诊断日志（界面「诊断日志」面板） ----------------
   ipcMain.handle("log:read", () => readDiagLog());
   ipcMain.handle("log:clear", () => clearDiagLog());
+
+  // ---------------- 检查软件更新（只查版本号，不下载、不安装） ----------------
+  ipcMain.handle("app:check-update", async () => {
+    try {
+      const result = await appUpdate.checkAppUpdate();
+      diagLog(
+        `检查软件更新：current=${result.current} latest=${result.latest || "?"} ` +
+          `source=${(result.source && result.source.label) || "无"} hasUpdate=${result.hasUpdate}`
+      );
+      return result;
+    } catch (err) {
+      const message = (err && err.message) || String(err);
+      diagLog(`检查软件更新失败：${message}`);
+      return { ok: false, current: "", message, checks: [] };
+    }
+  });
+
+  // 用系统浏览器打开链接（只放行白名单里的站点，见 main/app-update-check.js）
+  ipcMain.handle("app:open-external", (_event, url) => appUpdate.openExternal(url));
 
   // ---------------- Python 引擎 ----------------
   ipcMain.handle("engine:calculate", async (event, payload) => {

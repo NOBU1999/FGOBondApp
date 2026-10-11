@@ -97,11 +97,13 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | `updateData` | – | 全量重建游戏数据（**保留个人数据**） | 🔵 | 网页 / 安卓不适用（随包发版） |
 | `resetStaticData` | – | 重建静态数据 | 🔵 | 网页 / 安卓不适用或随包重置 |
 
-### 2.6 系统能力与事件（3）
+### 2.6 系统能力与事件（5）
 
 | 方法 | 参数 | 用途 | 归属 | 网页 / 安卓注意 |
 |---|---|---|---|---|
 | `copyText` | `text` | 写剪贴板（复制验证串 / 队伍） | 🔵 | `navigator.clipboard.writeText`，需降级方案 |
+| `checkAppUpdate` | – | 检查**软件**是否有新版本（只查版本号，不下载、不安装） | 🔵 | 桌面按「清华 GitHub 镜像 → GitHub Releases → jsDelivr CDN」依次试；安卓同链（无 updater.exe，只提示去下载新 APK） |
+| `openExternal` | `url` | 用系统浏览器打开链接（发布页 / B 站动态） | 🔵 | 桌面 = `shell.openExternal`＋**站点白名单**；安卓 = WebView 外链 |
 | `onEngineProgress` | `callback` | 订阅引擎进度 | 🟢 抽象 / 🔵 传输 | 桌面 = IPC 推送；网页 = Worker `postMessage` |
 | `onMenuAction` | `callback` | 订阅系统菜单动作 | 🔵 | **网页没有系统菜单** → 界面里要有自己的入口按钮（设置 / 更新数据 / 重置） |
 
