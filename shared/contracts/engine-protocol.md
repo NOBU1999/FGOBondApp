@@ -118,11 +118,23 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `topN`（如 `top20`） | `TeamSolution[]`，按分数降序 |
 | `sortMode` | 本次**实际生效**的排序口径（`multiplier` / `points`） |
 | `totalCandidates` | 入榜的从者阵容数 |
+| `poolSize` | 候选池人数（本次实际枚举的池；**可选**，老引擎没有） |
+| `poolCombos` | 池内可能组合数（`C(poolSize, 自由位数)`；界面用它和 `totalCandidates` 一起说明"本次评估了多少"；**可选**） |
 | `truncated` | `true` = 因时间兜底提前结束（结果随机器速度可能不同）；正常为 `false` |
 | `verificationToken` | 复现模式验证串（`FGOBONDV3.` 开头，PPMd + Base64URL） |
 | `verificationTokenFull` | 完整模式验证串（含全部游戏数据，体积约为复现模式的 1.5 倍） |
 
-`TeamSolution`：`{rank, totalMultiplier, costUsed, baseBond, totalBondPoints, team[], maxBondStats, traitCoverage}`
+`TeamSolution`：`{rank, totalMultiplier, costUsed, baseBond, totalBondPoints, team[], maxBondStats, traitCoverage, sameScoreTeams[], sameScoreTotal}`
+
+> **同分可替换阵容**（`sameScoreTeams` / `sameScoreTotal`，可选字段，2026-10-10 新增）：
+> 为了算得快，引擎会把"等价阵容"合并后只评估代表（支配剪枝）。这两个字段把**被合并掉、且分数完全相同**的那些阵容补给界面，
+> 供"同分合并一栏 + 下拉展开"用：
+> - `sameScoreTeams`：`[{servantIds: number[]}]`，**顺序与 `team` 里非助战成员一致**；第一项就是引擎给的那一支。
+>   这些阵容与本行的分数**完全相同**（把某位成员换成"在同一套礼装下收益恒等、且 Cost／个人加成／光环／满绊开关都一样"的从者，
+>   乘数逐项相同 ⇒ 恒等式），**礼装与站位不变**，界面点选时只替换从者即可。
+> - `sameScoreTotal`：该同分组的**真实规模**（`sameScoreTeams` 最多给 100 条，超出看这个数）。
+> - ⚠️ 只覆盖"就地换人"能同分的那部分；"换另一套礼装才追平"的阵容不在其中（那是搜索覆盖面的事，见 `poolCombos`）。
+> - 老客户端忽略这两个字段即可（向后兼容）；老引擎没有这两个字段时界面自动不显示下拉。
 `TeamMember`：`{position, servantId, name, stage, isSupport, isFixed, isMaxBond, isCrown, craftId, craftName, craftType, secondCraftId, secondCraftName, secondCraftType, bonusDetail}`
 
 失败：`{"status": "error", "message": "...", "elapsed": 秒}`（宿主把它转成异常抛给界面）
