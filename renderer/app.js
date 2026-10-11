@@ -385,6 +385,10 @@ const App = {
       compareVisible: false,
       lastSearchStats: null,
       expandedResult: null,
+      // 同分可替换阵容：rank → 选中的条目下标（0 = 引擎给的那一支）
+      sameScoreChoice: {},
+      // 当前展开了"同分"下拉的方案序号
+      expandedSameScore: null,
       simpleExcludedServants: [],
       currentPage: 1,
       pageSize: 50,
@@ -630,6 +634,14 @@ const App = {
       const ex = this.simpleExcludedSet;
       return this.results.filter((r) => !(r.team || []).some((m) => ex.has(Number(m.servantId))));
     },
+    // 本次覆盖面：实际评估的阵容数 / 候选池里的可能组合数（旧引擎没有这两个字段 → 不显示）
+    coveragePercent() {
+      const s = this.lastSearchStats;
+      if (!s || !s.poolCombos) return null;
+      const pct = (100 * Number(s.totalCandidates || 0)) / Number(s.poolCombos);
+      if (!Number.isFinite(pct)) return null;
+      return pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+    },
     totalPages() {
       return Math.max(1, Math.ceil(this.filteredResults.length / this.pageSize));
     },
@@ -710,6 +722,12 @@ const App = {
   methods: {
     // ---------- 工具 ----------
     formatBondNumber(v) { return formatBondNumber(v); },
+    // 千分位（覆盖面那行用；组合数动辄几万）
+    formatCount(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      return n.toLocaleString("en-US");
+    },
     persistResultSettings() {
       try {
         localStorage.setItem("fgoBondApp.resultSettings", JSON.stringify(this.resultSettings)); // platform-ok 纯 UI 偏好，各平台宿主都支持，见上
@@ -805,8 +823,123 @@ const App = {
       const map = { total_max: "总牵绊最大化", target_max: "指定从者最大化", balanced: "均衡模式" };
       return map[strategy] || strategy || "总牵绊最大化";
     },
-    visibleResultTeam(result) {
+    // ---------------- 同分可替换阵容（引擎 sameScoreTeams；旧引擎没这个字段 → 全部退化为空）----------------
+    sameScoreList(result) {
+      const list = result && Array.isArray(result.sameScoreTeams) ? result.sameScoreTeams : [];
+      return list.filter((a) => a && Array.isArray(a.servantIds));
+    },
+    sameScoreCount(result) {
+      const n = Number(result && result.sameScoreTotal);
+      const list = this.sameScoreList(result);
+      return Number.isFinite(n) && n > list.length ? n : list.length;
+    },
+    sameScoreChoiceIndex(result) {
+      const list = this.sameScoreList(result);
+      const idx = Number((this.sameScoreChoice || {})[Number(result && result.rank)]);
+      return Number.isInteger(idx) && idx >= 0 && idx < list.length ? idx : 0;
+    },
+    chooseSameScore(result, index) {
+      const rank = Number(result && result.rank);
+      if (!rank) return;
+      this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: index };
+    },
+    // 下拉里一条"同分阵容"的第 index 位成员：从者 + 礼装都取自**这一条自己**（合并同分行后，
+    // 不同条的礼装可能不一样）；缺字段（旧引擎）时退回本行的值。
+    sameScoreMember(result, index, alt) {
+      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
+      const base = players[index];
+      if (!base) return null;
+      const ids = (alt && alt.servantIds) || [];
+      const mains = (alt && alt.craftIds) || [];
+      const seconds = (alt && alt.secondCraftIds) || [];
+      const sid = ids[index] !== undefined ? ids[index] : base.servantId;
+      const craftId = mains[index] !== undefined ? mains[index] : base.craftId;
+      const secondCraftId = seconds[index] !== undefined ? seconds[index] : base.secondCraftId;
+      const craft = this.craftById(craftId);
+      const secondCraft = this.craftById(secondCraftId);
+      return {
+        position: base.position,
+        posLabel: this.positionLabel(base.position),
+        servantId: sid,
+        name: this.resultMemberName({ ...base, servantId: sid }),
+        craftId,
+        secondCraftId,
+        craftName: (craft && craft.name) || "",
+        secondCraftName: (secondCraft && secondCraft.name) || "",
+      };
+    },
+    // 下拉里每一支按"前排 / 后排"分组（界面用头像展示，名字与礼装放悬浮提示）
+    sameScoreRows(result, alt) {
+      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
+      const front = [];
+      const back = [];
+      players.forEach((m, i) => {
+        const entry = this.sameScoreMember(result, i, alt);
+        if (!entry) return;
+        (String(m.position || "").startsWith("front") ? front : back).push(entry);
+      });
+      const rows = [];
+      if (front.length) rows.push({ label: "前排", members: front });
+      if (back.length) rows.push({ label: "后排", members: back });
+      return rows;
+    },
+    // 把某一支同分阵容渲染成"前排：… ｜ 后排：…"（文字版，反馈摘要用；带各自礼装）
+    sameScoreTeamText(result, alt) {
+      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
+      const front = [];
+      const back = [];
+      players.forEach((m, i) => {
+        const e = this.sameScoreMember(result, i, alt);
+        if (!e) return;
+        const crafts = [e.craftName, e.secondCraftName].filter(Boolean).join(" + ");
+        const text = crafts ? `${e.name}（${crafts}）` : e.name;
+        (String(m.position || "").startsWith("front") ? front : back).push(text);
+      });
+      const parts = [];
+      if (front.length) parts.push(`前排：${front.join("、")}`);
+      if (back.length) parts.push(`后排：${back.join("、")}`);
+      const sup = ((result && result.team) || []).find((m) => m.isSupport);
+      const sCid = alt && alt.supportCraftId !== undefined ? alt.supportCraftId : (sup || {}).craftId;
+      const sName = (this.craftById(sCid) || {}).name;
+      if (sName) parts.push(`助战礼装：${sName}`);
+      return parts.join(" ｜ ");
+    },
+    // 这一行"当前显示"的队伍：若在同分下拉里选了某一支，就把**整支配置**换掉
+    // （从者 + 每个位置的礼装 + 助战礼装；位置本身由方案决定，不变）
+    displayedResultTeam(result) {
       const team = (result && result.team) || [];
+      const list = this.sameScoreList(result);
+      if (list.length <= 1) return team;
+      const alt = list[this.sameScoreChoiceIndex(result)] || {};
+      const ids = alt.servantIds || [];
+      const mains = alt.craftIds || [];
+      const seconds = alt.secondCraftIds || [];
+      const players = team.filter((m) => !m.isSupport);
+      if (players.length !== ids.length) return team;
+      let cursor = 0;
+      return team.map((m) => {
+        if (m.isSupport) {
+          return {
+            ...m,
+            craftId: alt.supportCraftId !== undefined ? alt.supportCraftId : m.craftId,
+            secondCraftId: alt.supportSecondCraftId !== undefined ? alt.supportSecondCraftId : m.secondCraftId,
+          };
+        }
+        const i = cursor;
+        cursor += 1;
+        return {
+          ...m,
+          servantId: ids[i] !== undefined ? ids[i] : m.servantId,
+          craftId: mains[i] !== undefined ? mains[i] : m.craftId,
+          secondCraftId: seconds[i] !== undefined ? seconds[i] : m.secondCraftId,
+        };
+      });
+    },
+    sameScoreActive(result) {
+      return this.sameScoreList(result).length > 1 && this.sameScoreChoiceIndex(result) > 0;
+    },
+    visibleResultTeam(result) {
+      const team = this.displayedResultTeam(result);
       if (!this.resultSettings.hideSupport) return team;
       return team.filter((m) => !m.isSupport);
     },
@@ -962,6 +1095,16 @@ const App = {
         }
         if (r.traitCoverage && r.traitCoverage.length) {
           lines.push(`  特性覆盖：${this.traitCoverageText(r)}`);
+        }
+        // 「选它就等于全选整组」：同分可替换阵容整组一起写进摘要，
+        // 免得对方按摘要复现时只看到被合并后的那一支。
+        const sameScore = this.sameScoreList(r);
+        if (sameScore.length > 1) {
+          const shown = this.sameScoreChoiceIndex(r) + 1;
+          lines.push(`  ── 同分可替换阵容共 ${this.sameScoreCount(r)} 支（分数完全相同 ${Number(r.totalMultiplier).toFixed(3)}x，礼装/站位相同）；本行当前显示第 ${shown} 支：`);
+          sameScore.forEach((alt, i) => {
+            lines.push(`     同分${i + 1}${i + 1 === shown ? "（显示中）" : ""}：${this.sameScoreTeamText(r, alt)}`);
+          });
         }
       }
       lines.push("");
@@ -3266,6 +3409,9 @@ const App = {
           elapsed: result._elapsed,
           processed: result._processed,
           totalCandidates: result.totalCandidates,
+          // 覆盖面（引擎新增字段；旧引擎为 undefined → 界面自动不显示那一行）
+          poolSize: result.poolSize,
+          poolCombos: result.poolCombos,
           qualityMode: this.qualityMode,
           timeoutMs: payload.timeoutMs,
           // 引擎的时间上限兜底：true = 还没跑完就被砍了（换更高档位可能更好）
@@ -3505,7 +3651,9 @@ const App = {
       }
     },
     exportJson(result) {
-      const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
+      // 导出"这一行当前显示"的阵容（若在同分下拉里选过某一支，就导出那一支）
+      const payload = { ...result, team: this.displayedResultTeam(result) };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `FGO方案#${result.rank}.json`;
@@ -4026,6 +4174,12 @@ const App = {
           · 处理 {{ lastSearchStats.processed }} 个组合
           · 候选队伍 {{ lastSearchStats.totalCandidates || 0 }}
         </div>
+        <div v-if="resultSettings.showSearchStats && lastSearchStats && lastSearchStats.poolCombos" class="search-stats text-muted">
+          🔎 本次覆盖面：候选池 {{ lastSearchStats.poolSize }} 人
+          ｜ 池内可能组合 {{ formatCount(lastSearchStats.poolCombos) }} 支
+          ｜ 实际评估 {{ formatCount(lastSearchStats.totalCandidates || 0) }} 支（{{ coveragePercent }}%）
+          <span :title="'为了算得快，引擎只评估池内一部分阵容（按上界从高到低先评有希望的）。没评估到的阵容不会出现在结果里 —— 这是「快」的代价；同分可替换阵容已在各行下拉里展开。'">ⓘ</span>
+        </div>
         <div v-if="resultSettings.showDataVersion" class="search-stats text-muted">
           客户端 v{{ info && info.version ? info.version : '?' }} · 数据更新 {{ info && info.dataUpdatedAt ? info.dataUpdatedAt : '未知' }} · 数据区 {{ info && info.dataRegion ? info.dataRegion : 'JP' }}
         </div>
@@ -4041,8 +4195,53 @@ const App = {
               选择
             </label>
             <span style="flex:1"></span>
+            <button
+              v-if="sameScoreCount(r) > 1"
+              class="secondary same-score-toggle"
+              :class="{ open: expandedSameScore === r.rank }"
+              :title="'本行有 ' + sameScoreCount(r) + ' 支「同分可替换」阵容（分数完全相同）；点开可看全部，点其中一支即可让它在本行显示'"
+              @click="expandedSameScore = (expandedSameScore === r.rank ? null : r.rank)"
+            >
+              {{ expandedSameScore === r.rank ? '▴' : '▾' }} 同分 {{ sameScoreCount(r) }} 支
+            </button>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
             <button class="secondary" @click="exportJson(r)">导出JSON</button>
+          </div>
+          <div v-if="expandedSameScore === r.rank && sameScoreCount(r) > 1" class="same-score-panel">
+            <div class="same-score-hint text-muted">
+              以下 {{ sameScoreCount(r) }} 支分数<strong>完全相同</strong>（{{ Number(r.totalMultiplier).toFixed(3) }}x），
+              只是可替换的从者不同；点其中一支 → 它成为本行显示的阵容（名次不变，礼装与站位不动）。
+              <template v-if="sameScoreCount(r) > sameScoreList(r).length">（此处列出前 {{ sameScoreList(r).length }} 支）</template>
+            </div>
+            <div
+              v-for="(alt, i) in sameScoreList(r)"
+              :key="i"
+              class="same-score-item"
+              :class="{ active: sameScoreChoiceIndex(r) === i }"
+              @click="chooseSameScore(r, i)"
+            >
+              <span class="same-score-badge">{{ sameScoreChoiceIndex(r) === i ? '显示中' : '选它' }}</span>
+              <span class="same-score-score">{{ Number(r.totalMultiplier).toFixed(3) }}x</span>
+              <span class="same-score-team">
+                <span v-for="grp in sameScoreRows(r, alt)" :key="grp.label" class="same-score-rowgroup">
+                  <span class="same-score-rowlabel text-muted">{{ grp.label }}</span>
+                  <span
+                    v-for="m in grp.members"
+                    :key="m.position"
+                    class="same-score-avatar"
+                    :title="m.name + '（' + m.posLabel + '）' + (m.craftName ? '｜主礼装：' + m.craftName : '') + (m.secondCraftName ? '｜第二礼装位：' + m.secondCraftName : '')"
+                  >
+                    <img
+                      v-if="!avatarMissingSet.has(String(m.servantId))"
+                      :src="avatarPath(m.servantId)"
+                      alt=""
+                      @error="markAvatarBroken(m.servantId)"
+                    />
+                    <span v-else class="same-score-avatar-fallback">{{ (m.name || '?').charAt(0) }}</span>
+                  </span>
+                </span>
+              </span>
+            </div>
           </div>
           <div class="result-board">
             <div v-for="m in visibleResultTeam(r)" :key="m.position" class="result-col">
@@ -4079,6 +4278,10 @@ const App = {
             </div>
           </div>
           <div v-if="expandedResult === r" class="result-detail">
+            <div v-if="sameScoreActive(r)" class="same-score-note">
+              ℹ️ 本行显示的是「同分可替换」阵容里的第 {{ sameScoreChoiceIndex(r) + 1 }} 支（共 {{ sameScoreCount(r) }} 支，分数完全相同 {{ Number(r.totalMultiplier).toFixed(3) }}x）。
+              礼装与站位沿用本行；若要换回引擎给的那一支，回列表点开「同分 {{ sameScoreCount(r) }} 支」再选。
+            </div>
             <div class="detail-summary">
               <div class="summary-item"><span class="label">总倍率</span><span class="value">x{{ Number(r.totalMultiplier).toFixed(3) }}</span></div>
               <div v-if="showsBondPoints(r)" class="summary-item"><span class="label">预计总牵绊</span><span class="value">{{ formatBondNumber(r.totalBondPoints) }}</span></div>
