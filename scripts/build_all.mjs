@@ -8,6 +8,9 @@
  *   node scripts/build_all.mjs                      # 两个都出
  *   node scripts/build_all.mjs --skip-windows       # 只出 APK
  *   node scripts/build_all.mjs --skip-android       # 只出 Windows 包
+ *   node scripts/build_all.mjs --test-only          # **只刷新测试目录**：重编引擎 + 打 win-unpacked
+ *                                                   #   + 拷进 release/MyFGOApp（不产 APK、不压 7z/zip、
+ *                                                   #   不写发布清单与发布说明的下载表）
  *   node scripts/build_all.mjs --android-data-refresh   # 只刷新安卓数据：不 bump 版本，只把数据序号 +1，只出 APK
  *   node scripts/build_all.mjs --force-engine       # 强制重跑 PyInstaller 重建 engine.exe
  *   node scripts/build_all.mjs --notes "本版更新内容…" --compatible-from 0.1.9
@@ -57,6 +60,9 @@ const SKIP_ANDROID = has("--skip-android");
 const FORCE_ENGINE = has("--force-engine");
 // 仅刷新安卓数据：基础版本号不动，只把安卓数据序号 +1；只出 APK（Windows 那边数据是应用内更新的，不需要）
 const ANDROID_DATA_REFRESH = has("--android-data-refresh");
+// 只刷新测试目录（release/MyFGOApp）：重编引擎 + 打 win-unpacked + 改名到位，
+// **不产 APK、不压 7z/zip、不写发布清单与下载表** —— 用于"改完让用户先测一遍"。
+const TEST_ONLY = has("--test-only");
 
 // 安卓版本：versionName 给人看（带打包日期），versionCode 给系统看（只增不减，21.5 亿上限）
 const BUILD_DATE = value(
@@ -409,6 +415,10 @@ function buildWindows() {
     rmSync(path.join(appDir, "db", `fgo_data.seed.db${suffix}`), { force: true });
   }
 
+  if (TEST_ONLY) {
+    log("测试模式：跳过压包（不产 7z/zip、不写发布清单与下载表）");
+    return;
+  }
   if (!existsSync(SEVEN_ZIP)) fatal("找不到 7-Zip：" + SEVEN_ZIP);
 
   const sevenz = path.join(RELEASE_DIR, `${PRODUCT}-v${VERSION}.7z`);
@@ -544,9 +554,13 @@ function loadHandWrittenNotes(notesFile) {
 ensureMissingAvatars();
 // 使用说明：应用内阅读的内容来自 renderer/manual.js，必须由 使用说明.txt 重新生成（避免两边不同步）
 ensureManualJs();
-if (!SKIP_ANDROID) buildAndroid();
+if (!SKIP_ANDROID && !TEST_ONLY) buildAndroid();
 if (!SKIP_WINDOWS) buildWindows();
-if (artifacts.length) {
+if (TEST_ONLY) {
+  step("完成（测试模式）");
+  console.log(`  测试目录已刷新：${path.relative(ROOT, path.join(RELEASE_DIR, "MyFGOApp"))}`);
+  console.log("  ⚠️ 记得把用户数据从备份恢复回 db\\fgo_data.db（出包会清那目录）");
+} else if (artifacts.length) {
   const manifest = writeManifestAndNotes();
   step("完成");
   for (const a of manifest.artifacts) console.log(`  ${a.file}  ${humanSize(a.bytes)}  ${a.sha256}`);
