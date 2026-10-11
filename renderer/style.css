@@ -80,6 +80,38 @@ body {
 .topbar h1 { font-size: 20px; margin: 0; }
 .topbar button { margin-left: 8px; }
 
+/* 左上角标题：可点击 → 版本与更新信息 */
+.brand-link { cursor: pointer; }
+.brand-link:hover { color: var(--accent); text-decoration: underline; }
+
+/* 版本与更新信息面板（点左上角标题进入） */
+.version-panel { display: flex; flex-direction: column; gap: 6px; }
+.version-row { display: flex; gap: 10px; font-size: 13px; }
+.version-label { min-width: 68px; color: var(--muted); }
+.app-update-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  font-size: 13px;
+}
+.app-update-result.newer {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.app-update-title { font-weight: 700; margin-bottom: 4px; }
+.app-update-notes {
+  white-space: pre-wrap;
+  font-size: 12px;
+  max-height: 160px;
+  overflow: auto;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+.app-update-checks { margin-top: 8px; font-size: 12px; }
+.app-update-checks summary { cursor: pointer; color: var(--muted); }
+
 /* PC：左上角「设置 ▾」下拉（安卓没有系统菜单，仍用工具栏「设置」按钮开全部分区） */
 .settings-menu { position: relative; display: inline-flex; }
 /* 系统原生下拉框（<select>）的替代浮层：Electron 上原生弹窗偶发不出来（electron#44186），

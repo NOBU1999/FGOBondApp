@@ -405,6 +405,10 @@ const App = {
       updateItems: [],
       updateResult: null,
       updateError: "",
+      // 版本与更新信息（点左上角标题进入）：只查版本号，不下载
+      appUpdate: null,
+      appUpdateChecking: false,
+      appUpdateError: "",
     };
   },
   computed: {
@@ -3596,6 +3600,32 @@ const App = {
         this.updateItems = this.initUpdateItems();
       }
     },
+    /** 点左上角「FGO牵绊推荐器」进入：版本与更新信息（含"检查软件更新"） */
+    openVersionModal() {
+      this.updateTitle = "版本与更新信息";
+      this.updateModalVisible = true;
+      this.appUpdateError = "";
+    },
+    /** 检查软件更新：只查最新版本号（多源依次试），不下载不安装 */
+    async checkAppUpdate() {
+      this.appUpdateChecking = true;
+      this.appUpdateError = "";
+      try {
+        this.appUpdate = await window.fgo.checkAppUpdate();
+      } catch (e) {
+        this.appUpdateError = e.message || String(e);
+      } finally {
+        this.appUpdateChecking = false;
+      }
+    },
+    /** 用系统浏览器打开链接（白名单在宿主侧校验） */
+    async openExternalLink(url) {
+      try {
+        await window.fgo.openExternal(url);
+      } catch (e) {
+        this.appUpdateError = e.message || String(e);
+      }
+    },
     closeUpdateModal() {
       if (!this.updateRunning) this.updateModalVisible = false;
     },
@@ -3945,7 +3975,7 @@ const App = {
     <!-- 顶部工具栏 -->
     <div class="topbar">
       <div class="topbar-brand">
-        <h1>FGO牵绊推荐器</h1>
+        <h1 class="brand-link" title="版本与更新信息（检查软件更新）" @click.stop="openVersionModal">FGO牵绊推荐器</h1>
         <div class="account-switch" @click.stop>
           <span class="server-label">账号</span>
           <select
@@ -4885,11 +4915,70 @@ const App = {
           <button class="secondary" :disabled="updateRunning" @click="runUpdate()">更新数据</button>
           <span class="text-muted" style="align-self:center">{{ updateRunning ? '处理中...' : '空闲' }}</span>
         </div>
-        <div v-if="updateTitle !== '更新数据'" class="text-muted" style="margin-bottom:10px">
+        <div v-if="updateTitle === '重置数据库'" class="text-muted" style="margin-bottom:10px">
           只重建静态数据（从者/礼装/特性/灵衣），账号 / Box / 排除 / 预设 / 自定义礼装都会保留；失败会自动回滚。
         </div>
+        <!-- 版本与更新信息（点左上角「FGO牵绊推荐器」进入） -->
+        <div v-if="updateTitle === '版本与更新信息'" class="version-panel">
+          <div class="version-row">
+            <span class="version-label">当前版本</span>
+            <span>v{{ info && info.version ? info.version : '?' }}</span>
+          </div>
+          <div class="version-row">
+            <span class="version-label">数据</span>
+            <span class="text-muted">
+              更新于 {{ info && info.dataUpdatedAt ? info.dataUpdatedAt : '未知' }}
+              ｜ 数据区 {{ info && info.dataRegion ? info.dataRegion : 'JP' }}
+            </span>
+          </div>
+          <div class="version-row" v-if="info && info.appRoot">
+            <span class="version-label">程序目录</span>
+            <span class="text-muted" style="word-break:break-all">{{ info.appRoot }}</span>
+          </div>
+          <div class="filters" style="margin-top:10px">
+            <button class="secondary" :disabled="appUpdateChecking" @click="checkAppUpdate">
+              {{ appUpdateChecking ? '正在检查…' : '🔍 检查软件更新' }}
+            </button>
+            <span class="text-muted" style="align-self:center">
+              依次尝试 清华 GitHub 镜像 → GitHub Releases → jsDelivr CDN（只查版本号，不下载）
+            </span>
+          </div>
+          <div v-if="appUpdateError" class="panel error" style="margin-top:8px">{{ appUpdateError }}</div>
+          <div v-if="appUpdate" class="app-update-result" :class="appUpdate.hasUpdate ? 'newer' : 'latest'">
+            <template v-if="!appUpdate.ok">
+              <div>⚠️ {{ appUpdate.message }}</div>
+            </template>
+            <template v-else-if="appUpdate.hasUpdate">
+              <div class="app-update-title">🎉 发现新版本 v{{ appUpdate.latest }}（当前 v{{ appUpdate.current }}）</div>
+              <div class="text-muted">
+                <span v-if="appUpdate.publishedAt">发布时间 {{ appUpdate.publishedAt.slice(0, 10) }} ｜ </span>
+                来源：{{ appUpdate.source && appUpdate.source.label }}
+              </div>
+              <div class="filters" style="margin-top:8px">
+                <button class="primary" @click="openExternalLink(appUpdate.releaseUrl)">⬇️ 打开发布页</button>
+                <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 查看更新动态（B 站）</button>
+              </div>
+              <pre v-if="appUpdate.notes" class="app-update-notes">{{ appUpdate.notes }}</pre>
+            </template>
+            <template v-else>
+              <div class="app-update-title">✅ 已经是最新版本（v{{ appUpdate.current }}）</div>
+              <div class="text-muted">来源：{{ appUpdate.source && appUpdate.source.label }}</div>
+              <div class="filters" style="margin-top:8px">
+                <button class="secondary" @click="openExternalLink(appUpdate.githubUrl)">打开发布页</button>
+                <button class="secondary" @click="openExternalLink(appUpdate.bilibiliUrl)">📣 关注更新动态（B 站）</button>
+              </div>
+            </template>
+            <details v-if="appUpdate.checks && appUpdate.checks.length" class="app-update-checks">
+              <summary>各更新源结果</summary>
+              <div v-for="c in appUpdate.checks" :key="c.key" class="text-muted">
+                {{ c.ok ? '✅' : '❌' }} {{ c.label }}{{ c.ok ? '（v' + c.version + '）' : '：' + c.detail }}
+              </div>
+            </details>
+            <div v-if="appUpdate.androidNote" class="text-muted" style="margin-top:6px">{{ appUpdate.androidNote }}</div>
+          </div>
+        </div>
         <div v-if="updateError" class="panel error" style="margin-bottom:10px">{{ updateError }}</div>
-        <div class="update-items">
+        <div v-if="updateTitle !== '版本与更新信息'" class="update-items">
           <div v-for="item in updateItems" :key="item.key" class="update-item" :class="item.status">
             <div class="update-status">{{ item.status === 'done' ? '✅' : (item.status === 'running' ? '⏳' : (item.status === 'error' ? '❌' : '○')) }}</div>
             <div class="update-main">
@@ -4901,7 +4990,7 @@ const App = {
             </div>
           </div>
         </div>
-        <div v-if="updateResult" class="update-result">
+        <div v-if="updateResult && updateTitle !== '版本与更新信息'" class="update-result">
           <div class="text-muted" style="margin-bottom:4px">更新结果</div>
           <pre style="white-space:pre-wrap;font-size:12px;max-height:160px;overflow:auto">{{ JSON.stringify(updateResult, null, 2) }}</pre>
         </div>
