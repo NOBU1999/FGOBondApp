@@ -68,9 +68,8 @@
 | `main/menu.js` | 206 | 系统菜单、对话框、打开外部浏览器 |
 | `main/paths.js` | 49 | 定位 exe / 应用根目录（便携版目录、开发目录） |
 | `main/python-process.js` | 181 | 起子进程（`spawn`）、管道读写 |
-| `main/app-updater.js` | 271 | 拉起 `updater.exe` 自更新 |
+| `main/app-update-check.js` | 226 | 检查软件更新（多源查版本号；不含下载/安装） |
 | `preload.js` | 76 | 桥接实现（`contextBridge` + `ipcRenderer`） |
-| `updater/` | | Windows 独立更新器（Python + PyInstaller） |
 | `python-engine/data_fetcher.py` | 813 | 联网下载游戏数据（`urllib`） |
 | `python-engine/engine_launcher.py`、`build_engine.ps1`、`*.spec` | | PyInstaller 打包 |
 | `scripts/*.py` | | 开发 / 构建期工具 |

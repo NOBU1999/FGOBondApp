@@ -102,7 +102,7 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | 方法 | 参数 | 用途 | 归属 | 网页 / 安卓注意 |
 |---|---|---|---|---|
 | `copyText` | `text` | 写剪贴板（复制验证串 / 队伍） | 🔵 | `navigator.clipboard.writeText`，需降级方案 |
-| `checkAppUpdate` | – | 检查**软件**是否有新版本（只查版本号，不下载、不安装） | 🔵 | 桌面按「清华 GitHub 镜像 → GitHub Releases → jsDelivr CDN」依次试；安卓同链（无 updater.exe，只提示去下载新 APK） |
+| `checkAppUpdate` | – | 检查**软件**是否有新版本（只查版本号，不下载、不安装） | 🔵 | 桌面按「清华 GitHub 镜像 → GitHub Releases → jsDelivr CDN」依次试；安卓同链（安卓只提示去下载新 APK） |
 | `openExternal` | `url` | 用系统浏览器打开链接（发布页 / B 站动态） | 🔵 | 桌面 = `shell.openExternal`＋**站点白名单**；安卓 = WebView 外链 |
 | `onEngineProgress` | `callback` | 订阅引擎进度 | 🟢 抽象 / 🔵 传输 | 桌面 = IPC 推送；网页 = Worker `postMessage` |
 | `onMenuAction` | `callback` | 订阅系统菜单动作 | 🔵 | **网页没有系统菜单** → 界面里要有自己的入口按钮（设置 / 更新数据 / 重置） |
@@ -120,7 +120,7 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | 文件导入 | 对话框 / 粘贴文本 | `<input type="file">` / 粘贴 |
 | 文件导出 | 保存对话框 | 浏览器下载（Blob） |
 | 联网更新数据 | Python `urllib` | 不做（随包发版） |
-| 自更新 | `updater.exe` | APK 覆盖安装；网页不涉及 |
+| 自更新 | 解压覆盖程序目录（程序内只提供"检查更新"） | APK 覆盖安装；网页不涉及 |
 
 ## 4. 变更流程（阶段 3 之后生效）
 

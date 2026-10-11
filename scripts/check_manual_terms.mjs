@@ -32,7 +32,7 @@ const uiFlat = ui.replace(/\s+/g, "");
 
 const manual = readFileSync(path.join(ROOT, "使用说明.txt"), "utf8");
 const COMPOUND = [" / ", "→", "（N）"];
-const FILE_LIKE = /\.[a-z]{2,4}$/i; // updater.exe / fgo_data.db 之类是文件名，不是界面文案
+const FILE_LIKE = /\.[a-z]{2,4}$/i; // fgo_data.db 之类是文件名，不是界面文案
 const terms = new Map();
 manual.split("\n").forEach((line, idx) => {
   for (const m of line.matchAll(/「([^「」]{1,24})」/g)) {
