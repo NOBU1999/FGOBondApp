@@ -23,10 +23,11 @@ from .constants import DB_PATH
 from .models import parse_request
 
 # Windows 下 Python stdout/stderr 可能默认使用 GBK，导致 Electron 端中文乱码。
-# 这里统一强制 UTF-8 输出。
+# 这里统一强制 UTF-8 输出（stdin 见 calculate_from_stdin 的说明）。
 try:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
+    sys.stdin.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
@@ -35,8 +36,23 @@ def _progress(message: str) -> None:
     print(f"[progress] {message}", file=sys.stderr, flush=True)
 
 
+def _read_stdin_text() -> str:
+    """把 stdin 读成文本。
+
+    ⚠️ **必须按字节读、再显式按 UTF-8 解码**：JSON 规范要求 UTF-8，而 Windows 上 Python
+    默认按系统码页（简中 = cp936）解 stdin —— 请求里只要出现一个非 ASCII 字符就会被解错，
+    表现是 `Invalid \\escape: line 1 column …`（2026-10-11 实测：超级模式的 stopFile 路径带
+    中文目录名就踩到了）。
+    ⚠️ 也别指望 `PYTHONIOENCODING` / `PYTHONUTF8` 兜底：冻结版 exe 实测两者都不生效。
+    """
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is not None:
+        return stream.read().decode("utf-8", errors="replace")
+    return sys.stdin.read()  # 测试替身（StringIO 之类）没有 buffer
+
+
 def calculate_from_stdin(db_path: Optional[str] = None) -> Dict[str, Any]:
-    raw = sys.stdin.read()
+    raw = _read_stdin_text()
     if not raw.strip():
         raise ValueError("stdin 中没有收到 JSON 输入")
     data = json.loads(raw)
