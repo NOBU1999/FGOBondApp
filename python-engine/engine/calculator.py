@@ -543,25 +543,52 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
     """
     if not team.players:
         return team
-    player_crafts = [
-        ctx.crafts[cid]
-        for p in team.players
-        for cid in (p.craft_id, p.second_craft_id)
-        if cid is not None
-    ]
-    support_craft = (
-        ctx.crafts.get(team.support_craft_id) if team.support_craft_id is not None else None
+    # 2026-10-13：本函数在一次搜索里被调用 60 万次以上（r7 实测 658,281 次），
+    # 但它的输入只取决于**队伍礼装的多重集**（各玩家位的两张 + 助战两张）——
+    # 实测这 65.8 万次调用只落在 3,585 种不同口径上（重复率 99.5%）。
+    # 而下面这段"收集玩家礼装 → 取有效礼装 → 挑出特性礼装"每次都要遍历礼装表，
+    # 于是按"礼装多重集"把它的结果缓存下来；每位从者的阶段选择本就另有
+    # ((从者, 特性礼装多重集)) 的缓存，两层合起来这一段几乎不再重复计算。
+    craft_sig = (
+        tuple(
+            sorted(
+                cid
+                for p in team.players
+                for cid in (p.craft_id, p.second_craft_id)
+                if cid is not None
+            )
+        ),
+        team.support_craft_id,
+        team.support_second_craft_id,
     )
-    support_second_craft = (
-        ctx.crafts.get(team.support_second_craft_id) if team.support_second_craft_id is not None else None
-    )
-    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
-    # 只有特性礼装才影响阶段选择；先把它们挑出来，避免每个阶段都遍历整份礼装表
-    # （本函数在一次搜索里会被调用几十万次，是最大的热点）。
-    trait_crafts = [
-        craft for craft in effect_crafts
-        if craft.bonus_type == "trait" and craft.is_bond_ce
-    ]
+    _craft_cache = getattr(ctx, "_stage_craft_sig_cache", None)
+    if _craft_cache is None:
+        _craft_cache = {}
+        ctx._stage_craft_sig_cache = _craft_cache
+    cached_crafts = _craft_cache.get(craft_sig)
+    if cached_crafts is None:
+        player_crafts = [
+            ctx.crafts[cid]
+            for p in team.players
+            for cid in (p.craft_id, p.second_craft_id)
+            if cid is not None
+        ]
+        support_craft = (
+            ctx.crafts.get(team.support_craft_id) if team.support_craft_id is not None else None
+        )
+        support_second_craft = (
+            ctx.crafts.get(team.support_second_craft_id) if team.support_second_craft_id is not None else None
+        )
+        effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
+        # 只有特性礼装才影响阶段选择；先把它们挑出来，避免每个阶段都遍历整份礼装表。
+        trait_crafts = [
+            craft for craft in effect_crafts
+            if craft.bonus_type == "trait" and craft.is_bond_ce
+        ]
+        trait_key = tuple(sorted(c.id for c in trait_crafts))
+        _craft_cache[craft_sig] = (trait_crafts, trait_key)
+    else:
+        trait_crafts, trait_key = cached_crafts
     # 2026-10-07（A1）：本函数一次搜索被调用几十万次，是全引擎第二大热点。
     # 输出只取决于 (从者, 本队特性礼装**多重集**)：
     # - 键必须是**多重集**：同名礼装可同时出现在玩家位与助战位，或由用户手动固定两张，
@@ -571,7 +598,6 @@ def optimize_team_stages(ctx: DataContext, team: "TeamConfig") -> "TeamConfig":
     if _stage_cache is None:
         _stage_cache = {}
         ctx._stage_opt_cache = _stage_cache
-    trait_key = tuple(sorted(c.id for c in trait_crafts))
 
     for p in team.players:
         if p.stage_locked:
@@ -633,6 +659,75 @@ def _effect_crafts(
     return result
 
 
+class TeamCraftView:
+    """一支队伍的“有效礼装”预计算结果（与成员无关的部分只算一次）。
+
+    背景（2026-10-13 实测）：`calculate_team_metrics` 在一次搜索里被调用几十万次
+    （r7 串实测 62.6 万次、占该趟总耗时约 27%），而它每次都要**对每位成员**重新遍历
+    整份有效礼装表求四件事：通用加成、助战位专属加成、特性加成、固定数值加成。
+    其中前三件对**整队**是同一个标量（与成员无关），第四件只依赖成员自己的特性掩码
+    —— 逐张遍历属于重复劳动。
+
+    ⇒ 本类把礼装表摊平成“条件掩码 → 数值”的紧凑表，每位成员只做几次位运算。
+    ⚠️ **公式仍只在 `calculate_member_multiplier` 一处定义**（见坑 27）；
+    本类只提供“已算好的中间量”，取值与逐张遍历逐项等价（连浮点累加顺序都保持不变：
+    被跳过的项在原实现里贡献恰好 0.0）。
+    """
+
+    __slots__ = ("effect_crafts", "universal", "support", "trait_items", "flat_items")
+
+    def __init__(
+        self,
+        player_crafts: List[CraftInfo],
+        support_craft: Optional[CraftInfo] = None,
+        support_second_craft: Optional[CraftInfo] = None,
+    ) -> None:
+        effect = _effect_crafts(player_crafts, support_craft, support_second_craft)
+        self.effect_crafts = effect
+        self.universal = universal_bonus(effect)
+        self.support = support_crafts_bonus(support_craft, support_second_craft)
+        trait_items = []
+        flat_items = []
+        for craft in effect:
+            if not craft.is_bond_ce:
+                continue
+            masks = craft.trigger_masks
+            if craft.bonus_type == "trait":
+                # 条件组为空 ⇒ 原实现对任何掩码都不命中，等同不贡献
+                if not masks:
+                    continue
+                trait_items.append((masks, craft.bonus_value))
+                if craft.flat_bonus > 0:
+                    flat_items.append((masks, craft.flat_bonus))
+            elif craft.bonus_type == "universal" and craft.flat_bonus > 0:
+                flat_items.append(((), craft.flat_bonus))  # 无条件
+        self.trait_items = tuple(trait_items)
+        self.flat_items = tuple(flat_items)
+
+    def trait_bonus(self, mask: int) -> float:
+        """等价于 `trait_bonus_for_mask(mask, effect_crafts)`。"""
+        total = 0.0
+        for masks, value in self.trait_items:
+            for group_mask in masks:
+                if (mask & group_mask) == group_mask:
+                    total += value
+                    break
+        return total
+
+    def flat_bonus(self, mask: int) -> float:
+        """等价于 `flat_bonus_for_mask(mask, effect_crafts)`。"""
+        total = 0.0
+        for masks, value in self.flat_items:
+            if not masks:
+                total += value
+                continue
+            for group_mask in masks:
+                if (mask & group_mask) == group_mask:
+                    total += value
+                    break
+        return total
+
+
 def frontline_bonus(position: str, support_in_front: bool) -> float:
     """前排加成：只作用于前排从者。
 
@@ -665,6 +760,7 @@ def calculate_member_multiplier(
     support_second_craft: Optional[CraftInfo] = None,
     support_in_front: bool = False,
     trait_mask: Optional[int] = None,
+    craft_view: Optional[TeamCraftView] = None,
 ) -> float:
     """计算单个非助战从者的最终倍率。
 
@@ -674,16 +770,25 @@ def calculate_member_multiplier(
                + personal_bonus)
 
     说明：个人加成是加算，不单独作为乘区。
+    `craft_view`（可选）：整队已经算好的有效礼装视图 —— 传了就用它，
+    省掉本函数内部按成员重复遍历礼装表的那三步（取值完全等价）。
     """
     front = frontline_bonus(position, support_in_front)
-    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
-    uni = universal_bonus(effect_crafts)
-    sc = support_crafts_bonus(support_craft, support_second_craft)
-    tr = (
-        trait_bonus_for_mask(trait_mask, effect_crafts)
-        if trait_mask is not None
-        else trait_bonus_for_servant(servant_traits, effect_crafts)
-    )
+    if craft_view is not None:
+        uni = craft_view.universal
+        sc = craft_view.support
+        tr = craft_view.trait_bonus(
+            trait_mask if trait_mask is not None else trait_mask_of(servant_traits)
+        )
+    else:
+        effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
+        uni = universal_bonus(effect_crafts)
+        sc = support_crafts_bonus(support_craft, support_second_craft)
+        tr = (
+            trait_bonus_for_mask(trait_mask, effect_crafts)
+            if trait_mask is not None
+            else trait_bonus_for_servant(servant_traits, effect_crafts)
+        )
     max_bond_bonus = max_bond_count * 0.25
     return (
         (1.0 + front)
@@ -772,7 +877,9 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
-    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
+    # 整队级的礼装中间量只算一次（通用/助战/特性/固定数值四类），成员只提供自己的掩码。
+    # 实测（r7）：本函数 62.6 万次调用里，逐张遍历礼装表是主要开销之一。
+    craft_view = TeamCraftView(player_crafts, support_craft, support_second_craft)
 
     multipliers = []
     flat_bonuses = []
@@ -781,11 +888,10 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
             multipliers.append(0.0)
             flat_bonuses.append(0.0)
             continue
-        traits = ctx.servant_traits(p.servant_id, p.stage)
         servant_mask = ctx.servant_mask(p.servant_id, p.stage)
         multipliers.append(
             calculate_member_multiplier(
-                servant_traits=traits,
+                servant_traits=None,
                 position=p.position,
                 personal_bonus=p.personal_bonus,
                 player_crafts=player_crafts,
@@ -796,9 +902,10 @@ def calculate_team_metrics(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]
                 support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
                 trait_mask=servant_mask,
+                craft_view=craft_view,
             )
         )
-        flat_bonuses.append(flat_bonus_for_mask(servant_mask, effect_crafts))
+        flat_bonuses.append(craft_view.flat_bonus(servant_mask))
 
     total_flat = sum(flat_bonuses)
     return {
@@ -837,14 +944,15 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
         if team.support_second_craft_id is not None
         else None
     )
-    effect_crafts = _effect_crafts(player_crafts, support_craft, support_second_craft)
+    base_bond = float(team.base_bond or 0.0)
     support_in_front = bool(
         team.support_position is not None and team.support_position in FRONT_POSITIONS
     )
     max_bond_bonus = max_bond_count * 0.25
     activity_bonus = team.activity_bonus or 0.0
     aura_bonus = sum(float(p.aura_bonus or 0.0) for p in team.players)
-    base_bond = float(team.base_bond or 0.0)
+    craft_view = TeamCraftView(player_crafts, support_craft, support_second_craft)
+    effect_crafts = craft_view.effect_crafts
 
     members: List[Dict[str, Any]] = []
     total_multiplier = 0.0
@@ -880,8 +988,9 @@ def evaluate_team(ctx: DataContext, team: TeamConfig) -> Dict[str, Any]:
                 support_craft=support_craft,
                 support_second_craft=support_second_craft,
                 support_in_front=support_in_front,
+                craft_view=craft_view,
             )
-            flat_bonus = flat_bonus_for_servant(traits, effect_crafts)
+            flat_bonus = craft_view.flat_bonus(ctx.servant_mask(p.servant_id, p.stage))
             personal_bonus_used = p.personal_bonus
             for craft_item in effect_crafts:
                 if craft_item.bonus_type == "trait":
