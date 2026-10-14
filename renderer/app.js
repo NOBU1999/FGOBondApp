@@ -4106,6 +4106,15 @@ const App = {
         </div>
       </div>
 
+      <!-- 自由位过多提醒：这一行**高度固定预留**（出现/消失都不挤动下面的框），右对齐到第 6 宫格下方。
+           条件 = 自由位 ≥4 且未开超级模式；说明走原生 title 悬停（与「本次搜索」那行的 ⓘ 同一做法）。 -->
+      <div class="board-warn-row">
+        <div v-if="freeCount >= 4 && !superOn" class="board-warn">
+          ⚠️ 自由位偏多：耗时更久、结果更易波动，建议开超级模式
+          <span class="board-warn-info" :title="'自由位越多，需要试着搭配的可能性就越多：耗时明显变长，低档位下也更容易漏掉个别队伍。想更稳妥可以开启「超级模式」——它不设时间上限、范围也更大。'">ⓘ</span>
+        </div>
+      </div>
+
       <!-- 队伍配置（一级页面） -->
       <div class="team-config panel">
         <div class="team-config-head">

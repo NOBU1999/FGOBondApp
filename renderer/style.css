@@ -7,6 +7,7 @@
   --muted: #a0a0b8;
   --accent: #7aa2f7;
   --danger: #ff0040;
+  --warn: #ffb648;      /* 柔和暖橙：提醒类文字（红字太冲，2026-10-14 用户要求改橙黄） */
   --support: #ff9f1a;
   --ok: #a6e3a1;
 }
@@ -201,6 +202,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 12px;
   margin-top: 8px;
 }
+/* 自由位过多提醒：**高度固定预留**（height 而非 min-height）⇒ 出现/消失都不会挤动下面的框；
+   右对齐 = 落在第 6 宫格（最后一个礼装位）下方的右下角。 */
+.board-warn-row {
+  height: 20px;
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+.board-warn {
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.board-warn-info { margin-left: 4px; cursor: help; opacity: 0.85; }
 .slot-col {
   display: flex;
   flex-direction: column;
