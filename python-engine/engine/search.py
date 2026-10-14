@@ -3588,26 +3588,37 @@ def search_top_teams(
                     for _i in range(len(_members))
                 ]
                 _total = math.comb(len(_scan), _need_players)
-                # 取"交错序的前 _quota 条"（不是等距抽样）：交错序的前几条组合天然横跨质量半区与后半区，
-                # 取前缀即得到"多样性靠前"的样本；实测等距抽样会漏掉本 case 的目标组合（见成本文档）。
                 _quota = min(
                     _total,
                     max(4, (_lineup_budget - _pass_lineups) // max(1, len(_sets) - _si)),
                 )
-                for _lineup in itertools.islice(
-                    itertools.combinations(_scan, _need_players), _quota
-                ):
-                    if _pass_lineups >= _lineup_budget:
-                        break
-                    _lineup = _canonical_combo(_lineup, _dom_pc, _canon_pc)
-                    if _lineup in _pc_seen:
-                        continue
-                    _pc_seen.add(_lineup)
-                    extras_tuple = tuple(sorted(set(_lineup) - set(bp.fixed_servant_ids)))
-                    if not extras_tuple:
-                        continue
-                    _pass_lineups += 1
-                    evaluate_extras(extras_tuple, _pinned)
+                # 【2026-10-13】取样顺序改成**生长前缀**：按"组合里最大下标"从小到大枚举
+                # （先试完 _scan 前 k 名的所有组合，再扩到前 k+1 名……直到配额用尽）。
+                # 为什么不能再用 itertools.combinations 的**字典序前缀**：
+                #   `i1=0` 的组合有 C(121,3)=287,980 个 ⇒ 只要配额不大，前 N 条**全都含 i1=0**；
+                #   其中 `i2=1` 的又有 7,140 个 ⇒ 实测前 542 条**实际只用到 _scan 的前 ~7 名成员**。
+                #   而本次反馈的目标阵容 4 名成员在 _scan 里排 8/10/12/14、字典序序号 2,116,841
+                #   ⇒ 配额 542 时**永远轮不到**（这是"漏解"的直接原因，台账 §8.12 有完整证据）。
+                # 生长前缀下同样配额覆盖的成员数：Σ_{d<D} C(d, k-1) = C(D, k)
+                #   ⇒ 配额 542 / k=4 时覆盖前 ~11 名（原来只有 7 名）；配额 1365 时可覆盖前 15 名。
+                _tried = 0
+                _depth = _need_players - 1
+                while _tried < _quota and _depth < len(_scan):
+                    for _head in itertools.combinations(_scan[:_depth], _need_players - 1):
+                        if _tried >= _quota or _pass_lineups >= _lineup_budget:
+                            break
+                        _lineup = tuple(sorted(_head + (_scan[_depth],)))
+                        _lineup = _canonical_combo(_lineup, _dom_pc, _canon_pc)
+                        if _lineup in _pc_seen:
+                            continue
+                        _pc_seen.add(_lineup)
+                        extras_tuple = tuple(sorted(set(_lineup) - set(bp.fixed_servant_ids)))
+                        if not extras_tuple:
+                            continue
+                        _pass_lineups += 1
+                        _tried += 1
+                        evaluate_extras(extras_tuple, _pinned)
+                    _depth += 1
             _no_prune[0] = False
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
