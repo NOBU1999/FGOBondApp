@@ -3700,7 +3700,7 @@ def search_top_teams(
             swaps: Dict[Tuple[int, ...], None] = {}
             for i, a in enumerate(seeds):
                 a_ids = a["servant_set"]
-                if len(a_ids) != len(bp.free_servant_positions):
+                if len(set(a_ids) - set(bp.fixed_servant_ids)) != len(bp.free_servant_positions):
                     continue
                 for b in seeds[i + 1:]:
                     b_ids = b["servant_set"]
@@ -3718,7 +3718,7 @@ def search_top_teams(
             # 再补一层：把队里某个人换成池外/池内另一名从者（单点替换）
             for a in seeds[:8]:
                 a_ids = a["servant_set"]
-                if len(a_ids) != len(bp.free_servant_positions):
+                if len(set(a_ids) - set(bp.fixed_servant_ids)) != len(bp.free_servant_positions):
                     continue
                 for pos_idx in range(len(a_ids)):
                     for sid in neighbor_ids:
@@ -3737,7 +3737,7 @@ def search_top_teams(
                 cand_src = neighbor_ids[:8]
                 for a in top_seeds:
                     a_ids = a["servant_set"]
-                    if len(a_ids) != len(bp.free_servant_positions):
+                    if len(set(a_ids) - set(bp.fixed_servant_ids)) != len(bp.free_servant_positions):
                         continue
                     for i in range(len(a_ids)):
                         for j in range(i + 1, len(a_ids)):
@@ -3767,7 +3767,7 @@ def search_top_teams(
             ):
                 a = seeds[0]
                 a_ids = a["servant_set"]
-                if len(a_ids) == len(bp.free_servant_positions):
+                if len(set(a_ids) - set(bp.fixed_servant_ids)) == len(bp.free_servant_positions):
                     # 关键：候选取自"池外高潜力段"（第 4~24 名），而不是最靠前的几名。
                     # 目标阵容需要的从者往往排在第 29~65 名，用前几名做 3-换根本够不着。
                     tail = [s for s in neighbor_ids[4:24] if s not in a_ids]
