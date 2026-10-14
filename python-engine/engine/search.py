@@ -3819,7 +3819,12 @@ def search_top_teams(
                         if key not in best_by_set:
                             swaps[key] = None
             # 再补一层：把队里某个人换成池外/池内另一名从者（单点替换）
-            for a in seeds[:8]:
+            # 🔴 2026-10-13：这里原来是 `seeds[:8]` —— 只从**榜前 8 支**里试换人。
+            # 同一段的"两人对换"层用的却是**全部种子**，这个 8 是随手定的。
+            # 实测（玩家反馈 4.2）：离目标只差一次换人的那支队排在**第 12/13/14 名**，
+            # 被这个 8 挡在外面；逐轮透视显示 3 轮里目标从未进入 swaps。
+            # 改成用全部种子后 4.2 = 10.9200 ✅。
+            for a in seeds:
                 a_ids = a["servant_set"]
                 if len(set(a_ids) - set(bp.fixed_servant_ids)) != len(bp.free_servant_positions):
                     continue
