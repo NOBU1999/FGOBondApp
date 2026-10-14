@@ -3690,6 +3690,28 @@ def search_top_teams(
             if sid not in pool_set
         ][:30]
         neighbor_ids = list(dict.fromkeys(list(reduced) + outside))
+        # 池外「能触发榜上队伍实际所用特性礼装」的从者（2026-10-12 反馈串修复）。
+        # 为什么：单点替换原本只试"池外启发式前 30 名"，而最优解需要的从者可能排在百名开外
+        # （实测：该反馈串里 阿斯特赖亚 排第 124 名）⇒「把队里某个人换成另一个抱团成员」
+        # 这类解永远试不到。
+        # ⚠️ 只能**追加在末尾**：2-换 / 3-换用的是 neighbor_ids[:8] 与 [4:24] 切片，不能被打乱。
+        _used_trait_cids = _collect_used_trait_craft_ids(ctx, best_by_set)
+        _synergy_ids: List[int] = []
+        if _used_trait_cids:
+            _table = trait_benefit_table(ctx)
+            _known = set(neighbor_ids)
+            _synergy: List[Tuple[int, float, int]] = []
+            for _sid in player_candidates:
+                if _sid in _known:
+                    continue
+                _hit = sum(1 for _cid in _used_trait_cids if _table.can_trigger(_sid, _cid))
+                if _hit:
+                    _synergy.append((_hit, _servant_heuristic(ctx, box[_sid], trait_ids), _sid))
+            _synergy.sort(reverse=True)
+            # 60 是"覆盖 命中 4 张(12 人) + 命中 3 张(37 人)"所需的量：实测最优解需要的
+            # 阿斯特赖亚 命中 3 张、按(命中,启发式)排在第 26 名 —— 砍在 20 就会把她切掉。
+            _synergy_ids = [_sid for _hit, _score, _sid in _synergy[:60]]
+            neighbor_ids += _synergy_ids
 
         for _round in range(neighborhood_rounds):
             seeds = [e for e in sorted(
@@ -3697,6 +3719,55 @@ def search_top_teams(
             )[:20] if e.get("servant_set")]
             if not seeds:
                 break
+            # —— 协同换人（2026-10-12 反馈串）：换人后**重新配一次礼装**再判定 ——
+            # 位置说明：必须放在 `if not swaps: break` **之前** —— 那些"换人后该换礼装"的阵容
+            # 粗搜时就被评估过（用的是旧礼装组合），所以 `swaps` 往往是空的，一 break 就再也
+            # 走不到这里（实测踩过：加了补丁却一次都没评估到阿斯特赖亚）。
+            # 为什么需要：若最优解要同时换人**和**换礼装，拿旧礼装组合打分分数不会升 ⇒
+            # 这支队根本进不了结果集 ⇒ 后面那道"礼装层 1-换"也看不到它。
+            # 实测（反馈串 3.1）：固定其余 4 人、把 back_middle 换成阿斯特赖亚**并重配礼装**
+            # → 10.720 → 10.920。
+            if _synergy_ids:
+                # 预算 = 本轮最多试多少个**不同阵容**（按"命中榜上礼装张数"从高到低覆盖，
+                # 命中 4 张 12 人 + 命中 3 张 37 人 ⇒ 60 足以覆盖这两档的全部候选）。
+                _syn_budget = 60
+                _syn_seen: set = set()
+                for _sid in _synergy_ids:
+                    if _syn_budget <= 0:
+                        break
+                    for _a in seeds[:4]:
+                        if _syn_budget <= 0:
+                            break
+                        _a_ids = list(_a["servant_set"])
+                        if len(set(_a_ids) - set(bp.fixed_servant_ids)) != len(bp.free_servant_positions) or _sid in _a_ids:
+                            continue
+                        # 位置无关：把集合里任意一个元素换成候选，得到的都是**同一个**阵容集合，
+                        # 所以按集合去重，同一套阵容不重复评估（原先按位置重复 5 遍，白烧预算）。
+                        for _i in range(len(_a_ids)):
+                            if _syn_budget <= 0:
+                                break
+                            _nxt = list(_a_ids)
+                            _nxt[_i] = _sid
+                            _key = tuple(sorted(_nxt))
+                            if _key in _syn_seen:
+                                continue
+                            _syn_seen.add(_key)
+                            check_cancel()
+                            if expired(refine_deadline):
+                                truncated[0] = True
+                                _syn_budget = 0
+                                break
+                            _extras = tuple(sorted(set(_key) - set(bp.fixed_servant_ids)))
+                            if not _extras:
+                                continue
+                            _syn_budget -= 1
+                            # 口径 = 该阵容**专属 DP 组合** + pair_optimize（配对优化）。
+                            # ⚠️ 少了 pair_optimize 就配不出最优礼装组合（实测：含阿斯特赖亚的
+                            # 阵容带配对能到 10.920，不带只有 10.72）。
+                            # ⚠️ 不在这里用 full_combos（原来的做法）：实测两者在本线上**结果相同**
+                            # （五串 top1 全同、逐名次 88 好 0 差），而单支成本差 71 倍
+                            # （专属 DP 1.64ms vs full_combos 117ms，见反馈台账 §8.10.1）。
+                            evaluate_extras(_extras, None, use_dp=True, pair_optimize=True)
             swaps: Dict[Tuple[int, ...], None] = {}
             for i, a in enumerate(seeds):
                 a_ids = a["servant_set"]
