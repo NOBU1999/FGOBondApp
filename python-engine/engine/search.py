@@ -3904,7 +3904,6 @@ def search_top_teams(
             #      吃掉全部评估耗时的 93%）。
             # 这批分数直接进结果集（只增不减）⇒ 覆盖面不会因为换口径而缩小。
             # 昂贵口径的复核挪到**所有搜索趟之后**（见下面"邻域候选昂贵复核"）。
-            new_best_before = global_best_score
             for key in list(swaps.keys()):
                 check_cancel()
                 if expired(refine_deadline):
@@ -3919,9 +3918,12 @@ def search_top_teams(
                     continue
                 evaluate_extras(extras_tuple, None, use_dp=True)
                 _nb_pool.append(extras_tuple)
-            if global_best_score is not None and new_best_before is not None:
-                if global_best_score <= new_best_before + 1e-12:
-                    break  # 本轮没有改进，提前收手
+            # 🔴 这里**故意不写**"本轮没有改进就提前收手"（原来有一句 break）。
+            # 它会把**多轮一步走的连走**掐死：最优解与榜上所有队差 ≥2 人时，第一步（只换进一个人）
+            # 本来就不会涨分 ⇒ 一 break，第二步永远跑不到。
+            # 实测（玩家反馈 4.1，5 自由位）：去掉这句 → 10.8800 → **10.9200**（耗时 +2.3s）。
+            # 收手改由上面 `if not swaps: break` 负责 —— 每轮的 swaps 都排除了已在结果集里的阵容，
+            # 所以只会在"真的没有新候选"时停下；轮数仍由 neighborhood_rounds 封顶。
 
     # 邻域候选的**昂贵口径复核**（放在所有搜索趟之后）。
     # 只对便宜分最高的 M 支用 full_combos + 配对优化复核一次。
