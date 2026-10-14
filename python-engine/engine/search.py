@@ -3673,6 +3673,8 @@ def search_top_teams(
         neighborhood_rounds = 3
     else:
         neighborhood_rounds = 2
+    # 邻域轮收集到的候选（去重后的 extras），供"所有搜索趟之后"的昂贵复核挑前 M 支
+    _nb_pool: List[Tuple[int, ...]] = []
     if (
         neighborhood_rounds > 0
         and len(bp.free_servant_positions) > 0
@@ -3882,6 +3884,13 @@ def search_top_teams(
             _nb_dom = _dominance_map(ctx, box, neighbor_ids, trait_ids)
             _nb_canon = _canonical_map(neighbor_ids, _nb_dom) if _nb_dom else {}
             _nb_seen: set = set()
+            # ---- 邻域用「便宜口径」打分 --------------------------------------
+            # 每支候选先用**该阵容专属 DP 组合**打一遍。为什么：
+            #   ① 昂贵口径（full_combos）在邻域上零收益 —— 实测五串 top1 全同、逐名次 88 好 0 差；
+            #   ② 单支成本差 71 倍（专属 DP 1.64ms vs full_combos 117ms；r7 那 179 次昂贵调用
+            #      吃掉全部评估耗时的 93%）。
+            # 这批分数直接进结果集（只增不减）⇒ 覆盖面不会因为换口径而缩小。
+            # 昂贵口径的复核挪到**所有搜索趟之后**（见下面"邻域候选昂贵复核"）。
             new_best_before = global_best_score
             for key in list(swaps.keys()):
                 check_cancel()
@@ -3895,7 +3904,8 @@ def search_top_teams(
                 extras_tuple = tuple(sorted(set(key) - set(bp.fixed_servant_ids)))
                 if not extras_tuple:
                     continue
-                evaluate_extras(extras_tuple, full_combos)
+                evaluate_extras(extras_tuple, None, use_dp=True)
+                _nb_pool.append(extras_tuple)
             if global_best_score is not None and new_best_before is not None:
                 if global_best_score <= new_best_before + 1e-12:
                     break  # 本轮没有改进，提前收手
