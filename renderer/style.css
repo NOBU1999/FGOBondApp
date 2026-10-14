@@ -1074,15 +1074,51 @@ body.drag-selecting .box-cell { cursor: crosshair; }
   margin-bottom: 10px;
 }
 .team-config-title { font-weight: 700; }
-.team-config-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  align-items: flex-start;
+/* 队伍配置分组（2026-10-14 重整：标题 + 三组网格，替掉原来"一列平铺 + 每项自带长说明"） */
+.team-config-note { margin: 0 0 10px; }
+.team-config-group { margin-bottom: 14px; }
+.team-config-group:last-child { margin-bottom: 0; }
+.team-config-group-title {
+  margin: 0 0 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
 }
-.team-config-fields .field { margin-bottom: 0; min-width: 170px; }
-.team-config-fields .target-field { min-width: 260px; max-width: 340px; }
-.team-config-fields .target-list { max-height: 180px; overflow-y: auto; }
+.team-config-grid {
+  display: grid;
+  /* 列宽设上限（不再 1fr 拉伸）：每组的第 N 列都在同一条竖线上，左边能对齐 */
+  grid-template-columns: repeat(auto-fill, minmax(210px, 260px));
+  gap: 12px 16px;
+  align-items: start;
+}
+.team-config-grid .field { margin-bottom: 0; min-width: 0; }
+.team-config-grid .target-field { grid-column: 1 / -1; max-width: 420px; }
+.team-config-grid .target-list { max-height: 180px; overflow-y: auto; }
+/* 勾选行做成和下拉框同款「控件盒」：同高、同左基线、同底色。
+   ⚠️ 必须带 .field 前缀：`.field label{display:block}` 特异度(0,1,1) 会压过单类选择器，
+   否则这里会退回 block（checkbox 被 `.field input{width:100%}` 撑满整行）。 */
+.field .team-config-check,
+label.team-config-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  min-height: 33px;
+  margin-bottom: 0;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.field .team-config-check input {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.team-config-check span { font-size: 13px; }
 
 /* 推荐结果头部与简易排除 */
 .results-head {

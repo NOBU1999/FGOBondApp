@@ -386,6 +386,9 @@ const App = {
         pageSize: 50,
         // 结果条数同时也是引擎的"搜索止损线"：条数越多，剪枝越晚生效、算得越慢 → 默认 200
         resultTopN: 200,
+        // 活动从者优先（2026-10-14 新增）：把"个人加成不足 50%"的从者也一并优先纳入。
+        // 个人加成 ≥50% 的从者**始终**优先纳入，与此开关无关（引擎侧规则）。
+        eventPriority: false,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -3291,6 +3294,8 @@ const App = {
           : (this.resultSettings.searchOrder === "servant" ? "servant" : "craft"),
         // 超级模式：只放大搜索覆盖面、不设时间上限（停止由界面按钮触发）
         superMode: this.superOn ? Number(this.superLevel) : 0,
+        // 活动从者优先（不足 50% 的档位也保送）；≥50% 由引擎始终保送，与此无关
+        eventPriority: !!this.resultSettings.eventPriority,
       };
     },
     buildPresetPayload(preset) {
@@ -3346,6 +3351,7 @@ const App = {
         timeoutMs: this.timeoutForQuality(this.qualityMode),
         neighborhood: this.neighborhood || "standard",
         searchOrder: this.resultSettings.searchOrder === "servant" ? "servant" : "craft",
+        eventPriority: !!this.resultSettings.eventPriority,
       };
     },
     isFullPreset(preset) {
@@ -4133,95 +4139,113 @@ const App = {
             <span v-if="superOn" class="super-hint">不设时限</span>
           </div>
         </div>
-        <div class="team-config-fields">
-          <div class="field">
-            <label>Cost上限</label>
-            <input type="number" min="50" max="200" v-model.number="costLimit" />
-          </div>
-          <div class="field">
-            <label>策略</label>
-            <select v-model="strategy">
-              <option value="total_max">总牵绊最大化</option>
-              <option value="target_max">指定从者最大化</option>
-              <option value="balanced">均衡模式</option>
-            </select>
-          </div>
-          <div v-if="superOn" class="field super-note">
-            🚀 超级模式已开启：下面的「邻域优化 / 计算质量 / 结果完整度」由它接管
-            （固定按最大覆盖面搜索、不设时间上限）。关掉右上角的超级模式即可恢复手动设置。
-          </div>
-          <div class="field">
-            <label>邻域优化（换人再算）</label>
-            <select v-model="neighborhood" :disabled="calculating || superOn">
-              <option value="off">关闭（最快）</option>
-              <option value="standard">标准（默认）</option>
-              <option value="deep">深入（最多同时换 3 人，最慢）</option>
-            </select>
-            <div class="text-muted">
-              算完之后，会把结果里靠前的几支队伍互相"换人"再算一遍，专门捞那些
-              "把第 2 名的某个人换进第 1 名反而更强"的队伍。关闭可省时间；深入能找到更远的解，但更慢。
+        <div v-if="superOn" class="super-note team-config-note">
+          🚀 超级模式已开启：下面的「邻域优化 / 计算质量」由它接管（固定按最大覆盖面搜索、不设时间上限）。
+          关掉右上角的超级模式即可恢复手动设置。
+        </div>
+        <div class="team-config-group">
+          <div class="team-config-group-title">基础</div>
+          <div class="team-config-grid">
+            <div class="field">
+              <label>Cost上限</label>
+              <input type="number" min="50" max="200" v-model.number="costLimit" />
+            </div>
+            <div class="field">
+              <label>策略</label>
+              <select v-model="strategy">
+                <option value="total_max">总牵绊最大化</option>
+                <option value="target_max">指定从者最大化</option>
+                <option value="balanced">均衡模式</option>
+              </select>
+            </div>
+            <div v-if="strategy === 'target_max'" class="field target-field">
+              <label>指定从者</label>
+              <input v-model="targetServantKeyword" placeholder="搜索从者名称" />
+              <div class="target-list">
+                <button
+                  v-for="s in targetServantCandidates"
+                  :key="s.id"
+                  :class="{ active: targetServantId === s.id }"
+                  @click="targetServantId = s.id"
+                >
+                  {{ s.name }}
+                  <span class="text-muted">{{ s.class }} / {{ s.rarity }}★ / {{ s.collectionNo }}</span>
+                </button>
+                <div v-if="!targetServantCandidates.length" class="empty">没有匹配从者</div>
+              </div>
+              <div v-if="targetServantId && servantMap[targetServantId]" class="text-muted" style="margin-top:6px">
+                当前指定：{{ servantMap[targetServantId].name }}
+              </div>
             </div>
           </div>
-          <div class="field">
-            <label>计算质量 / 等待时间</label>
-            <select v-model="qualityMode" :disabled="calculating || superOn">
-              <option value="fast">快速（约 35 秒上限）</option>
-              <option value="standard">标准（约 60 秒上限）</option>
-              <option value="balanced">平衡（默认，约 90 秒上限）</option>
-              <option value="high">高质量（约 135 秒上限）</option>
-              <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
-            </select>
-            <div class="text-muted">
-              实际耗时主要看下面的「结果最多计算数量」；档位只决定引擎的搜索量和等待上限（算完就返回，不会等满）。
+        </div>
+        <div class="team-config-group">
+          <div class="team-config-group-title">搜索强度</div>
+          <div class="team-config-grid">
+            <div class="field">
+              <label title="关闭最快；标准默认；深入会额外试「同时换 3 人」，能找到更远的解但更慢。">邻域优化（换人再算）</label>
+              <select v-model="neighborhood" :disabled="calculating || superOn">
+                <option value="off">关闭（最快）</option>
+                <option value="standard">标准（默认）</option>
+                <option value="deep">深入（最多同时换 3 人，最慢）</option>
+              </select>
+              <div class="text-muted">算完后把靠前的队伍互相换人再算一遍。</div>
             </div>
-          </div>
-          <div class="field">
-            <label>结果最多计算数量</label>
-            <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
-              <option :value="20">20 条（最快）</option>
-              <option :value="50">50 条（快）</option>
-              <option :value="100">100 条</option>
-              <option :value="200">200 条（默认）</option>
-              <option :value="500">500 条（慢）</option>
-              <option :value="1000">1000 条（最慢）</option>
-            </select>
-            <div class="text-muted">
-              这个数字也是引擎的"搜索止损线"：条数越多，剪枝生效得越晚 → 算得越慢（最多能差十几倍）。
-              20~50 条几秒出结果；200 条约半分钟；500/1000 可能被时间预算截断，结果稳定性也会变差。
+            <div class="field">
+              <label title="档位只决定搜索量和等待上限；实际耗时主要看「结果最多计算数量」。">计算质量 / 等待时间</label>
+              <select v-model="qualityMode" :disabled="calculating || superOn">
+                <option value="fast">快速（约 35 秒上限）</option>
+                <option value="standard">标准（约 60 秒上限）</option>
+                <option value="balanced">平衡（默认，约 90 秒上限）</option>
+                <option value="high">高质量（约 135 秒上限）</option>
+                <option value="extreme">极限精算（约 300 秒上限，同高质量）</option>
+              </select>
+              <div class="text-muted">算完就返回，不会等满。</div>
             </div>
-          </div>
-          <div class="field">
-            <label>基础牵绊获取数值（默认0）</label>
-            <input type="number" min="0" step="1" v-model.number="baseBond" placeholder="0" />
-            <div class="text-muted">填 0 时结果只显示倍率；填实际基础值后显示预计牵绊数。</div>
-          </div>
-          <div v-if="Number(baseBond) > 0" class="field">
-            <label>结果排序（也是搜索目标）</label>
-            <select v-model="sortMode">
-              <option value="multiplier">按倍率（默认）</option>
-              <option value="points">按牵绊点数</option>
-            </select>
-            <div class="text-muted">
-              按倍率：排"加成百分比"最高的队伍；按牵绊点数：按"倍率 × 基础牵绊 + 固定数值加成"排。
+            <div class="field">
+              <label title="20~50 条几秒出结果；200 条约半分钟；500/1000 可能被时间上限截断。">结果最多计算数量</label>
+              <select v-model.number="resultSettings.resultTopN" @change="persistResultSettings">
+                <option :value="20">20 条（最快）</option>
+                <option :value="50">50 条（快）</option>
+                <option :value="100">100 条</option>
+                <option :value="200">200 条（默认）</option>
+                <option :value="500">500 条（慢）</option>
+                <option :value="1000">1000 条（最慢）</option>
+              </select>
+              <div class="text-muted">条数越多越慢（最多差十几倍）。</div>
             </div>
-          </div>
-          <div v-if="strategy === 'target_max'" class="field target-field">
-            <label>指定从者</label>
-            <input v-model="targetServantKeyword" placeholder="搜索从者名称" />
-            <div class="target-list">
-              <button
-                v-for="s in targetServantCandidates"
-                :key="s.id"
-                :class="{ active: targetServantId === s.id }"
-                @click="targetServantId = s.id"
+            <div class="field">
+              <label>活动从者优先</label>
+              <label
+                class="team-config-check"
+                title="活动加成 +50% 及以上的从者始终优先纳入；勾上这里，+20% 这类不足 +50% 的档位也会一并优先纳入。活动从者多的 Box 建议勾上。"
               >
-                {{ s.name }}
-                <span class="text-muted">{{ s.class }} / {{ s.rarity }}★ / {{ s.collectionNo }}</span>
-              </button>
-              <div v-if="!targetServantCandidates.length" class="empty">没有匹配从者</div>
+                <input
+                  type="checkbox"
+                  v-model="resultSettings.eventPriority"
+                  :disabled="calculating"
+                  @change="persistResultSettings"
+                />
+                <span>不足 +50% 的档位也优先纳入</span>
+              </label>
             </div>
-            <div v-if="targetServantId && servantMap[targetServantId]" class="text-muted" style="margin-top:6px">
-              当前指定：{{ servantMap[targetServantId].name }}
+          </div>
+        </div>
+        <div class="team-config-group">
+          <div class="team-config-group-title">牵绊与排序</div>
+          <div class="team-config-grid">
+            <div class="field">
+              <label title="填 0 时结果只显示倍率；填实际基础值后显示预计牵绊数。">基础牵绊获取数值（默认0）</label>
+              <input type="number" min="0" step="1" v-model.number="baseBond" placeholder="0" />
+              <div class="text-muted">填 0 只看倍率；填了显示预计牵绊数。</div>
+            </div>
+            <div v-if="Number(baseBond) > 0" class="field">
+              <label title="按倍率：排「加成百分比」最高的队伍；按牵绊点数：按「倍率 × 基础牵绊 + 固定数值加成」排。">结果排序（也是搜索目标）</label>
+              <select v-model="sortMode">
+                <option value="multiplier">按倍率（默认）</option>
+                <option value="points">按牵绊点数</option>
+              </select>
+              <div class="text-muted">按倍率或按「倍率 × 基础牵绊 + 固定加成」排。</div>
             </div>
           </div>
         </div>
