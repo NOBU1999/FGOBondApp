@@ -1031,6 +1031,11 @@ def _default_neighbor_refine_count(req: CalculationRequest) -> int:
 _POSFIX_ENUM_ROWS = 50
 # 同分可替换阵容在每一行里最多列多少支（2026-10-10：100 → 500，避免补算后同分组变大时被截得太狠）
 _ALT_CAP = 500
+# 「活动从者优先」保送上限（2026-10-14，反馈 v0.2.2bug2）：个人加成高的从者最多保送几名进候选池。
+# 规则：≥50% 始终保送；界面开关「活动从者优先」打开后，不足 50% 的档位（如 +20%）一并保送。详见下面的保送块。
+_EVENT_GUARANTEE_CAP = 5
+_EVENT_GUARANTEE_FLOOR_ALWAYS = 0.5   # 不依赖开关的保送下限
+_EVENT_GUARANTEE_FLOOR_OPTIONAL = 0.2  # 开关打开后的保送下限
 
 
 def _optimize_free_positions_enabled(req: CalculationRequest) -> bool:
@@ -2895,6 +2900,33 @@ def search_top_teams(
         and req.target_servant_id not in reduced
     ):
         reduced.append(req.target_servant_id)
+
+    # 「活动从者优先」保送（2026-10-14，反馈 v0.2.2bug2）：
+    # 池排序分由「特性礼装覆盖度 ×3 + 集群共享度 ×0.16」主导，个人加成只按原值 1:1 计入
+    # ⇒ 靠个人加成吃饭的活动从者会被整片切掉。实测（唠唠叨叨反馈串，固定 1 人）：
+    # 个人加成 50% 的从者排序分 4.92、排 284/358，而池门槛是 10.90、只留 57 人；
+    # 他被切掉后**所有层都够不到**（不在 reduced / outside[:30] / _synergy[:60] /
+    # neighbor_ids；集合趟 24 万条里 0 条含他），榜首停在 11.76，而最优解需要他 = 11.86。
+    # 规则：个人加成 ≥50% **始终**保送；开关「活动从者优先」打开后，不足 50% 的档位
+    # （如 +20%，含 40%~49% 这种中间档）一并保送；
+    # 均为「按现有排序分取前 _EVENT_GUARANTEE_CAP 名」，且**只追加、不挤人**
+    # （与 target_max / 低 Cost 补位同一条纪律）。
+    _ev_floor = (
+        _EVENT_GUARANTEE_FLOOR_OPTIONAL
+        if getattr(req, "event_priority", False)
+        else _EVENT_GUARANTEE_FLOOR_ALWAYS
+    )
+    _ev_eligible = [
+        sid for sid in player_candidates
+        if sid not in reduced and float(box[sid].personal_bonus or 0.0) >= _ev_floor - 1e-9
+    ]
+    if _ev_eligible:
+        _ev_share = _trait_share_weight(ctx, player_candidates, trait_ids)
+        _ev_eligible.sort(
+            key=lambda sid: _servant_heuristic(ctx, box[sid], trait_ids) + _cluster_bonus(_ev_share, sid),
+            reverse=True,
+        )
+        reduced.extend(_ev_eligible[:_EVENT_GUARANTEE_CAP])
 
     # 启发式截断可能丢掉低Cost从者，导致“满礼装组合”因 Cost 不足而整体无解。
     # 按 Cost 从低到高补回必要候选，但只补到“至少有一套满自由礼装组合在 Cost 内可行”

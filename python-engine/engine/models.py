@@ -155,6 +155,10 @@ class CalculationRequest:
     # 超级模式下宿主请求"体面停止"的文件路径：引擎发现它出现就收尾并返回 status="partial"。
     # 桌面宿主（子进程）用它替代"直接杀进程"；安卓宿主走 should_cancel 回调，语义相同。
     stop_file: Optional[str] = None
+    # 「活动从者优先」（v0.2.3 新增，界面开关）：把"个人加成不足 50%"的从者也纳入候选池保送。
+    # 个人加成 ≥50% 的从者**始终**保送，与该开关无关（见 search.py 的保送块）。
+    # 不带该字段的老客户端/老预设 → False ⇒ 行为 = 只保送 50%+，与开关关闭时一致。
+    event_priority: bool = False
 
 
 @dataclass
@@ -330,6 +334,7 @@ def parse_request(data: Dict[str, Any]) -> CalculationRequest:
         req.super_mode = 0.0
     raw_stop = str(data.get("stopFile") or "").strip()
     req.stop_file = raw_stop or None
+    req.event_priority = bool(data.get("eventPriority"))
     if strategy == STRATEGY_TARGET_MAX:
         req.target_servant_id = data.get("targetServantId") or data.get(TARGET_SERVANT_KEY)
     return req
