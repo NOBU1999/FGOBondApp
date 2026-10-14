@@ -1899,6 +1899,37 @@ def _entry_key(entry: Dict[str, Any], slot_order: Sequence[str]) -> Any:
     return (frozenset(front), frozenset(back))
 
 
+def _alt_from_item(item: Dict[str, Any], slot_order: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """把一行结果**自身**转成下拉里一条「同分阵容」的结构（servantIds/craftIds/...）。
+
+    供同分合并使用：被合并掉的那一行，它自己这套阵容也要进组——
+    原实现只把它的 sameScoreTeams 并进 head，它自己那一套却从不加入，
+    于是「与前面某行同分且礼装多重集相同」的队伍会**从榜上整个消失**（数据丢失）。
+    礼装按本行 team 的实际配置逐位给出（与 _same_score_team_alternatives 产出的
+    g[pos] = (sid, craft, second) 同构）；助战礼装单独放 supportCraftId。
+    """
+    team = item.get("team") or []
+    by_pos = {m.get("position"): m for m in team if not m.get("isSupport")}
+    sup = next((m for m in team if m.get("isSupport")), None)
+    servant_ids: List[Any] = []
+    craft_ids: List[Any] = []
+    second_ids: List[Any] = []
+    for pos in slot_order:
+        m = by_pos.get(pos)
+        if m is None:
+            return None
+        servant_ids.append(m.get("servantId"))
+        craft_ids.append(m.get("craftId"))
+        second_ids.append(m.get("secondCraftId"))
+    return {
+        "servantIds": servant_ids,
+        "craftIds": craft_ids,
+        "secondCraftIds": second_ids,
+        "supportCraftId": (sup or {}).get("craftId") if sup else None,
+        "supportSecondCraftId": (sup or {}).get("secondCraftId") if sup else None,
+    }
+
+
 def _solution_dict(result: Dict[str, Any], rank: int) -> Dict[str, Any]:
     return {
         "rank": rank,
@@ -4176,6 +4207,16 @@ def search_top_teams(
             continue
         union = list(head.get("sameScoreTeams") or [])
         seen = {_entry_key(a, slot_order_ref) for a in union}
+        # 🔴 2026-10-14 修复（同分合并丢行）：被合并的行**自己这套阵容**也要进组。
+        # 原来只把它的 sameScoreTeams 并进 head，它自己那一套从不加入 ⇒
+        # 任何「与前面某行同分且礼装多重集相同」的队伍会从榜上整个消失（数据丢失）。
+        # 放在它自己的同分替补之前：本行是真实评估出来的阵容，替补是恒等式展开的。
+        own = _alt_from_item(item, slot_order_ref)
+        if own is not None:
+            k = _entry_key(own, slot_order_ref)
+            if k not in seen:
+                seen.add(k)
+                union.append(own)
         for alt in item.get("sameScoreTeams") or []:
             k = _entry_key(alt, slot_order_ref)
             if k in seen:
