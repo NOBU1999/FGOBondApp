@@ -1000,6 +1000,17 @@ def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
     return max(2, min(int(min(100, 15 * _super_mult(req))), pool_size, by_budget))
 
 
+def _default_neighbor_refine_count(req: CalculationRequest) -> int:
+    """邻域**每轮**用「昂贵口径」（全量礼装组合 + 配对优化）复核多少支候选。
+
+    邻域先用该阵容专属 DP 打一遍（便宜、实测与昂贵口径同结果），再按便宜分取前 M 支复核。
+    成本上限 = M × 单支昂贵（≈0.12s），**与候选数量无关** ⇒ 将来放宽候选面不会炸时间。
+    与 _default_refine_count 同风格：按时长档位确定性推导，墙钟只作兜底。
+    """
+    by_budget = max(4, int(_time_budget_seconds(req) / 12.0))
+    return max(4, min(int(16 * _super_mult(req)), by_budget))
+
+
 # 榜上"每行站位复核"（2026-10-10 第三轮）：
 #   第一道＝读引擎自己算好的每人倍率、按"去掉前排加成后的倍率"排序换位（几乎零成本，覆盖整榜）；
 #   第二道＝对榜前若干行再做一次全排列枚举兜底（防将来新增"跟位置有关"的项时排序键覆盖不到）。
@@ -3673,6 +3684,8 @@ def search_top_teams(
         neighborhood_rounds = 3
     else:
         neighborhood_rounds = 2
+    # 每轮用昂贵口径复核多少支（硬配额；成本上限与候选数量无关）
+    _nb_refine_count = _default_neighbor_refine_count(req)
     # 邻域轮收集到的候选（去重后的 extras），供"所有搜索趟之后"的昂贵复核挑前 M 支
     _nb_pool: List[Tuple[int, ...]] = []
     if (
@@ -3909,6 +3922,29 @@ def search_top_teams(
             if global_best_score is not None and new_best_before is not None:
                 if global_best_score <= new_best_before + 1e-12:
                     break  # 本轮没有改进，提前收手
+
+    # 邻域候选的**昂贵口径复核**（放在所有搜索趟之后）。
+    # 只对便宜分最高的 M 支用 full_combos + 配对优化复核一次。
+    # 成本上限 = M × 单支昂贵（≈0.12s），**与候选数量无关**
+    # ⇒ 将来放宽候选面（池外前 30 / 2-换 [:8] 这些上限）不会炸时间。
+    # 🔴 位置纪律：必须放在这里。轮内做的话，它抬高的截止阈值会改掉后续几趟的剪枝轨迹
+    # （实测 `target_max` 顶分被从 9.64 拽回 8.84 —— 那 0.8 正是"邻域改便宜口径"带来的收益）。
+    # 放在最后，它读写的就只是"最终结果集"，只可能抬高已有条目的分数。
+    if _nb_pool and _nb_refine_count > 0:
+        _nb_scored: List[Tuple[Any, Tuple[int, ...]]] = []
+        for _nb_extras in _nb_pool:
+            _nb_entry = best_by_set.get(
+                tuple(sorted(set(bp.fixed_servant_ids) | set(_nb_extras)))
+            )
+            if _nb_entry is not None:
+                _nb_scored.append((_nb_entry["rank_key"], _nb_extras))
+        # 稳定排序 ⇒ 同分保持枚举顺序，可复现
+        _nb_scored.sort(key=lambda item: item[0], reverse=True)
+        for _nb_key, _nb_extras in _nb_scored[:_nb_refine_count]:
+            if expired(refine_deadline):
+                truncated[0] = True
+                break
+            evaluate_extras(_nb_extras, full_combos, pair_optimize=True)
 
     # 礼装层后置 1-换局部搜索（2026-10-10，玩家反馈①的第一条）。
     # **必须放在所有搜索趟之后**：它只提高结果集里已有阵容的分数，不新增阵容；
