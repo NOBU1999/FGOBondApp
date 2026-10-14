@@ -651,14 +651,6 @@ const App = {
       const ex = this.simpleExcludedSet;
       return this.results.filter((r) => !(r.team || []).some((m) => ex.has(Number(m.servantId))));
     },
-    // 本次覆盖面：实际评估的阵容数 / 候选池里的可能组合数（旧引擎没有这两个字段 → 不显示）
-    coveragePercent() {
-      const s = this.lastSearchStats;
-      if (!s || !s.poolCombos) return null;
-      const pct = (100 * Number(s.totalCandidates || 0)) / Number(s.poolCombos);
-      if (!Number.isFinite(pct)) return null;
-      return pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
-    },
     totalPages() {
       return Math.max(1, Math.ceil(this.filteredResults.length / this.pageSize));
     },
@@ -754,7 +746,7 @@ const App = {
   methods: {
     // ---------- 工具 ----------
     formatBondNumber(v) { return formatBondNumber(v); },
-    // 千分位（覆盖面那行用；组合数动辄几万）
+    // 千分位（「本次搜索」那行用；组合数动辄几万）
     formatCount(v) {
       const n = Number(v);
       if (!Number.isFinite(n)) return String(v);
@@ -3292,7 +3284,7 @@ const App = {
         searchOrder: this.superOn
           ? "craft"
           : (this.resultSettings.searchOrder === "servant" ? "servant" : "craft"),
-        // 超级模式：只放大搜索覆盖面、不设时间上限（停止由界面按钮触发）
+        // 超级模式：只放大搜索范围、不设时间上限（停止由界面按钮触发）
         superMode: this.superOn ? Number(this.superLevel) : 0,
         // 活动从者优先（不足 50% 的档位也保送）；≥50% 由引擎始终保送，与此无关
         eventPriority: !!this.resultSettings.eventPriority,
@@ -3463,7 +3455,7 @@ const App = {
         }
         // 把你保存过的完整预设作为“种子队伍”一并计算并合并进结果，
         // 避免完整预设因为搜索抽样/时间不足而完全不出现在结果里。
-        // ⚠️ 超级模式跳过这一步：它自己的覆盖面已经足够，再逐条跑一遍要多花好几倍时间。
+        // ⚠️ 超级模式跳过这一步：它自己的搜索范围已经足够，再逐条跑一遍要多花好几倍时间。
         for (const preset of (this.superOn ? [] : this.seedablePresets())) {
           try {
             const seedResult = await window.fgo.calculate(plainClone(this.buildPresetPayload(preset)));
@@ -3480,7 +3472,7 @@ const App = {
           elapsed: result._elapsed,
           processed: result._processed,
           totalCandidates: result.totalCandidates,
-          // 覆盖面（引擎新增字段；旧引擎为 undefined → 界面自动不显示那一行）
+          // 搜索范围（引擎新增字段；旧引擎为 undefined → 界面自动不显示那一行）
           poolSize: result.poolSize,
           poolCombos: result.poolCombos,
           qualityMode: this.qualityMode,
@@ -4121,7 +4113,7 @@ const App = {
           <div class="super-toggle" :class="{ on: superOn }" @click.stop>
             <label
               class="super-switch"
-              :title="'超级模式：不设时间上限，按最大覆盖面搜索。开启后「计算档位 / 结果完整度 / 邻域」由它接管（固定走最大覆盖），其余设置照旧可用。'"
+              :title="'超级模式：不设时间上限，按最大范围搜索。开启后「计算档位 / 结果完整度 / 邻域」由它接管（固定走最大覆盖），其余设置照旧可用。'"
             >
               <input
                 type="checkbox"
@@ -4140,7 +4132,7 @@ const App = {
           </div>
         </div>
         <div v-if="superOn" class="super-note team-config-note">
-          🚀 超级模式已开启：下面的「邻域优化 / 计算质量」由它接管（固定按最大覆盖面搜索、不设时间上限）。
+          🚀 超级模式已开启：下面的「邻域优化 / 计算质量」由它接管（固定按最大范围搜索、不设时间上限）。
           关掉右上角的超级模式即可恢复手动设置。
         </div>
         <div class="team-config-group">
@@ -4318,8 +4310,8 @@ const App = {
           </div>
         </div>
         <div v-if="lastSearchStats && lastSearchStats.superLevel" class="search-stats">
-          🚀 超级模式 ×{{ lastSearchStats.superLevel }}：不设时间上限、按最大覆盖面搜索
-          <span class="text-muted">（覆盖面越大越慢；中途点"停止"已算出的结果会保留）</span>
+          🚀 超级模式 ×{{ lastSearchStats.superLevel }}：不设时间上限、按最大范围搜索
+          <span class="text-muted">（范围越大越慢；中途点"停止"已算出的结果会保留）</span>
         </div>
         <div v-if="lastSearchStats && lastSearchStats.partial" class="search-stats warn">
           ⏹ 你在中途点了停止：下面是**已经算出来并排好序**的部分结果，没有丢
@@ -4328,16 +4320,11 @@ const App = {
           ⚠️ 本次搜索被时间上限截断（还没算完）：换更高的「计算质量」档位可能找到更好的队伍
         </div>
         <div v-if="resultSettings.showSearchStats && lastSearchStats" class="search-stats text-muted">
-          本次搜索：{{ qualityModeText(lastSearchStats.qualityMode) }}
+          🔍 本次搜索：{{ qualityModeText(lastSearchStats.qualityMode) }}
           · 用时 {{ lastSearchStats.elapsed }}s
-          · 处理 {{ lastSearchStats.processed }} 个组合
-          · 候选队伍 {{ lastSearchStats.totalCandidates || 0 }}
-        </div>
-        <div v-if="resultSettings.showSearchStats && lastSearchStats && lastSearchStats.poolCombos" class="search-stats text-muted">
-          🔎 本次覆盖面：候选池 {{ lastSearchStats.poolSize }} 人
-          ｜ 池内可能组合 {{ formatCount(lastSearchStats.poolCombos) }} 支
-          ｜ 实际评估 {{ formatCount(lastSearchStats.totalCandidates || 0) }} 支（{{ coveragePercent }}%）
-          <span :title="'为了算得快，引擎只评估池内一部分阵容（按上界从高到低先评有希望的）。没评估到的阵容不会出现在结果里 —— 这是「快」的代价；同分可替换阵容已在各行下拉里展开。'">ⓘ</span>
+          · 候选 {{ lastSearchStats.poolSize || 0 }} 人
+          · 已按分数从高到低核对 {{ formatCount(lastSearchStats.processed) }} 支队伍
+          <span :title="'排名靠前的队伍都在这批里；被跳过的是分数上限低于当前榜尾、挤不进现有名次的那批（本次池内共 ' + formatCount(lastSearchStats.poolCombos || 0) + ' 支组合）。范围越大越慢，可调「计算质量」或开「超级模式」。'">ⓘ</span>
         </div>
         <div v-if="resultSettings.showDataVersion" class="search-stats text-muted">
           客户端 v{{ info && info.version ? info.version : '?' }} · 数据更新 {{ info && info.dataUpdatedAt ? info.dataUpdatedAt : '未知' }} · 数据区 {{ info && info.dataRegion ? info.dataRegion : 'JP' }}
