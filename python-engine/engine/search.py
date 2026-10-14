@@ -3695,7 +3695,13 @@ def search_top_teams(
         # （实测：该反馈串里 阿斯特赖亚 排第 124 名）⇒「把队里某个人换成另一个抱团成员」
         # 这类解永远试不到。
         # ⚠️ 只能**追加在末尾**：2-换 / 3-换用的是 neighbor_ids[:8] 与 [4:24] 切片，不能被打乱。
-        _used_trait_cids = _collect_used_trait_craft_ids(ctx, best_by_set)
+        # 【门控】只有"候选池真的被截断"时才需要这套"从池外补协同候选"的机制：
+        # 没截断（例如 2 个自由位，`C(283,2) ≤ 预算` ⇒ 池=全体候选）时 outside 本来就是空的，
+        # 补也无从补起 ⇒ 直接跳过，省掉一次全候选 × 全特性礼装的扫描。**可证明无副作用。**
+        _pool_truncated = len(reduced) < len(player_candidates)
+        _used_trait_cids = (
+            _collect_used_trait_craft_ids(ctx, best_by_set) if _pool_truncated else set()
+        )
         _synergy_ids: List[int] = []
         if _used_trait_cids:
             _table = trait_benefit_table(ctx)
