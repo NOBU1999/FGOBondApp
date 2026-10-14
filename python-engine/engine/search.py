@@ -1000,6 +1000,19 @@ def _default_refine_count(req: CalculationRequest, pool_size: int) -> int:
     return max(2, min(int(min(100, 15 * _super_mult(req))), pool_size, by_budget))
 
 
+def _default_trip_recheck_count(req: CalculationRequest) -> int:
+    """礼装集合优先趟后「自由口径复评」的条数上限（**整数**，确定性；墙钟只作兜底）。
+
+    与 _default_neighbor_refine_count 同风格：预算秒数摊分 + 超级模式放大。
+    实测口径（反馈 3.2，3600s 超级串）：该趟新建 17.2 万条、单次 DP 复评
+    毫秒级 ⇒ 上限 2048×4=8192 条对应的绝对耗时是个位数秒，占预算 <0.5%。
+    """
+    base = max(256, min(2048, int(_time_budget_seconds(req) / 8.0)))
+    if _super_mult(req) > 1:
+        base = min(8192, base * 4)
+    return base
+
+
 def _default_neighbor_refine_count(req: CalculationRequest) -> int:
     """邻域**每轮**用「昂贵口径」（全量礼装组合 + 配对优化）复核多少支候选。
 
@@ -3603,6 +3616,7 @@ def search_top_teams(
             # 2) 每个集合：钉死这一组礼装 + 在并集内真枚举人选（配额按剩余预算摊分）
             _pass_lineups = 0
             _no_prune[0] = True
+            _trip_touched: List[Tuple[int, ...]] = []
             for _si, (_value, _combo, _members) in enumerate(_sets):
                 check_cancel()
                 if _pass_lineups >= _lineup_budget:
@@ -3649,8 +3663,42 @@ def search_top_teams(
                         _pass_lineups += 1
                         _tried += 1
                         evaluate_extras(extras_tuple, _pinned)
+                        _trip_touched.append(extras_tuple)
                     _depth += 1
             _no_prune[0] = False
+            # ===== 礼装集合优先趟的自由口径复评（2026-10-14，反馈 3.2）================
+            # 病灶：本趟给**新阵容**的第一次（往往也是唯一一次）评估是钉死礼装口径——
+            #   入库后"已有条目"让后续所有层跳过它们 ⇒ 常规轮**再也没机会**用
+            #   礼装自由口径重打分。3.2 实测：真目标 {青子/响＆千键/美游/阿斯特赖亚/玛修}
+            #   被本趟用「晨+检查+手稿之翼+新娘+至诚的一针」钉死评成 10.28 入库，
+            #   而它的自由口径最优（午餐+通用5%+晨×2+检查+新娘）是 10.9200；
+            #   协同名单60/1换层/昂贵复核全都绕过它 ⇒ 榜首停在 10.88。
+            # 修法：趟后对本趟触碰过的从者集合**就地补一次 use_dp 自由口径复评**。
+            #   · evaluate_extras 内建"更高分才替换"（rank_key 比较替换旧条目），
+            #     分数单调不降；且 len(best_by_set)≥top_n 后 UB 低于 cutoff 的会被
+            #     自动剪掉——复评越往后越便宜；
+            #   · 全量补评太贵（本串实测本趟新建 17.2 万条 ⇒ ×1.6ms≈280s+），故按
+            #     **钉死分降序**取前 _trip_recheck_count 条——被钉死口径压低分的目标
+            #     落在这个窗口里（3.2 目标 10.28 即榜尾分位，窗口 2048 覆盖充分）；
+            #   · 数量确定性：秒数摊分 + 超级模式放大，与 _default_neighbor_refine_count
+            #     同风格；墙钟只作兜底。
+            if _trip_touched:
+                _trip_recheck_count = _default_trip_recheck_count(req)
+                # best_by_set 的键是「固定∪extras」的全阵容（见 evaluate_extras 内
+                # servant_set 的构成），这里从 extras 反查时必须先把固定从者并回去。
+                _touched_scored = []
+                for _ex in dict.fromkeys(_trip_touched):
+                    _key = tuple(sorted(set(_ex) | set(bp.fixed_servant_ids)))
+                    _ent = best_by_set.get(_key)
+                    if _ent is not None:
+                        _touched_scored.append((_ent["rank_key"], _ex))
+                _touched_scored.sort(key=lambda x: x[0], reverse=True)
+                _trip_recheck_deadline = start + timeout_seconds * 0.95
+                for _rk, _ex in _touched_scored[:_trip_recheck_count]:
+                    if expired(_trip_recheck_deadline):
+                        truncated[0] = True
+                        break
+                    evaluate_extras(_ex, None, use_dp=True)
 
     # 精算：只对当前分数最高的少数从者组合，用完整礼装组合重新精确求解。
     refine_count = _default_refine_count(req, len(best_by_set))
