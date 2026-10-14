@@ -4115,6 +4115,30 @@ const App = {
         </div>
       </div>
 
+      <!-- 底部信息/操作 -->
+      <div class="bottom-bar panel">
+        <div class="text-muted">
+          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}<span v-if="mode === 'crown'"> | 冠位 {{ crownCount }}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+          <button class="secondary" @click="resetTeam">清空队伍</button>
+          <button class="secondary" @click="randomFillFree">随机填充自由位</button>
+          <button class="secondary" @click="saveTeam">保存队伍</button>
+          <button class="secondary" @click="presetModalVisible = true; presets = presets">加载预设</button>
+          <button class="primary main-action" :disabled="calculating" @click="calculate">🚀 开始计算</button>
+          <button class="secondary danger" :disabled="!calculating" @click="cancelCalculation">
+            {{ superOn ? '⏹ 停止（保留已算结果）' : '⏹ 终止计算' }}
+          </button>
+        </div>
+        <div v-if="calculating && superOn" class="super-progress">
+          🚀 超级模式 ×{{ superLevel }}：已评
+          {{ superProgress ? formatCount(superProgress.processed) : 0 }} 支 ｜ 已用
+          {{ superProgress ? Math.round(superProgress.elapsed) : 0 }} 秒
+          <template v-if="superStopping">｜ 正在收尾，已算出的结果会保留…</template>
+        </div>
+        <progress-bar :visible="calculating" :message="progress"></progress-bar>
+      </div>
+
       <!-- 队伍配置（一级页面） -->
       <div class="team-config panel">
         <div class="team-config-head">
@@ -4250,30 +4274,6 @@ const App = {
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- 底部信息/操作 -->
-      <div class="bottom-bar panel">
-        <div class="text-muted">
-          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}<span v-if="mode === 'crown'"> | 冠位 {{ crownCount }}</span>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
-          <button class="secondary" @click="resetTeam">清空队伍</button>
-          <button class="secondary" @click="randomFillFree">随机填充自由位</button>
-          <button class="secondary" @click="saveTeam">保存队伍</button>
-          <button class="secondary" @click="presetModalVisible = true; presets = presets">加载预设</button>
-          <button class="primary main-action" :disabled="calculating" @click="calculate">🚀 开始计算</button>
-          <button class="secondary danger" :disabled="!calculating" @click="cancelCalculation">
-            {{ superOn ? '⏹ 停止（保留已算结果）' : '⏹ 终止计算' }}
-          </button>
-        </div>
-        <div v-if="calculating && superOn" class="super-progress">
-          🚀 超级模式 ×{{ superLevel }}：已评
-          {{ superProgress ? formatCount(superProgress.processed) : 0 }} 支 ｜ 已用
-          {{ superProgress ? Math.round(superProgress.elapsed) : 0 }} 秒
-          <template v-if="superStopping">｜ 正在收尾，已算出的结果会保留…</template>
-        </div>
-        <progress-bar :visible="calculating" :message="progress"></progress-bar>
       </div>
 
       <!-- 结果区：一级页面滚轮下滑查看 -->
