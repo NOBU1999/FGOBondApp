@@ -8,7 +8,7 @@
 ## 0. 怎么验证这份契约
 
 ```bash
-npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部行为
+npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不写条数，跟着 json 走）
 ```
 
 - 用例文件：`tests/contracts/bridge-cases.json`（**改行为就要改这里**，别只改代码）

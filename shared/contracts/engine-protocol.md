@@ -8,7 +8,7 @@
 ## 0. 怎么验证这份协议
 
 ```bash
-npm run test:contracts -- --suite engine     # 6 条用例：错误路径 + 结构不变量 + 可复现
+npm run test:contracts -- --suite engine     # 错误路径 + 结构不变量 + 可复现（条数跟着 json 走）
 ```
 
 - 用例文件：`tests/contracts/engine-cases.json`；运行器：`tests/run-contracts.mjs`

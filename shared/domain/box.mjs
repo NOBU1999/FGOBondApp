@@ -18,7 +18,7 @@ export function createBoxDomain({ sql, accounts, codec }) {
    *   ① 只导出响应体（正文，通常 base64）—— 一直都能导入；
    *   ② 导出完整「响应」，正文前面多一段报文头：
    *      HTTP/1.1 200 OK\r\nServer: Tengine\r\n...\r\n\r\n<base64 正文>
-   *      —— 以前会把整段当 base64 解 → 解出乱码 → 报"读不出抓包数据"（2026-10-09 用户/反馈者踩到）。
+   *      —— 以前会把整段当 base64 解 → 解出乱码 → 报"读不出抓包数据"（2026-10-09 实测踩到）。
    * 只认确实以「状态行 / 请求行」开头的文本，避免把正文误伤。
    */
   function stripHttpMessageHead(text) {

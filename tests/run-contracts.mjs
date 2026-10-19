@@ -268,7 +268,7 @@ async function runBridgeSuite() {
       const body = Buffer.from(JSON.stringify({ hello: "world" }), "utf8").toString("base64");
       return "HTTP/1.1 200 OK\r\nServer: Tengine\r\n\r\n" + body;
     }
-    // 正文被 URL 转义（%2B / %2F / %3D）+ 76 列折行 —— 真实反馈者文件就是这个形态（2026-10-09）
+    // 正文被 URL 转义（%2B / %2F / %3D）+ 76 列折行 —— 真实导出文件就是这个形态（2026-10-09）
     if (value === "$captureUrlEncoded") {
       const body = Buffer.from(JSON.stringify(capture), "utf8")
         .toString("base64")
