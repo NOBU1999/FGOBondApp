@@ -342,6 +342,43 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .error { color: #f38ba8; }
 .text-muted { color: var(--muted); font-size: 12px; }
 
+/* 预设面板（2026-10-16 改版）：一行一张卡，名字一行、标签一行，右边只留「加载」和 ✕ */
+.preset-panel { width: min(560px, 92vw); }
+.preset-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.preset-item:hover { border-color: var(--accent); }
+.preset-main { flex: 1; min-width: 0; }
+.preset-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preset-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.preset-tag {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.preset-del {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.preset-del:hover { color: var(--danger); border-color: var(--danger); }
 /* 结果迷你队伍 */
 .result-board {
   display: grid;

@@ -259,7 +259,6 @@ const App = {
       error: "",
       info: null,
       costumeNames: {},
-      missingAvatars: [],
       avatarBroken: [],
       localAvatars: {}, // 运行时补下来的头像（id -> data URL）
       avatarTried: {}, // 已经尝试补过的 id（避免反复请求）
@@ -533,7 +532,7 @@ const App = {
         .map((key) => ({ key, label: TRAIT_LABELS[key] }));
     },
     avatarMissingSet() {
-      return new Set([...this.missingAvatars, ...this.avatarBroken].map(String));
+      return new Set(this.avatarBroken.map(String));
     },
     servantMap() {
       const m = {};
@@ -1589,9 +1588,6 @@ const App = {
       } catch (e) {
         this.diagLogNote = "清空失败：" + (e && e.message ? e.message : String(e));
       }
-    },
-    hasAvatar(servantId) {
-      return this.avatarSet && this.avatarSet.has(String(servantId));
     },
     /**
      * 触屏设备（安卓 / 安卓模拟器 / 手机）上没有"悬停"，但安卓 WebView 会在点按时补发
@@ -2976,8 +2972,42 @@ const App = {
     },
 
     // ---------- 队伍预设 ----------
+    /** 新预设默认名 = 队伍里从者的名字（含助战，最多 6 个，`_` 连接）；一个都没选就走兜底名。 */
+    defaultPresetName() {
+      const names = [];
+      (this.slots || []).forEach((slot) => {
+        if (slot.servantId === null || slot.servantId === undefined) return;
+        const s = this.servantMap && this.servantMap[slot.servantId];
+        if (s && s.name) names.push(s.name);
+      });
+      if (!names.length) return this.nextEmptyPresetName();
+      return names.slice(0, 6).join("_");
+    },
+    /** 没选从者时的兜底名：新预设1 / 新预设2 …（跳过已被占用的） */
+    nextEmptyPresetName() {
+      const used = new Set((this.presets || []).map((p) => String((p && p.name) || "")));
+      for (let i = 1; i < 1000; i += 1) {
+        if (!used.has("新预设" + i)) return "新预设" + i;
+      }
+      return "新预设";
+    },
+    /** 预设列表里的时间标签：MM-DD HH:MM（拿不到就空） */
+    presetDateText(preset) {
+      const raw = String((preset && preset.createdAt) || "");
+      const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+      return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : "";
+    },
+    /** 预设列表里的模式/固定位标签 */
+    presetFixedText(preset) {
+      if (!preset) return "";
+      const parts = [];
+      if (preset.mode === "crown") parts.push("戴冠战");
+      const n = (preset.fixedServants || []).length;
+      if (n > 0) parts.push("固定 " + n);
+      return parts.join(" · ");
+    },
     saveTeam() {
-      this.presetName = `队伍 ${new Date().toLocaleString()}`;
+      this.presetName = this.defaultPresetName();
       this.presetSaveVisible = true;
     },
     async confirmSavePreset() {
@@ -5118,16 +5148,23 @@ const App = {
       </div>
     </div>
 
-    <!-- 加载预设弹窗 -->
+    <!-- 预设面板 -->
     <div v-if="presetModalVisible" class="modal-mask" @click.self="presetModalVisible = false">
-      <div class="modal-panel small">
-        <div class="overlay-head"><h2>加载预设</h2><button class="secondary" @click="presetModalVisible = false">✕</button></div>
+      <div class="modal-panel preset-panel">
+        <div class="overlay-head"><h2>预设</h2><button class="secondary" @click="presetModalVisible = false">✕</button></div>
         <div v-if="!presets.length" class="empty">暂无预设</div>
-        <div v-for="p in presets" :key="p.id" class="list-row">
-          <span>{{ p.name }}</span>
-          <span class="text-muted">{{ p.costLimit }}Cost / {{ p.strategy }}</span>
-          <button class="secondary" @click="loadPreset(p)">加载</button>
-          <button class="secondary" style="color:var(--danger);border-color:var(--danger)" @click="deletePreset(p)">删除</button>
+        <div v-for="p in presets" :key="p.id" class="preset-item">
+          <div class="preset-main">
+              <div class="preset-name" :title="p.name">{{ p.name }}</div>
+              <div class="preset-meta">
+                <span class="badge-result" v-if="p.hasResult">含结果</span>
+                <span class="preset-tag">{{ presetDateText(p) }}</span>
+                <span class="preset-tag">{{ p.costLimit }} Cost</span>
+                <span class="preset-tag" v-if="presetFixedText(p)">{{ presetFixedText(p) }}</span>
+              </div>
+          </div>
+          <button class="secondary" :disabled="renamingPresetId === p.id" @click="loadPreset(p)">加载</button>
+          <button class="preset-del" @click="deletePreset(p)" title="删除">✕</button>
         </div>
       </div>
     </div>
