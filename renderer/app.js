@@ -658,8 +658,9 @@ const App = {
     },
     filteredResults() {
       if (!this.simpleExcludedServants.length) return this.results;
-      const ex = this.simpleExcludedSet;
-      return this.results.filter((r) => !(r.team || []).some((m) => ex.has(Number(m.servantId))));
+      // ⚠️ 2026-10-16 修：不能只看本行头部那支队 —— 它的同分替补里可能还有干净的，
+      // 那种行要留下（显示时自动换成干净的那支）；全被排除才整行藏掉。
+      return this.results.filter((r) => this.rowSurvivesSimpleExclusion(r));
     },
     totalPages() {
       return Math.max(1, Math.ceil(this.filteredResults.length / this.pageSize));
@@ -857,25 +858,60 @@ const App = {
       const map = { total_max: "总牵绊最大化", target_max: "指定从者最大化", balanced: "均衡模式" };
       return map[strategy] || strategy || "总牵绊最大化";
     },
+    // ---------------- 简易排除（只影响显示：把含被排除从者的队伍藏起来）----------------
+    /** 这一组成员里有没有被简易排除的从者 */
+    hitSimpleExclusion(servantIds) {
+      if (!this.simpleExcludedServants.length) return false;
+      const ex = this.simpleExcludedSet;
+      return (servantIds || []).some((sid) => ex.has(Number(sid)));
+    },
+    /**
+     * 同分替补里**过滤掉含被排除从者**的那些（模板与显示都用它）。
+     * ⚠️ 引擎返回的原列表见 sameScoreList()，反馈摘要/导出仍用原列表。
+     */
+    sameScoreListFiltered(result) {
+      const list = this.sameScoreList(result);
+      if (!this.simpleExcludedServants.length) return list;
+      return list.filter((a) => !this.hitSimpleExclusion(a.servantIds));
+    },
+    /** 被简易排除藏起来的替补条数（给提示用） */
+    sameScoreHiddenCount(result) {
+      return this.sameScoreList(result).length - this.sameScoreListFiltered(result).length;
+    },
+    /**
+     * 这一行还该不该显示（2026-10-16 修）：
+     * 本行自己没被排除 ⇒ 显示；本行被排除、但**同分替补里还有干净的** ⇒ 也显示
+     * （显示时自动换成那支干净的，见 displayedResultTeam）；一支都不剩才整行藏掉。
+     */
+    rowSurvivesSimpleExclusion(result) {
+      if (!this.simpleExcludedServants.length) return true;
+      if (!this.hitSimpleExclusion((result.team || []).map((m) => m.servantId))) return true;
+      return this.sameScoreListFiltered(result).length > 0;
+    },
     // ---------------- 同分可替换阵容（引擎 sameScoreTeams；旧引擎没这个字段 → 全部退化为空）----------------
     sameScoreList(result) {
       const list = result && Array.isArray(result.sameScoreTeams) ? result.sameScoreTeams : [];
       return list.filter((a) => a && Array.isArray(a.servantIds));
     },
     sameScoreCount(result) {
-      const n = Number(result && result.sameScoreTotal);
-      const list = this.sameScoreList(result);
-      return Number.isFinite(n) && n > list.length ? n : list.length;
+      return this.sameScoreListFiltered(result).length;
     },
+    /** 当前选中项在**过滤后**列表里的下标（下拉 v-for 用的就是过滤后的列表） */
     sameScoreChoiceIndex(result) {
-      const list = this.sameScoreList(result);
-      const idx = Number((this.sameScoreChoice || {})[Number(result && result.rank)]);
-      return Number.isInteger(idx) && idx >= 0 && idx < list.length ? idx : 0;
+      const raw = this.sameScoreList(result);
+      const list = this.sameScoreListFiltered(result);
+      const want = Number((this.sameScoreChoice || {})[Number(result && result.rank)]);
+      const rawIdx = Number.isInteger(want) && want >= 0 && want < raw.length ? want : 0;
+      const idx = list.indexOf(raw[rawIdx]);
+      return idx >= 0 ? idx : 0;
     },
     chooseSameScore(result, index) {
       const rank = Number(result && result.rank);
       if (!rank) return;
-      this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: index };
+      // 模板传进来的是"过滤后列表"的下标 ⇒ 存回原列表下标（否则一排除就从 0 重算）
+      const alt = this.sameScoreListFiltered(result)[index];
+      const rawIdx = alt ? this.sameScoreList(result).indexOf(alt) : 0;
+      this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: rawIdx >= 0 ? rawIdx : 0 };
     },
     // 下拉里一条"同分阵容"的第 index 位成员：从者 + 礼装都取自**这一条自己**（合并同分行后，
     // 不同条的礼装可能不一样）；缺字段（旧引擎）时退回本行的值。
@@ -942,14 +978,17 @@ const App = {
     // （从者 + 每个位置的礼装 + 助战礼装；位置本身由方案决定，不变）
     displayedResultTeam(result) {
       const team = (result && result.team) || [];
-      const list = this.sameScoreList(result);
-      if (list.length <= 1) return team;
+      // 用**过滤后**的替补列表：本行头部被简易排除时，这里会自动换成第一支干净的
+      const list = this.sameScoreListFiltered(result);
+      if (!list.length) return team;
       const alt = list[this.sameScoreChoiceIndex(result)] || {};
-      const ids = alt.servantIds || [];
+      const ids = (alt.servantIds || []).map(Number);
       const mains = alt.craftIds || [];
       const seconds = alt.secondCraftIds || [];
       const players = team.filter((m) => !m.isSupport);
-      if (players.length !== ids.length) return team;
+      if (!ids.length || players.length !== ids.length) return team;
+      // 选中的这支和本行原本那支是同一套从者 ⇒ 原样返回（别把礼装也换掉）
+      if (players.every((m, i) => Number(m.servantId) === ids[i])) return team;
       let cursor = 0;
       return team.map((m) => {
         if (m.isSupport) {
@@ -970,7 +1009,7 @@ const App = {
       });
     },
     sameScoreActive(result) {
-      return this.sameScoreList(result).length > 1 && this.sameScoreChoiceIndex(result) > 0;
+      return this.sameScoreListFiltered(result).length > 1 && this.sameScoreChoiceIndex(result) > 0;
     },
     visibleResultTeam(result) {
       const team = this.displayedResultTeam(result);
@@ -1132,10 +1171,11 @@ const App = {
         }
         // 「选它就等于全选整组」：同分可替换阵容整组一起写进摘要，
         // 免得对方按摘要复现时只看到被合并后的那一支。
-        const sameScore = this.sameScoreList(r);
+        const sameScore = this.sameScoreListFiltered(r);
+        const hidden = this.sameScoreHiddenCount(r);
         if (sameScore.length > 1) {
           const shown = this.sameScoreChoiceIndex(r) + 1;
-          lines.push(`  ── 同分可替换阵容共 ${this.sameScoreCount(r)} 支（分数完全相同 ${Number(r.totalMultiplier).toFixed(3)}x，礼装/站位相同）；本行当前显示第 ${shown} 支：`);
+          lines.push(`  ── 同分可替换阵容共 ${this.sameScoreCount(r)} 支（分数完全相同 ${Number(r.totalMultiplier).toFixed(3)}x，礼装/站位相同）；本行当前显示第 ${shown} 支${hidden > 0 ? `（另有 ${hidden} 支含简易排除的从者，未列出）` : ""}：`);
           sameScore.forEach((alt, i) => {
             lines.push(`     同分${i + 1}${i + 1 === shown ? "（显示中）" : ""}：${this.sameScoreTeamText(r, alt)}`);
           });
@@ -4525,12 +4565,11 @@ const App = {
           </div>
           <div v-if="expandedSameScore === r.rank && sameScoreCount(r) > 1" class="same-score-panel">
             <div class="same-score-hint text-muted">
-              以下 {{ sameScoreCount(r) }} 支分数<strong>完全相同</strong>（{{ Number(r.totalMultiplier).toFixed(3) }}x），
-              只是可替换的从者不同；点其中一支 → 它成为本行显示的阵容（名次不变，礼装与站位不动）。
-              <template v-if="sameScoreCount(r) > sameScoreList(r).length">（此处列出前 {{ sameScoreList(r).length }} 支）</template>
+              {{ sameScoreCount(r) }} 支分数完全相同（{{ Number(r.totalMultiplier).toFixed(3) }}x），点一支让它在本行显示<template
+                v-if="sameScoreHiddenCount(r) > 0">；{{ sameScoreHiddenCount(r) }} 支含已排除从者已隐藏</template>
             </div>
             <div
-              v-for="(alt, i) in sameScoreList(r)"
+              v-for="(alt, i) in sameScoreListFiltered(r)"
               :key="i"
               class="same-score-item"
               :class="{ active: sameScoreChoiceIndex(r) === i }"
