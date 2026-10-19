@@ -195,6 +195,15 @@
       ]
     },
     {
+      "name": "teams.rename（只改名字，两边空白会去掉）",
+      "method": "teams.renameUserTeam",
+      "args": [1, "  队伍甲·改名  "],
+      "expect": [
+        { "path": "result.ok", "eq": true },
+        { "path": "result.name", "eq": "队伍甲·改名" }
+      ]
+    },
+    {
       "name": "teams.rename（空名 → 报错、原名不变）",
       "method": "teams.renameUserTeam",
       "args": [1, "   "],
@@ -205,6 +214,17 @@
       "method": "teams.renameUserTeam",
       "args": [999, "随便"],
       "expect": [{ "path": "ok", "eq": false }]
+    },
+    {
+      "name": "teams.list（改名已生效、配置不受影响）",
+      "method": "teams.listUserTeams",
+      "args": [],
+      "expect": [
+        { "path": "result.length", "eq": 1 },
+        { "path": "result[0].name", "eq": "队伍甲·改名" },
+        { "path": "result[0].costLimit", "eq": 116 },
+        { "path": "result[0].hasResult", "eq": false }
+      ]
     },
     {
       "name": "teams.save（同时保存计算结果）",
@@ -228,6 +248,25 @@
         { "path": "result[0].resultDataRevision", "eq": "rev-A" },
         { "path": "result[1].name", "eq": "队伍甲·改名" },
         { "path": "result[1].hasResult", "eq": false }
+      ]
+    },
+    {
+      "name": "teams.rename（带结果的预设改名，结果还挂着）",
+      "method": "teams.renameUserTeam",
+      "args": [2, "队伍乙·改名"],
+      "expect": [
+        { "path": "result.ok", "eq": true },
+        { "path": "result.name", "eq": "队伍乙·改名" }
+      ]
+    },
+    {
+      "name": "teams.list（改名不影响挂着的计算结果）",
+      "method": "teams.listUserTeams",
+      "args": [],
+      "expect": [
+        { "path": "result[0].name", "eq": "队伍乙·改名" },
+        { "path": "result[0].hasResult", "eq": true },
+        { "path": "result[0].resultDataRevision", "eq": "rev-A" }
       ]
     },
     {

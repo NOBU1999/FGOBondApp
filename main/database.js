@@ -462,6 +462,10 @@ function deleteUserTeam(db, id) {
   return getDomain(db).teams.deleteUserTeam(id);
 }
 
+function renameUserTeam(db, id, name) {
+  return getDomain(db).teams.renameUserTeam(id, name);
+}
+
 function getUserTeamResult(db, teamId) {
   return getDomain(db).teams.getUserTeamResult(teamId);
 }
@@ -514,6 +518,7 @@ module.exports = {
   copyAccountData,
   saveUserTeam,
   listUserTeams,
+  renameUserTeam,
   deleteUserTeam,
   getUserTeamResult,
   saveUserTeamResult,

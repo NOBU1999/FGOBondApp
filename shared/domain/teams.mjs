@@ -161,6 +161,17 @@ export function createTeamsDomain({ sql }) {
     sql.run("UPDATE user_teams SET result_id = NULL WHERE id = ?", [id]);
     return { ok: true };
   }
+
+  /** 只改预设名字（不动配置、不动挂着的计算结果）。 */
+  function renameUserTeam(id, name) {
+    const teamId = Number(id);
+    const clean = String(name === undefined || name === null ? "" : name).trim();
+    if (!clean) throw new Error("预设名称不能为空");
+    const info = sql.run("UPDATE user_teams SET name = ? WHERE id = ?", [clean, teamId]);
+    if (!info.changes) throw new Error("预设不存在");
+    return { ok: true, id: teamId, name: clean };
+  }
+
   function deleteUserTeam(id) {
     const teamId = Number(id);
     // 连挂着的计算结果一起删（否则会留下孤儿结果行）

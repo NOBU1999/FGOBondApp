@@ -379,6 +379,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
 }
 .preset-del:hover { color: var(--danger); border-color: var(--danger); }
+/* 「改名」：与 ✕ 同款的安静按钮，悬停变主题色（2026-10-18 新增） */
+.preset-rename {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.preset-rename:hover { color: var(--accent); border-color: var(--accent); }
+/* 改名时的行内输入框：占满名字那一行，回车/失焦保存、Esc 取消 */
+.preset-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-weight: 600;
+}
+
 /* 结果迷你队伍 */
 .result-board {
   display: grid;

@@ -333,6 +333,9 @@ const App = {
       servantAttr: { visible: false, servantId: null, stage: "fourth", rows: [], loading: false },
       presets: [],
       presetModalVisible: false,
+      // 预设改名：正在改哪一条（id）、草稿名（回车/失焦保存，Esc 取消）
+      renamingPresetId: null,
+      renameDraft: "",
       presetSaveVisible: false,
       presetName: "",
       // 「同时保存本次结果」（默认勾上，2026-10-14 用户定）：有结果才显示这个勾选框
@@ -3204,6 +3207,41 @@ const App = {
     clearLoadedResultInfo() {
       this.loadedResultInfo = null;
     },
+    // ---------------- 预设改名 ----------------
+    startRenamePreset(preset) {
+      if (!preset || !preset.id) return;
+      this.renamingPresetId = Number(preset.id);
+      this.renameDraft = preset.name || "";
+      this.$nextTick(() => {
+        const el = this.$el && this.$el.querySelector(".preset-rename-input");
+        if (el) {
+          el.focus();
+          if (el.select) el.select();
+        }
+      });
+    },
+    cancelRenamePreset() {
+      this.renamingPresetId = null;
+      this.renameDraft = "";
+    },
+    async confirmRenamePreset(preset) {
+      if (!preset || this.renamingPresetId !== Number(preset.id)) return;
+      const name = String(this.renameDraft || "").trim();
+      const oldName = preset.name || "";
+      this.renamingPresetId = null;
+      this.renameDraft = "";
+      if (!name || name === oldName) return;
+      try {
+        await window.fgo.renameUserTeam(preset.id, name);
+        this.presets = await window.fgo.listUserTeams();
+        // 结果区顶部那条"从哪个预设来的"也跟着改名，别显示旧名
+        if (this.loadedResultInfo && this.loadedResultInfo.presetName === oldName) {
+          this.loadedResultInfo.presetName = name;
+        }
+      } catch (err) {
+        alert("重命名失败：" + (err && err.message ? err.message : String(err)));
+      }
+    },
     async deletePreset(preset) {
       if (!preset || !preset.id) return;
       if (!confirm(`确定删除预设「${preset.name || "未命名"}」吗？`)) return;
@@ -5155,6 +5193,17 @@ const App = {
         <div v-if="!presets.length" class="empty">暂无预设</div>
         <div v-for="p in presets" :key="p.id" class="preset-item">
           <div class="preset-main">
+            <input
+              v-if="renamingPresetId === p.id"
+              class="preset-rename-input"
+              v-model="renameDraft"
+              maxlength="40"
+              placeholder="预设名称"
+              @keyup.enter="confirmRenamePreset(p)"
+              @keyup.esc="cancelRenamePreset"
+              @blur="confirmRenamePreset(p)"
+            />
+            <template v-else>
               <div class="preset-name" :title="p.name">{{ p.name }}</div>
               <div class="preset-meta">
                 <span class="badge-result" v-if="p.hasResult">含结果</span>
@@ -5162,7 +5211,14 @@ const App = {
                 <span class="preset-tag">{{ p.costLimit }} Cost</span>
                 <span class="preset-tag" v-if="presetFixedText(p)">{{ presetFixedText(p) }}</span>
               </div>
+            </template>
           </div>
+          <button
+            v-if="renamingPresetId !== p.id"
+            class="preset-rename"
+            @click="startRenamePreset(p)"
+            title="重命名"
+          >重命名</button>
           <button class="secondary" :disabled="renamingPresetId === p.id" @click="loadPreset(p)">加载</button>
           <button class="preset-del" @click="deletePreset(p)" title="删除">✕</button>
         </div>

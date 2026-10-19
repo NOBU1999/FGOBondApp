@@ -36,6 +36,7 @@ const DATA_METHODS = [
   "saveCustomCrafts",
   "listUserTeams",
   "saveUserTeam",
+  "renameUserTeam",
   "deleteUserTeam",
   "getUserTeamResult",
   "saveUserTeamResult",

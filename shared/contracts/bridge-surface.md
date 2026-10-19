@@ -74,6 +74,7 @@ npm run test:contracts -- --suite bridge     # 33 条用例，覆盖下列全部
 | `saveCustomCrafts` | `items` | 存自定义礼装 | 🟡 | |
 | `listUserTeams` | – | 已保存队伍（带 `hasResult` / `resultDataRevision` 摘要，**不含结果正文**） | 🟡 | |
 | `saveUserTeam` | `team` | 存队伍；`team.result` 存在时**同时挂一份计算结果** | 🟡 | 结果存 `saved_results` |
+| `renameUserTeam` | `id, name` | 只改预设名字（**不动配置、不动挂着的计算结果**） | 🟡 | 空名 / 不存在 → 报错 |
 | `deleteUserTeam` | `id` | 删队伍（**连挂着的计算结果一起删**） | 🟡 | |
 | `getUserTeamResult` | `teamId` | 取该预设挂着的计算结果（打开预设用，**不重算**） | 🟡 | 没挂结果 → `null` |
 | `saveUserTeamResult` | `{teamId, result, request?, dataRevision?}` | 给已有预设挂/更新结果（同一预设只留最新一份） | 🟡 | |

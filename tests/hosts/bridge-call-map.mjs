@@ -51,6 +51,7 @@ export const BRIDGE_CALL_ROUTES = {
   // ---------------- 队伍预设 ----------------
   "teams.listUserTeams": (b) => b.listUserTeams(),
   "teams.saveUserTeam": (b, a) => b.saveUserTeam(a[0]),
+  "teams.renameUserTeam": (b, a) => b.renameUserTeam(a[0], a[1]),
   "teams.deleteUserTeam": (b, a) => b.deleteUserTeam(a[0]),
   // 预设挂着的计算结果（保存计算结果需求）
   "teams.getUserTeamResult": (b, a) => b.getUserTeamResult(a[0]),

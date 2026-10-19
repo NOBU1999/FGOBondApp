@@ -91,6 +91,8 @@ export function createDataBridge({ domain, platform = {} }) {
     // ---------------- 队伍预设 ----------------
     listUserTeams: () => teams.listUserTeams(),
     saveUserTeam: (team) => teams.saveUserTeam(team),
+    // 只改名字（不动配置与挂着的计算结果）
+    renameUserTeam: (id, name) => teams.renameUserTeam(id, name),
     deleteUserTeam: (id) => teams.deleteUserTeam(id),
     // 预设挂着的计算结果（「保存计算结果」需求）：列表只带摘要，正文按需取
     getUserTeamResult: (teamId) => teams.getUserTeamResult(teamId),
@@ -115,6 +117,7 @@ export const WRITE_METHODS = new Set([
   "saveExclusions",
   "saveCustomCrafts",
   "saveUserTeam",
+  "renameUserTeam",
   "deleteUserTeam",
   "saveUserTeamResult",
   "deleteUserTeamResult",
