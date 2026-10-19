@@ -336,6 +336,12 @@ const App = {
       presetModalVisible: false,
       presetSaveVisible: false,
       presetName: "",
+      // 「同时保存本次结果」（默认勾上，2026-10-14 用户定）：有结果才显示这个勾选框
+      presetSaveWithResult: true,
+      // 最近一次计算的完整快照（用于"保存计算结果"）；打开存档结果时也会指向它
+      lastResultSnapshot: null,
+      // 当前结果区显示的是"库里的存档结果"时记下来（时间 / 数据版本），用于提示与版本对比
+      loadedResultInfo: null,
       // 多账号（一个账号 = 一套 Box + 一套排除列表）
       accounts: [],
       activeAccountId: null,
@@ -2924,9 +2930,18 @@ const App = {
           : "standard",
       };
       try {
+        // 「同时保存本次结果」：预设照常存；勾了就额外挂一份结果（下次打开不用重算）
+        if (this.presetSaveWithResult && this.lastResultSnapshot) {
+          team.result = {
+            results: this.lastResultSnapshot.results || [],
+            stats: this.lastResultSnapshot.stats || null,
+          };
+          team.request = this.lastResultSnapshot.payload || null;
+          team.dataRevision = this.lastResultSnapshot.dataRevision || null;
+        }
         await window.fgo.saveUserTeam(plainClone(team));
         this.presets = await window.fgo.listUserTeams();
-        alert("队伍已保存");
+        alert(team.result ? "队伍与本次结果已保存" : "队伍已保存");
       } catch (err) {
         alert("保存失败：" + (err && err.message ? err.message : String(err)));
         this.presetSaveVisible = true;
@@ -2988,6 +3003,67 @@ const App = {
       this.baseBond = Number(preset.baseBond || 0);
       this.sortMode = preset.sortMode === "points" ? "points" : "multiplier";
       this.presetModalVisible = false;
+      // 该预设挂着存档结果 ⇒ 直接显示，不重算（用户 2026-10-14 的需求）；
+      // 没挂结果就把结果区清空 —— 否则屏幕上还留着上一次的结果，看着像这个预设算过
+      // （用户 2026-10-18 指出）
+      const shown = preset.hasResult ? await this.showSavedResult(preset) : false;
+      if (!shown) this.clearResultArea();
+    },
+    /** 取某预设挂着的存档结果并显示（**不调用引擎**）。返回是否真的显示了结果。 */
+    async showSavedResult(preset) {
+      let saved = null;
+      try {
+        saved = await window.fgo.getUserTeamResult(preset.id);
+      } catch (err) {
+        this.error = "读取存档结果失败：" + (err && err.message ? err.message : String(err));
+        return false;
+      }
+      if (!saved || !saved.result) return false;
+      const bundle = Array.isArray(saved.result) ? { results: saved.result, stats: null } : saved.result;
+      const rows = bundle.results || [];
+      if (!rows.length) return false;
+      this.results = plainClone(rows);
+      this.lastSearchStats = bundle.stats || null;
+      this.lastResultSnapshot = {
+        results: plainClone(rows),
+        stats: plainClone(this.lastSearchStats),
+        payload: saved.request || null,
+        dataRevision: saved.dataRevision || null,
+        clientVersion: (this.info && this.info.version) || null,
+      };
+      this.loadedResultInfo = {
+        presetName: preset.name || "",
+        savedAt: saved.savedAt || null,
+        dataRevision: saved.dataRevision || null,
+        stale: !!(saved.dataRevision && this.info && this.info.dataUpdatedAt
+          && String(saved.dataRevision) !== String(this.info.dataUpdatedAt)),
+      };
+      this.currentPage = 1;
+      this.expandedResult = null;
+      setTimeout(() => {
+        document.querySelector(".results-section")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+      return true;
+    },
+    /**
+     * 清空结果区（加载的预设没有存档结果时用）。
+     * 连 lastResultSnapshot 一起清 —— 否则「同时保存本次结果」会把上一份结果偷偷挂到新预设上。
+     */
+    clearResultArea() {
+      this.results = [];
+      this.lastSearchStats = null;
+      this.lastResultSnapshot = null;
+      this.loadedResultInfo = null;
+      this.expandedResult = null;
+      this.expandedSameScore = null;
+      this.sameScoreChoice = {};
+      this.compareSelectedRanks = [];
+      this.compareVisible = false;
+      this.currentPage = 1;
+    },
+    /** 明确清掉"这是存档结果"的提示（点开始计算时调用）。 */
+    clearLoadedResultInfo() {
+      this.loadedResultInfo = null;
     },
     async deletePreset(preset) {
       if (!preset || !preset.id) return;
@@ -3483,6 +3559,16 @@ const App = {
           partial: result.status === "partial",
           superLevel: this.superOn ? Number(this.superLevel) : 0,
         };
+        // 「保存计算结果」用的快照：存界面**看到的这一份**（含被合并进来的种子预设行），
+        // 这样打开存档能原样重现，不需要重算。
+        this.lastResultSnapshot = {
+          results: plainClone(this.results),
+          stats: plainClone(this.lastSearchStats),
+          payload: plainClone(payload),
+          dataRevision: (this.info && this.info.dataUpdatedAt) || null,
+          clientVersion: (this.info && this.info.version) || null,
+        };
+        this.loadedResultInfo = null;
         this.currentPage = 1;
         if (this.resultSettings.autoExpandFirst && this.results.length) {
           this.expandedResult = this.results[0];
@@ -4318,6 +4404,10 @@ const App = {
             </span>
           </div>
         </div>
+        <div v-if="loadedResultInfo" class="search-stats" :class="{ warn: loadedResultInfo.stale }">
+          📂 {{ loadedResultInfo.presetName }}<template v-if="loadedResultInfo.savedAt"> · {{ loadedResultInfo.savedAt }}</template>
+          <span v-if="loadedResultInfo.stale"> · 数据已更新，建议重算</span>
+        </div>
         <div v-if="lastSearchStats && lastSearchStats.superLevel" class="search-stats">
           🚀 超级模式 ×{{ lastSearchStats.superLevel }}：不设时间上限、按最大范围搜索
           <span class="text-muted">（范围越大越慢；中途点"停止"已算出的结果会保留）</span>
@@ -4907,6 +4997,10 @@ const App = {
           <label>预设名称</label>
           <input v-model="presetName" placeholder="输入预设名称" @keyup.enter="confirmSavePreset" />
         </div>
+        <label v-if="lastResultSnapshot" class="settings-row" style="margin:0 0 6px">
+          <input type="checkbox" v-model="presetSaveWithResult" />
+          <span>同时保存本次结果</span>
+        </label>
         <div style="display:flex;justify-content:flex-end;gap:8px">
           <button class="secondary" @click="presetSaveVisible = false">取消</button>
           <button class="primary" @click="confirmSavePreset">保存</button>

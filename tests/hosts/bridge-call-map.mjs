@@ -52,6 +52,10 @@ export const BRIDGE_CALL_ROUTES = {
   "teams.listUserTeams": (b) => b.listUserTeams(),
   "teams.saveUserTeam": (b, a) => b.saveUserTeam(a[0]),
   "teams.deleteUserTeam": (b, a) => b.deleteUserTeam(a[0]),
+  // 预设挂着的计算结果（保存计算结果需求）
+  "teams.getUserTeamResult": (b, a) => b.getUserTeamResult(a[0]),
+  "teams.saveUserTeamResult": (b, a) => b.saveUserTeamResult(a[0]),
+  "teams.deleteUserTeamResult": (b, a) => b.deleteUserTeamResult(a[0]),
 
   // ---------------- 平台能力（宿主专属用例） ----------------
   "platform.getAppInfo": (b) => b.getAppInfo(),

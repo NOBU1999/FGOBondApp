@@ -195,6 +195,96 @@
       ]
     },
     {
+      "name": "teams.rename（空名 → 报错、原名不变）",
+      "method": "teams.renameUserTeam",
+      "args": [1, "   "],
+      "expect": [{ "path": "ok", "eq": false }]
+    },
+    {
+      "name": "teams.rename（不存在的预设 → 报错）",
+      "method": "teams.renameUserTeam",
+      "args": [999, "随便"],
+      "expect": [{ "path": "ok", "eq": false }]
+    },
+    {
+      "name": "teams.save（同时保存计算结果）",
+      "method": "teams.saveUserTeam",
+      "args": [{
+        "name": "队伍乙",
+        "result": { "status": "success", "top20": [{ "rank": 1, "totalMultiplier": 10.92 }] },
+        "request": { "costLimit": 116, "mode": "normal" },
+        "dataRevision": "rev-A"
+      }],
+      "expect": [{ "path": "result", "gte": 2 }]
+    },
+    {
+      "name": "teams.list（带结果的预设只给摘要，不吐正文）",
+      "method": "teams.listUserTeams",
+      "args": [],
+      "expect": [
+        { "path": "result.length", "eq": 2 },
+        { "path": "result[0].name", "eq": "队伍乙" },
+        { "path": "result[0].hasResult", "eq": true },
+        { "path": "result[0].resultDataRevision", "eq": "rev-A" },
+        { "path": "result[1].name", "eq": "队伍甲·改名" },
+        { "path": "result[1].hasResult", "eq": false }
+      ]
+    },
+    {
+      "name": "teams.getResult（取回挂着的计算结果）",
+      "method": "teams.getUserTeamResult",
+      "args": [2],
+      "expect": [
+        { "path": "result.dataRevision", "eq": "rev-A" },
+        { "path": "result.request.costLimit", "eq": 116 },
+        { "path": "result.result.status", "eq": "success" },
+        { "path": "result.result.top20[0].totalMultiplier", "eq": 10.92 }
+      ]
+    },
+    {
+      "name": "teams.getResult（没挂结果的预设 → null）",
+      "method": "teams.getUserTeamResult",
+      "args": [1],
+      "expect": [{ "path": "result", "eq": null }]
+    },
+    {
+      "name": "teams.saveResult（给已有预设补挂一份结果）",
+      "method": "teams.saveUserTeamResult",
+      "args": [{ "teamId": 1, "result": { "status": "success", "top20": [] }, "dataRevision": "rev-B" }],
+      "expect": [
+        { "path": "result.ok", "eq": true },
+        { "path": "result.resultId", "gte": 1 }
+      ]
+    },
+    {
+      "name": "teams.saveResult（同一预设只留最新一份）",
+      "method": "teams.getUserTeamResult",
+      "args": [1],
+      "expect": [{ "path": "result.dataRevision", "eq": "rev-B" }]
+    },
+    {
+      "name": "teams.deleteResult（清掉结果、预设本身还在）",
+      "method": "teams.deleteUserTeamResult",
+      "args": [1],
+      "expect": [{ "path": "result.ok", "eq": true }]
+    },
+    {
+      "name": "teams.delete（带结果的预设一起删干净）",
+      "method": "teams.deleteUserTeam",
+      "args": [2],
+      "expect": [{ "path": "result.ok", "eq": true }]
+    },
+    {
+      "name": "teams.list（删完只剩改过名的队伍甲，且没有结果）",
+      "method": "teams.listUserTeams",
+      "args": [],
+      "expect": [
+        { "path": "result.length", "eq": 1 },
+        { "path": "result[0].name", "eq": "队伍甲·改名" },
+        { "path": "result[0].hasResult", "eq": false }
+      ]
+    },
+    {
       "name": "teams.delete（存在 / 不存在）",
       "method": "teams.deleteUserTeam",
       "args": [1],

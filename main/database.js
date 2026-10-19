@@ -200,6 +200,14 @@ function ensureSchema(db) {
       search_order TEXT DEFAULT 'servant',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS saved_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id INTEGER,
+      data_revision TEXT,
+      request_json TEXT,
+      result_json TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN quality_mode TEXT DEFAULT 'balanced'");
@@ -243,6 +251,12 @@ function ensureSchema(db) {
   }
   try {
     db.exec("ALTER TABLE user_teams ADD COLUMN base_bond REAL DEFAULT 0");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    // 「保存计算结果」：预设挂着的那份结果（saved_results.id）
+    db.exec("ALTER TABLE user_teams ADD COLUMN result_id INTEGER");
   } catch (_) {
     // 列已存在
   }
@@ -448,6 +462,18 @@ function deleteUserTeam(db, id) {
   return getDomain(db).teams.deleteUserTeam(id);
 }
 
+function getUserTeamResult(db, teamId) {
+  return getDomain(db).teams.getUserTeamResult(teamId);
+}
+
+function saveUserTeamResult(db, payload) {
+  return getDomain(db).teams.saveUserTeamResult(payload || {});
+}
+
+function deleteUserTeamResult(db, teamId) {
+  return getDomain(db).teams.deleteUserTeamResult(teamId);
+}
+
 function getEventBondBonuses(dbPath) {
   const dir = path.dirname(dbPath || getDbPath());
   const file = path.join(dir, "event_bond_bonus.json");
@@ -489,6 +515,9 @@ module.exports = {
   saveUserTeam,
   listUserTeams,
   deleteUserTeam,
+  getUserTeamResult,
+  saveUserTeamResult,
+  deleteUserTeamResult,
   getExclusions,
   saveExclusions,
   getMetaValue,

@@ -328,6 +328,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .badge.support { color: var(--support); border-color: var(--support); }
 .badge.fixed { color: var(--danger); border-color: var(--danger); }
+/* 「含结果」标记：预设挂着一份保存好的计算结果（2026-10-14 保存计算结果需求） */
+.badge-result {
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .empty { color: var(--muted); text-align: center; padding: 30px; }
 .error { color: #f38ba8; }
 .text-muted { color: var(--muted); font-size: 12px; }

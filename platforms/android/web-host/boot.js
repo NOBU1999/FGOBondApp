@@ -41,6 +41,9 @@
     "listUserTeams",
     "saveUserTeam",
     "deleteUserTeam",
+    "getUserTeamResult",
+    "saveUserTeamResult",
+    "deleteUserTeamResult",
     "getEventBondBonuses",
     "listAccounts",
     "createAccount",
@@ -466,6 +469,8 @@
     "saveCustomCrafts",
     "saveUserTeam",
     "deleteUserTeam",
+    "saveUserTeamResult",
+    "deleteUserTeamResult",
   ]);
 
   function base64ToBytes(b64) {
@@ -561,6 +566,22 @@
    * 每列都单独 try（列已存在时 SQLite 会报错，忽略即可）。
    */
   function migrateUserTableColumns(db) {
+    // 「保存计算结果」的表：安卓靠随包种子库建表，但**老用户原地升级**时本地库没有这张表
+    // ⇒ 这里补建（对应桌面 main/database.js 的 ensureSchema）。
+    try {
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS main."saved_results" (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           team_id INTEGER,
+           data_revision TEXT,
+           request_json TEXT,
+           result_json TEXT,
+           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+         )`
+      );
+    } catch (err) {
+      pushDiag("warn", "补建 saved_results 失败：" + (err && err.message ? err.message : String(err)));
+    }
     const additions = [
       ["user_teams", "quality_mode", "TEXT DEFAULT 'balanced'"],
       ["user_teams", "neighborhood", "TEXT DEFAULT 'standard'"],
@@ -571,6 +592,7 @@
       ["user_teams", "crown_class", "TEXT DEFAULT 'all'"],
       ["user_teams", "crown_positions", "TEXT"],
       ["user_teams", "base_bond", "REAL DEFAULT 0"],
+      ["user_teams", "result_id", "INTEGER"],
       ["user_box", "aura_bonus", "REAL DEFAULT 0"],
       ["user_box", "bond_rank", "INTEGER DEFAULT 0"],
       ["user_box", "bond_max_rank", "INTEGER DEFAULT 0"],

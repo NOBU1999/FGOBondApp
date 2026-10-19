@@ -32,7 +32,7 @@ const path = require("node:path");
 const ROOT = path.resolve(__dirname, "..");
 
 // 用户数据表：发布包里必须为空
-const USER_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "custom_crafts"];
+const USER_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "custom_crafts", "saved_results"];
 // 用户偏好 / 本机状态：不随发布包分发
 const USER_META_KEYS = ["server_region", "generic_bond_participation", "non_participating_craft_ids", "active_account_id"];
 

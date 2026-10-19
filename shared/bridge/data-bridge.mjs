@@ -92,6 +92,10 @@ export function createDataBridge({ domain, platform = {} }) {
     listUserTeams: () => teams.listUserTeams(),
     saveUserTeam: (team) => teams.saveUserTeam(team),
     deleteUserTeam: (id) => teams.deleteUserTeam(id),
+    // 预设挂着的计算结果（「保存计算结果」需求）：列表只带摘要，正文按需取
+    getUserTeamResult: (teamId) => teams.getUserTeamResult(teamId),
+    saveUserTeamResult: (payload) => teams.saveUserTeamResult(payload || {}),
+    deleteUserTeamResult: (teamId) => teams.deleteUserTeamResult(teamId),
   };
 }
 
@@ -112,6 +116,8 @@ export const WRITE_METHODS = new Set([
   "saveCustomCrafts",
   "saveUserTeam",
   "deleteUserTeam",
+  "saveUserTeamResult",
+  "deleteUserTeamResult",
 ]);
 
 /**
