@@ -395,6 +395,10 @@ const App = {
         // 活动从者优先（2026-10-14 新增）：把"个人加成不足 50%"的从者也一并优先纳入。
         // 个人加成 ≥50% 的从者**始终**优先纳入，与此开关无关（引擎侧规则）。
         eventPriority: false,
+        // 「全部视为非满绊」（2026-10-14 新增，玩家需求）：为"该给谁喂梦火"服务。
+        // 打开后所有从者都按"还能继续涨"算（= 引擎的「自身参与收益」一律为真）；
+        // 「15 级以上的全队 +25%」按等级照常给，**不受这个开关影响**。
+        ignoreMaxBond: false,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -2049,6 +2053,8 @@ const App = {
         }
       });
       this.box = saved;
+      // 等级已知的从者：三个标记按规则推导一次（老库手勾的、等级为 0 的不动）
+      this.syncBondFlags();
     },
     activeAccountName() {
       const hit = this.accounts.find((a) => a.id === this.activeAccountId);
@@ -2203,6 +2209,60 @@ const App = {
       try { await window.fgo.saveUserBox(plainClone(entries), this.activeAccountId); } catch (_) { /* ignore */ }
       this.refreshAccounts();
     },
+    /**
+     * 三个牵绊标记的**权威来源**（2026-10-14 按游戏规则重定，官方口径见预告知）：
+     *   · 全队 25% ⇐ 牵绊 Lv ≥ **15**（与是否满绊无关；但引擎要求"满绊 ∧ 开关1"才给，
+     *     所以这里 maxBond 与 switch1 一起为真）
+     *   · 自身收益 ⇐ 等级 < 当前上限（还能继续涨，例如 15/16）
+     *   · 自身记 0 ⇐ 等级 ≥ 当前上限
+     * 等级没填过（老数据 / 纯手勾）⇒ 原样沿用用户勾的那三个标记，不猜。
+     * 「计算设置 → 视为非满绊」打开时：全员强制"自身参与收益"（25% 不受影响）。
+     */
+    bondFlagsFor(b) {
+      const rank = Number((b && b.bondRank) || 0);
+      const max = Number((b && b.bondMaxRank) || 0);
+      let maxBond;
+      let switch1;
+      let switch2;
+      if (rank > 0 && max > 0) {
+        const atCap = rank >= max;
+        switch1 = rank >= 15;
+        switch2 = !atCap;
+        maxBond = switch1 || atCap;
+      } else {
+        maxBond = !!(b && b.maxBond);
+        switch1 = !!(b && b.switch1);
+        switch2 = !!(b && b.switch2);
+      }
+      if (this.resultSettings.ignoreMaxBond) switch2 = true;
+      return { maxBond, switch1, switch2 };
+    },
+    /** 把按等级推导出来的标记写回 Box（让界面上的"绊"角标、筛选、发送内容三者一致）。 */
+    syncBondFlags() {
+      let changed = 0;
+      for (const id of Object.keys(this.box || {})) {
+        const b = this.box[id];
+        if (!b) continue;
+        const rank = Number(b.bondRank || 0);
+        const max = Number(b.bondMaxRank || 0);
+        if (!(rank > 0 && max > 0)) continue;   // 等级未知 ⇒ 不动用户手勾
+        const f = this.bondFlagsFor({ ...b, bondRank: rank, bondMaxRank: max });
+        const want = { maxBond: f.maxBond, switch1: f.switch1, switch2: f.switch2 };
+        if (b.maxBond !== want.maxBond || b.switch1 !== want.switch1 || b.switch2 !== want.switch2) {
+          b.maxBond = want.maxBond;
+          b.switch1 = want.switch1;
+          b.switch2 = want.switch2;
+          changed += 1;
+        }
+      }
+      return changed;
+    },
+    /** 该从者的三个标记是否由牵绊等级自动判定（等级与上限都填了）。 */
+    bondFlagsAuto(id) {
+      const b = this.box && this.box[id];
+      if (!b) return false;
+      return Number(b.bondRank || 0) > 0 && Number(b.bondMaxRank || 0) > 0;
+    },
     toggleOwned(id) {
       if (this.dragClickSuppressed()) return;
       const b = this.box[id];
@@ -2273,6 +2333,11 @@ const App = {
       }
       if (b.maxBond && rank >= 15) b.switch1 = true;
       else if (rank < 15) b.switch1 = false;
+      // 等级填了 ⇒ 三个标记一律按规则推导（官方口径：25% 只看 Lv≥15；自身收益看是否达上限）
+      const f = this.bondFlagsFor(b);
+      b.maxBond = f.maxBond;
+      b.switch1 = f.switch1;
+      b.switch2 = f.switch2;
       this.persistBox();
     },
     setBondMaxRank(id, val) {
@@ -2294,6 +2359,10 @@ const App = {
       }
       if (b.maxBond && rank >= 15) b.switch1 = true;
       else if (rank < 15) b.switch1 = false;
+      const f = this.bondFlagsFor(b);
+      b.maxBond = f.maxBond;
+      b.switch1 = f.switch1;
+      b.switch2 = f.switch2;
       this.persistBox();
     },
     toggleSwitch2(id) {
@@ -3285,12 +3354,13 @@ const App = {
     buildPayload() {
       const box = this.ownedServants.map((s) => {
         const b = this.box[s.id];
+        const f = this.bondFlagsFor(b);          // 按牵绊等级推导（规则见 bondFlagsFor）
         return {
           id: s.id,
           stage: b.stage,
-          maxBond: b.maxBond,
-          bondSwitch1: b.switch1,
-          bondSwitch2: b.switch2,
+          maxBond: f.maxBond,
+          bondSwitch1: f.switch1,
+          bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: Number(b.auraBonus || 0) / 100,
         };
@@ -3369,12 +3439,13 @@ const App = {
     buildPresetPayload(preset) {
       const box = this.ownedServants.map((s) => {
         const b = this.box[s.id];
+        const f = this.bondFlagsFor(b);          // 按牵绊等级推导（规则见 bondFlagsFor）
         return {
           id: s.id,
           stage: b.stage,
-          maxBond: b.maxBond,
-          bondSwitch1: b.switch1,
-          bondSwitch2: b.switch2,
+          maxBond: f.maxBond,
+          bondSwitch1: f.switch1,
+          bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: Number(b.auraBonus || 0) / 100,
         };
@@ -5127,9 +5198,13 @@ const App = {
               <div class="text-muted" style="margin-top:2px">例如 10/10 填 10；15/15 填 15。</div>
             </div>
           </div>
-          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].maxBond" @change="toggleMaxBond(servantDetail.servantId)" /> 满绊标记（达到当前牵绊上限）</label>
-          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch1" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch1(servantDetail.servantId)" /> 全队25%加成（仅15级以上满绊生效）</label>
-          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch2" :disabled="!box[servantDetail.servantId].maxBond" @change="toggleSwitch2(servantDetail.servantId)" /> 开关二（自身参与收益）</label>
+          <div v-if="bondFlagsAuto(servantDetail.servantId)" class="text-muted" style="margin:4px 0 2px"
+               title="Lv ≥ 15 ⇒ 给全队 25%；未达上限 ⇒ 自身照常计收益。想手勾请把等级填 0">
+            按等级自动判定（Lv {{ box[servantDetail.servantId].bondRank }}/{{ box[servantDetail.servantId].bondMaxRank }}）
+          </div>
+          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].maxBond" :disabled="bondFlagsAuto(servantDetail.servantId)" @change="toggleMaxBond(servantDetail.servantId)" /> 满绊标记（达到当前牵绊上限）</label>
+          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch1" :disabled="bondFlagsAuto(servantDetail.servantId) || !box[servantDetail.servantId].maxBond" @change="toggleSwitch1(servantDetail.servantId)" /> 全队25%加成（Lv 15 及以上）</label>
+          <label style="display:flex;gap:6px;margin:6px 0"><input type="checkbox" :checked="box[servantDetail.servantId].switch2" :disabled="bondFlagsAuto(servantDetail.servantId) || !box[servantDetail.servantId].maxBond" @change="toggleSwitch2(servantDetail.servantId)" /> 开关二（满绊也计自身收益）</label>
           <div class="field">
             <label>个人加成（%）</label>
             <input type="number" min="0" step="0.01" :value="box[servantDetail.servantId].personalBonus" @change="setPersonal(servantDetail.servantId, $event.target.value)" />
@@ -5283,6 +5358,10 @@ const App = {
             —— 按单人评分排不进候选池、很容易被漏掉。它不会改变第 1 名，只是让后面的推荐更完整；
             代价是大约多花 15% 时间，嫌慢可以切「更快」。
           </div>
+          <label class="settings-row" title="打开后所有人都按「还能继续涨」算（自身收益不再记 0），用来估算梦火喂给谁最划算；牵绊 Lv.15 以上给全队的 25% 照常计算，不受影响">
+            <input type="checkbox" v-model="resultSettings.ignoreMaxBond" @change="persistResultSettings" />
+            <span>把 Box 里全部从者视为「非满绊」</span>
+          </label>
         </div>
         <div v-if="settingsSection === 'all'" class="settings-group-title">结果显示设置（只影响显示）</div>
         <div v-if="settingsSection === 'all' || settingsSection === 'display'" class="settings-list">
