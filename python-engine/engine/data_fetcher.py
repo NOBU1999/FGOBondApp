@@ -20,8 +20,10 @@ import email.utils
 import gzip
 import json
 import os
+import re
 import sqlite3
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -42,6 +44,9 @@ from .stage_trait_map import get_override_traits
 # 下载超时（秒）
 HTTP_TIMEOUT = 120
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
+# 单段下载失败后的重试次数与退避基数（秒）：1.5s、3s、4.5s
+DOWNLOAD_RETRIES = 3
+DOWNLOAD_RETRY_WAIT = 1.5
 
 # 可进入玩家 Box 的从者 type（过滤敌方/NPC 等）
 PLAYABLE_SERVANT_TYPES = {"normal", "heroine"}
@@ -180,7 +185,28 @@ def download_to_cache(url: str, dest: Path, label: str) -> Path:
     with part.open("wb") as f:
         while True:
             end = start + range_size - 1
-            raw, total_raw = _download_range_raw(url, start, end)
+            # 单段重试：Atlas 偶尔会在中途把连接掐掉（SSL: UNEXPECTED_EOF_WHILE_READING），
+            # 以前整条下载直接失败、已下的几十 MB 白费（2026-10-22 实测在 84% 断过）。
+            # 分段重试只重来这一 2MiB，代价极小。
+            attempt = 0
+            while True:
+                try:
+                    raw, total_raw = _download_range_raw(url, start, end)
+                    break
+                except Exception as exc:  # noqa: BLE001 - 网络异常种类很多，统一按"可重试"处理
+                    # 4xx（除 429 限流）是"这个文件就没有"，重试也没用 → 立刻抛
+                    if isinstance(exc, urllib.error.HTTPError) and 400 <= exc.code < 500 and exc.code != 429:
+                        raise
+                    attempt += 1
+                    if attempt > DOWNLOAD_RETRIES:
+                        raise
+                    wait = DOWNLOAD_RETRY_WAIT * attempt
+                    print(
+                        f"[data_fetcher] {label}: 第 {downloaded / 1024 / 1024:.1f} MB 处断开"
+                        f"（{type(exc).__name__}），{wait:.1f}s 后重试 {attempt}/{DOWNLOAD_RETRIES}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(wait)
             if not raw:
                 break
             f.write(raw)
@@ -424,9 +450,16 @@ def resolve_costume_trait_sets(
 ) -> Dict[int, List[Tuple[str, Optional[int]]]]:
     """计算该从者所有灵衣（costume）状态的完整特性集合。
 
-    Atlas nice 数据中 `ascensionAdd.individuality.costume` 的值是完整特性列表，
+    Atlas nice 数据中 `ascensionAdd.individuality.costume` 的值是**该件灵衣的完整特性列表**，
     属于“灵衣状态”而不是普通再临阶段。灵衣作为再临阶段拿不到目标特性时的
     兜底状态，不参与再临阶段的优先级展示。
+
+    ⚠️ 2026-10-22 修：Atlas 用**空列表**表示“这件灵衣不改变特性”。
+    以前这里对空列表不做事（只留 global_add），结果那些灵衣在库里变成近乎零特性
+    （实测 9 件：伊吹童子 104630 / 弗栗多 304630 / 梅柳齐娜 304840 /
+    光之高扬斯卡娅 604230 / 玉藻猫 701630 / 玛修 800140·800150·800151·800170）。
+    与下面 `resolve_stage_trait_sets` 里“该阶段列表为空 ⇒ 回退公共特性”的做法保持一致：
+    空列表 ⇒ 以 servant.traits 公共特性为底。
     """
     ascension_add = (
         (servant.get("ascensionAdd") or {}).get("individuality") or {}
@@ -436,10 +469,14 @@ def resolve_costume_trait_sets(
         ((servant.get("ascensionAdd") or {}).get("attribute") or {})
         .get("costume") or {}
     )
+    base_traits = _trait_pairs(servant.get("traits") or [])
     global_add = _global_trait_add_pairs(servant)
     result: Dict[int, List[Tuple[str, Optional[int]]]] = {}
     for costume_id, raw in costume_map.items():
         traits = _trait_pairs(raw or [])
+        if not traits:
+            # Atlas 空列表 = 这件灵衣不改特性 ⇒ 就是本体特性
+            traits = list(base_traits)
         names = {name for name, _ in traits}
         for name, tid in global_add:
             if name not in names:
@@ -842,66 +879,123 @@ def build_database(
     return stats
 
 
+# 灵衣名来源：Atlas 官方 raw 单从者接口。
+# 为什么不从整包 nice_servant.json 里取：那份导出**不含**灵衣名
+# （`extra.costumeLimitSvtIdMap` 是空表），灵衣名只在单从者的 raw 接口里。
+# ⚠️ 曾经打过 Chaldea 的镜像 `api.atlas.chaldea.center`，该域名已 404，
+#    错误被 except 吞掉 ⇒ 灵衣名表长期是空的（2026-10-22 查实）。
+COSTUME_NAME_SOURCE = "https://api.atlasacademy.io/raw/{region}/servant/{id}"
+# 源名字常带前缀（"简易灵衣：…"、"簡易霊衣：…"、"眼镜灵衣：…"），界面自己会拼"灵衣："，所以先剥掉
+# ⚠️ 中日文两种写法都要认（JP 源里是「霊衣」，CN 源里是「灵衣」）
+_COSTUME_NAME_PREFIX = re.compile(r"^[^：:]{0,8}(?:灵衣|霊衣)[：:]")
+
+
+def _costume_name_pairs(
+    conn: sqlite3.Connection, only_missing: bool
+) -> List[Tuple[int, int]]:
+    """库里已出现灵衣的 (servant_id, costume_id) 对；only_missing 只留还没名字的。"""
+    sql = (
+        "SELECT DISTINCT t.servant_id, t.costume_id FROM servant_costume_traits t "
+        "LEFT JOIN servant_costumes c "
+        "ON c.servant_id = t.servant_id AND c.costume_id = t.costume_id"
+    )
+    if only_missing:
+        sql += " WHERE c.name IS NULL OR TRIM(c.name) = ''"
+    return [(int(r["servant_id"]), int(r["costume_id"])) for r in conn.execute(sql)]
+
+
+def _fetch_costume_names(sid: int, region: str) -> Tuple[Dict[int, str], int]:
+    """取单个从者的灵衣名：返回 (battleCharaId → 名字, 下载字节数)。名字为空的不收。"""
+    url = COSTUME_NAME_SOURCE.format(region=region, id=sid)
+    req = urllib.request.Request(url, headers={"User-Agent": "FGOBondApp local"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read()
+    data = json.loads(raw)
+    id_map = ((data.get("mstSvtExtra") or {}).get("costumeLimitSvtIdMap") or {})
+    names: Dict[int, str] = {}
+    for ent in id_map.values():
+        if not isinstance(ent, dict):
+            continue
+        cid = ent.get("battleCharaId")
+        name = (ent.get("name") or ent.get("shortName") or "").strip()
+        if not cid or not name:
+            continue
+        name = _COSTUME_NAME_PREFIX.sub("", name).strip()
+        if name:
+            names[int(cid)] = name
+    return names, len(raw)
+
+
 def refresh_costume_names(
     region: Optional[str] = None,
     db_path: Optional[Path | str] = None,
     progress: Optional[Any] = None,
+    only_missing: bool = True,
+    name_region: str = "CN",
 ) -> Dict[str, Any]:
-    """增量刷新灵衣中文名。
+    """增量刷新灵衣名（默认中文）。
 
-    数据源使用 Atlas Academy 的 CN raw 从者小接口（单从者一次请求），
-    只请求本地 DB 中已出现灵衣的从者，不下载整包 lore。
+    只请求"库里已有灵衣、但名字还空着"的从者，一人一个 raw 请求；
+    名字本身不随版本频繁变，所以常态下这个函数是 0 次请求（名字已随包）。
+
+    两趟：① 取 CN 导出（直接就是中文）；② CN 还没实装的那几件，用日文名 + 译名表兜。
+    ⚠️ 两趟都拿不到就留空，界面显示"灵衣 N"，绝不写日文原名进中文库。
     """
-    import time as _time
-
     region = _region_or_default(region)
+    name_region = (name_region or region).upper()
     conn = database.connect(db_path)
     database.init_db(conn)
-    pairs = conn.execute(
-        "SELECT DISTINCT servant_id, costume_id FROM servant_costume_traits ORDER BY servant_id, costume_id"
-    ).fetchall()
-    servant_ids = sorted({int(r["servant_id"]) for r in pairs})
-    wanted = {(int(r["servant_id"]), int(r["costume_id"])) for r in pairs}
+    pairs = _costume_name_pairs(conn, only_missing)
+    pending: Dict[int, List[int]] = {}
+    for sid, cid in pairs:
+        pending.setdefault(sid, []).append(cid)
+    servant_ids = sorted(pending)
 
-    updated = 0
+    filled = 0
     errors = 0
     total_bytes = 0
-    for idx, sid in enumerate(servant_ids, start=1):
-        if progress:
-            progress(f"正在更新灵衣名称 {idx}/{len(servant_ids)}...")
-        url = f"https://api.atlas.chaldea.center/raw/{region}/servant/{sid}"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Chaldea/2.5"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-            total_bytes += len(raw)
-            data = json.loads(raw)
-            extra = data.get("mstSvtExtra") or {}
-            id_map = extra.get("costumeLimitSvtIdMap") or {}
-            by_chara = {}
-            for ent in id_map.values():
-                if isinstance(ent, dict) and ent.get("battleCharaId"):
-                    by_chara[int(ent["battleCharaId"])] = ent
-            for costume_id in [cid for s, cid in wanted if s == sid]:
-                ent = by_chara.get(costume_id)
-                if ent:
-                    raw_name = (ent.get("shortName") or ent.get("name") or "").strip()
-                    # JP raw 返回日文名，套 Chaldea costume_names 转中文
-                    name = translate_jp_name(raw_name, "costume_names")
-                    database.upsert_costume_name(conn, sid, costume_id, name)
-                    if name:
-                        updated += 1
-        except Exception:
-            errors += 1
-        _time.sleep(0.1)
+    requests = 0
 
+    def _fill(reg: str, translate: bool, label: str) -> None:
+        nonlocal filled, errors, total_bytes, requests
+        todo_servants = [sid for sid in sorted(pending) if pending[sid]]
+        for idx, sid in enumerate(todo_servants, start=1):
+            if progress:
+                progress(f"正在{label}灵衣名称 {idx}/{len(todo_servants)}...")
+            requests += 1
+            try:
+                names, nbytes = _fetch_costume_names(sid, reg)
+                total_bytes += nbytes
+            except Exception:
+                errors += 1
+                continue
+            still: List[int] = []
+            for cid in pending[sid]:
+                name = names.get(cid, "")
+                if name and translate:
+                    cn = translate_jp_name(name, "costume_names")
+                    # 译名表里没有对应中文 → 不留日文原名，交给界面显示"灵衣 N"
+                    name = "" if cn == name else cn
+                if name:
+                    database.upsert_costume_name(conn, sid, cid, name)
+                    filled += 1
+                else:
+                    still.append(cid)
+            pending[sid] = still
+
+    _fill(name_region, False, "更新")
+    _fill("JP", True, "补入")
+
+    still_missing = sum(len(v) for v in pending.values())
     conn.commit()
     conn.close()
     return {
-        "costume_names": updated,
+        "costume_names": filled,
         "costume_name_servants": len(servant_ids),
         "costume_name_bytes": total_bytes,
         "costume_name_errors": errors,
+        "costume_name_requests": requests,
+        "costume_name_still_missing": still_missing,
     }
 
 

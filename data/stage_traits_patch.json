@@ -1,0 +1,161 @@
+{
+  "_comment": "灵基阶段/灵衣特性的人工补丁表（Atlas API 不直接提供或需要人工确认的差异）。由 engine/stage_trait_map.py 读取；按 Atlas 机器名保存，空列表表示该阶段没有额外差异。",
+  "traitAlias": {
+    "人科": "hominidaeServant",
+    "魔兽型": "demonicBeastServant",
+    "兽科": "havingAnimalsCharacteristics",
+    "圆桌骑士": "knightsOfTheRound",
+    "孩童": "childServant",
+    "秩序": "alignmentLawful",
+    "混沌": "alignmentChaotic",
+    "中立": "alignmentNeutral",
+    "善": "alignmentGood",
+    "中庸": "alignmentBalanced",
+    "恶": "alignmentEvil",
+    "夏": "alignmentSummer",
+    "活在当下的人类": "livingHuman",
+    "灵衣": "hasCostume"
+  },
+  "stageTraitOverrides": {
+    "105000": {
+      "initial": [
+        "knightsOfTheRound"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "204300": {
+      "initial": [
+        "knightsOfTheRound"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "304800": {
+      "initial": [
+        "knightsOfTheRound"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "500400": {
+      "initial": [],
+      "first": [],
+      "second": [
+        "childServant"
+      ],
+      "third": [
+        "childServant"
+      ],
+      "fourth": [
+        "childServant"
+      ]
+    },
+    "505300": {
+      "first": [
+        "alignmentLawful",
+        "alignmentGood"
+      ],
+      "second": [
+        "alignmentLawful",
+        "alignmentBalanced"
+      ],
+      "third": [
+        "alignmentLawful",
+        "alignmentSummer"
+      ],
+      "fourth": [
+        "alignmentLawful",
+        "alignmentSummer"
+      ]
+    },
+    "505500": {
+      "first": [
+        "alignmentChaotic",
+        "alignmentGood"
+      ],
+      "second": [
+        "alignmentChaotic",
+        "alignmentGood"
+      ],
+      "third": [
+        "alignmentChaotic",
+        "alignmentEvil"
+      ],
+      "fourth": [
+        "alignmentChaotic",
+        "alignmentEvil"
+      ]
+    },
+    "603700": {
+      "initial": [
+        "childServant"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "703700": {
+      "initial": [
+        "demonicBeastServant"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "1101100": {
+      "initial": [
+        "childServant"
+      ],
+      "first": [],
+      "second": [],
+      "third": [],
+      "fourth": []
+    },
+    "2300400": {
+      "initial": [
+        "hominidaeServant"
+      ],
+      "first": [
+        "hominidaeServant"
+      ],
+      "second": [
+        "hominidaeServant"
+      ],
+      "third": [
+        "demonicBeastServant",
+        "havingAnimalsCharacteristics"
+      ],
+      "fourth": [
+        "demonicBeastServant",
+        "havingAnimalsCharacteristics"
+      ]
+    },
+    "2300500": {
+      "first": [
+        "alignmentChaotic",
+        "alignmentGood"
+      ],
+      "second": [
+        "alignmentNeutral",
+        "alignmentGood"
+      ],
+      "third": [
+        "alignmentChaotic",
+        "alignmentGood"
+      ],
+      "fourth": [
+        "alignmentChaotic",
+        "alignmentGood"
+      ]
+    }
+  }
+}

@@ -1777,7 +1777,7 @@ const App = {
       const stage = String(member.stage || "fourth");
       if (stage.startsWith("costume_")) {
         const cid = stage.split("_")[1];
-        return this.costumeNames[String(cid)] ? `灵衣：${this.costumeNames[String(cid)]}` : stage;
+        return this.costumeNames[String(cid)] ? `灵衣：${this.costumeNames[String(cid)]}` : "灵衣";
       }
       return this.stageLabel(stage);
     },
@@ -3319,7 +3319,7 @@ const App = {
       }
       const sname = member.name || this.servantMap[member.servantId]?.name || "从者";
       const stageLabel = String(member.stage || "fourth").startsWith("costume_")
-        ? (this.costumeNames[String(member.stage.split("_")[1])] ? "灵衣：" + this.costumeNames[String(member.stage.split("_")[1])] : member.stage)
+        ? (this.costumeNames[String(member.stage.split("_")[1])] ? "灵衣：" + this.costumeNames[String(member.stage.split("_")[1])] : "灵衣")
         : this.stageLabel(member.stage || "fourth");
       this.resultInfo = {
         visible: true,

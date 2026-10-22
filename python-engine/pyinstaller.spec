@@ -33,6 +33,8 @@ except ImportError:
 
 # Chaldea 翻译表（JP 数据 -> CN 显示名）
 datas += [("engine/data/name_translations.json", "engine/data")]
+# 阶段特性补丁表：仓库根 data/ 是唯一权威源，打包时仍落到 engine/data 布局
+datas += [("../data/stage_traits_patch.json", "engine/data")]
 hiddenimports += ["engine.event_bonus", "engine.verification"]
 
 a = Analysis(

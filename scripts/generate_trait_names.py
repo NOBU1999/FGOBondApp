@@ -6,8 +6,8 @@
 - trait ID -> CN 中文：本地 Chaldea userdata/game/mappingData.*.json / mappingPatch.json
 
 输出：
-- renderer/data/trait_names.json（原始映射）
-- renderer/data/trait_names.js（供前端直接加载）
+- data/trait_names.json（原始映射，仓库根 data/ 统一存放）
+- renderer/data/trait_names.js（供前端直接加载的生成副本）
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Dict
 
 ROOT = Path(__file__).resolve().parents[1]
 NICE_TRAIT_URL = "https://api.atlasacademy.io/export/CN/nice_trait.json"
-OUT_JSON = ROOT / "renderer" / "data" / "trait_names.json"
+OUT_JSON = ROOT / "data" / "trait_names.json"
 OUT_JS = ROOT / "renderer" / "data" / "trait_names.js"
 
 
