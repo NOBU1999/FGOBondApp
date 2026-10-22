@@ -267,6 +267,9 @@ const App = {
       diagLogLoaded: false,
       diagLogNote: "",
       servants: [],
+      // 同分替补重算个体数值用：从者 id -> { 形态键: [特性...] }（懒加载 + 缓存）
+      servantForms: {},
+      servantFormsLoading: {},
       bondCrafts: [],
       otherCrafts: [],
       allCrafts: [],
@@ -408,6 +411,8 @@ const App = {
       expandedResult: null,
       // 同分可替换阵容：rank → 选中的条目下标（0 = 引擎给的那一支）
       sameScoreChoice: {},
+      // 同分下拉里"展开全部"的状态：rank → true（默认只列前 20 支）
+      sameScoreExpanded: {},
       // 当前展开了"同分"下拉的方案序号
       expandedSameScore: null,
       simpleExcludedServants: [],
@@ -843,6 +848,174 @@ const App = {
       const secondText = secondCost ? ` + 第二礼装 ${secondCost}` : (member.secondCraftId ? " + 第二礼装 0" : "");
       return `从者 ${servantCost} + 主礼装 ${mainCost}${secondText} = ${total}`;
     },
+    /**
+     * 这一行「当前显示」的队伍用掉的 Cost。
+     *
+     * 2026-10-21 修（评论区反馈）：行头 / 详情 / 对比表原来一律写 `r.costUsed`，那是**引擎给的那一支**
+     * 的 Cost；在同分下拉里换了一支（从者不同 ⇒ 从者 Cost 不同）后，屏幕上人员变了、Cost 却纹丝不动。
+     * 实测（`.temp/probe-samescore-cost.py`，11 行的样本里有 4 行）：同一行的同分替补 Cost 会差 3~5
+     * （例：#2 的 96 支落在 106 / 107 / 110，#5 的 64 支落在 105 / 110）。
+     *
+     * 口径必须与引擎 `calculator.py::team_cost` 完全一致：
+     *   只算玩家位（**助战不计 Cost**），每位 = 从者 Cost + 主礼装 Cost，
+     *   冠位第二礼装位按 0 计。
+     * 没换队（`displayedResultTeam` 原样返回同一数组）时**直接返回引擎的值**，
+     * 免得客户端兜底表与引擎在边角上算出不同数字。
+     */
+    resultCostUsed(result) {
+      const raw = (result && result.team) || [];
+      const team = this.displayedResultTeam(result);
+      if (!Array.isArray(team) || !team.length || team === raw) {
+        return Number((result && result.costUsed) || 0);
+      }
+      let total = 0;
+      for (const m of team) {
+        if (!m || m.isSupport) continue;
+        const servant = this.servantMap[m.servantId];
+        total += servant ? Number(servant.cost || 0) : 0;
+        total += this.craftCostById(m.craftId);
+      }
+      return total;
+    },
+    // ---------------- 同分替补的个体数值重算（2026-10-22）----------------
+    // 引擎只对**本行原来那一支**算过每人的加成明细/个人倍率/牵绊；同分替补只带 id。
+    // 所以这里按引擎同一条公式重算（纯函数在 renderer/bond-math.js）：
+    //   · 每人取**自己的最优形态**（在本队这套礼装下特性收益最大；平手优先本体、取更高阶段；
+    //     本体达不到才用灵衣）——这正是同分判定所用的口径，所以换上来的人分数必然相同；
+    //   · 队伍级的三项（通用/助战/活动）直接取本行引擎值 —— 同分替补礼装多重集相同，这三项不变；
+    //   · 满绊人数按界面同一套标记重算（含「视为非满绊」开关）。
+    /** 取/加载某从者的形态特性（每形态一组特性；库外不变） */
+    async ensureServantForms(ids) {
+      const region = (this.info && this.info.serverRegion) || "jp";
+      const list = Array.from(new Set((ids || []).map(Number).filter((sid) => sid > 0)));
+      const todo = list.filter((sid) => !(this.servantForms || {})[sid] && !(this.servantFormsLoading || {})[sid]);
+      if (!todo.length) return;
+      const loading = { ...(this.servantFormsLoading || {}) };
+      todo.forEach((sid) => (loading[sid] = true));
+      this.servantFormsLoading = loading; // 同步占位，避免连续渲染重复请求
+      try {
+        for (const sid of todo) {
+          const forms = {};
+          const asc = (await window.fgo.getAllStageTraits(sid, region)) || {};
+          Object.keys(asc).forEach((k) => {
+            forms[k] = asc[k];
+          });
+          const costumes = ((this.servantMap[sid] || {}).costumes || []).map(Number);
+          for (const cid of costumes) {
+            const key = `costume_${cid}`;
+            const traits = (await window.fgo.getStageTraits(sid, key, region)) || [];
+            // 库里这件灵衣是空集 ⇒ Atlas 表示"不改特性" ⇒ 用本体（与采集代码修好后的口径一致）
+            forms[key] = traits.length ? traits : asc.fourth || asc.third || [];
+          }
+          this.servantForms = { ...(this.servantForms || {}), [sid]: forms };
+        }
+      } catch (err) {
+        try {
+          // 渲染层没有独立的诊断接口：console 会被主进程捕获进诊断日志（见 main/ipc-handlers.js）
+          console.warn(`同分替补形态数据取失败：${(err && err.message) || err}`);
+        } catch (_) {
+          /* 日志本身不能抛 */
+        }
+      } finally {
+        const rest = { ...(this.servantFormsLoading || {}) };
+        todo.forEach((sid) => delete rest[sid]);
+        this.servantFormsLoading = rest;
+      }
+    },
+    /** 本队"有效礼装"（与引擎 `_effect_crafts` 同口径）：玩家位 + 可计入的助战礼装 */
+    teamEffectCrafts(alt) {
+      const crafts = [];
+      const push = (cid) => {
+        const c = this.craftById(cid);
+        if (c) crafts.push(c);
+      };
+      ((alt && alt.craftIds) || []).forEach(push);
+      ((alt && alt.secondCraftIds) || []).forEach(push);
+      [alt && alt.supportCraftId, alt && alt.supportSecondCraftId].forEach((cid) => {
+        const c = this.craftById(cid);
+        // 只有"不带独立助战加成"的牵绊礼装才并入普通加成（引擎同口径）
+        const n = c && typeof BondMath !== "undefined" ? BondMath.normCraft(c) : null;
+        if (n && n.isBond && n.supportBonus <= 0) crafts.push(c);
+      });
+      return crafts;
+    },
+    /** 队伍级上下文：同分替补共用（通用/助战两项按这一支自己的礼装算，活动加成沿用本行） */
+    teamBonusContext(result, alt, displayedTeam) {
+      const firstPlayer = (displayedTeam || []).find((m) => !m.isSupport) || {};
+      const d = firstPlayer.bonusDetail || {};
+      const effectCrafts = this.teamEffectCrafts(alt);
+      const act = (cid, field) => {
+        const c = this.craftById(cid);
+        if (!c || typeof BondMath === "undefined") return 0;
+        return field === "support" ? BondMath.supportCraftBonus(c) : 0;
+      };
+      const support = act(alt && alt.supportCraftId, "support") + act(alt && alt.supportSecondCraftId, "support");
+      const universal = typeof BondMath === "undefined" ? 0 : BondMath.universalBonus(effectCrafts);
+      let maxBondCount = 0;
+      (displayedTeam || []).forEach((m) => {
+        if (!m || m.isSupport) return;
+        const f = this.bondFlagsFor((this.box && this.box[m.servantId]) || {});
+        if (f.maxBond && f.switch1) maxBondCount += 1;
+      });
+      return {
+        effectCrafts,
+        traitCrafts: effectCrafts.filter((c) => (c.bonusType || c.bonus_type) === "trait"),
+        universal,
+        support,
+        activity: Number(d.activityBonus || 0),
+        maxBondCount,
+        baseBond: Number((result && result.baseBond) || 0),
+      };
+    },
+    /**
+     * 重算一位"被换上来"的成员。返回 `{ detail, stage }`；形态数据还没取到就返回 null
+     * （调用方保留引擎原值，等 `ensureServantForms` 回来后自动补上）。
+     */
+    recomputeMemberBonus(member, ctxInfo) {
+      if (typeof BondMath === "undefined" || !member || member.isSupport) return null;
+      const sid = Number(member.servantId);
+      const forms = (this.servantForms || {})[sid];
+      if (!forms || !Object.keys(forms).length) return null;
+      const form = BondMath.bestForm(forms, ctxInfo.traitCrafts) || member.stage || "fourth";
+      const traits = new Set(forms[form] || []);
+      const trait = BondMath.traitBonus(traits, ctxInfo.traitCrafts);
+      const flat = BondMath.flatBonus(traits, ctxInfo.effectCrafts);
+      const b = (this.box && this.box[sid]) || {};
+      const flags = this.bondFlagsFor(b);
+      const frontline = BondMath.frontlineBonus(member.position);
+      const maxBondBonus = 0.25 * Number(ctxInfo.maxBondCount || 0);
+      const aura = Number(b.auraBonus || 0);
+      const personal = Number(b.personalBonus || 0);
+      let multiplier = BondMath.memberMultiplier({
+        frontline,
+        universal: ctxInfo.universal,
+        support: ctxInfo.support,
+        trait,
+        maxBond: maxBondBonus,
+        activity: ctxInfo.activity,
+        aura,
+        personal,
+      });
+      // 满绊但没开「自身参与收益」⇒ 该位倍率记 0（引擎原样）
+      if (flags.maxBond && !flags.switch2) multiplier = 0;
+      return {
+        stage: form,
+        detail: {
+          frontlineBonus: frontline,
+          universalCraftBonus: ctxInfo.universal,
+          supportCraftBonus: ctxInfo.support,
+          traitCraftBonus: trait,
+          flatCraftBonus: flat,
+          maxBondBonus,
+          activityBonus: ctxInfo.activity,
+          auraBonus: aura,
+          personalBonus: personal,
+          totalMultiplier: multiplier,
+          bondPoints: BondMath.bondPoints(multiplier, ctxInfo.baseBond, flat),
+          recomputed: true,
+        },
+      };
+    },
     qualityModeText(mode) {
       const map = { fast: "快速", standard: "标准", balanced: "平衡", high: "高质量", extreme: "极限精算" };
       return map[mode] || mode || "";
@@ -915,41 +1088,102 @@ const App = {
       const rawIdx = alt ? this.sameScoreList(result).indexOf(alt) : 0;
       this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: rawIdx >= 0 ? rawIdx : 0 };
     },
-    // 下拉里一条"同分阵容"的第 index 位成员：从者 + 礼装都取自**这一条自己**（合并同分行后，
-    // 不同条的礼装可能不一样）；缺字段（旧引擎）时退回本行的值。
-    sameScoreMember(result, index, alt) {
+    /**
+     * 一条同分阵容**可直接渲染**的清单：`[{ position, servantId, craftId, secondCraftId, changed }]`。
+     *
+     * 数据来源有两种（引擎新结构 / 0.2.4 及更早的平行数组），这里统一成"位置 → 配置"的映射，
+     * 再按**显示口径**落位：
+     *   · 本行留下的人坐回自己的位子，空出来的位子才给换上来的人
+     *     （同侧内部次序不影响分数 —— 同分去重键本来就是"前排是谁、后排是谁"的集合）；
+     *   · 顺序＝先前排后后排，各段"换掉的在前、没换的在后"。
+     *
+     * 为什么界面还要再排一次：`changed` 当初是**相对某一行的 head** 算出来的，而合并同分行时
+     * 别的行的替补会被并进来（新引擎已按 head 重算，见 search.py::_rebase_alt）；
+     * 更早存下的结果里带的是旧口径 —— 这里按映射重算一遍就自动纠正，不必让用户重算。
+     * 重算只依赖映射本身，不需要"猜谁换了"。
+     */
+    altSlots(result, alt) {
       const players = ((result && result.team) || []).filter((m) => !m.isSupport);
-      const base = players[index];
-      if (!base) return null;
       const ids = (alt && alt.servantIds) || [];
-      const mains = (alt && alt.craftIds) || [];
+      const positions = alt && alt.positions;
+      const crafts = (alt && alt.craftIds) || [];
       const seconds = (alt && alt.secondCraftIds) || [];
-      const sid = ids[index] !== undefined ? ids[index] : base.servantId;
-      const craftId = mains[index] !== undefined ? mains[index] : base.craftId;
-      const secondCraftId = seconds[index] !== undefined ? seconds[index] : base.secondCraftId;
-      const craft = this.craftById(craftId);
-      const secondCraft = this.craftById(secondCraftId);
+      // ① 位置 → 这一支的配置
+      const map = {};
+      if (Array.isArray(positions) && positions.length === ids.length && ids.length) {
+        positions.forEach((pos, i) => {
+          map[String(pos)] = {
+            servantId: Number(ids[i]),
+            craftId: crafts[i],
+            secondCraftId: seconds[i],
+          };
+        });
+      } else {
+        // 旧结构：平行数组就是按本行位置次序给的
+        players.forEach((m, i) => {
+          map[String(m.position)] = {
+            servantId: ids[i] !== undefined ? Number(ids[i]) : Number(m.servantId),
+            craftId: crafts[i] !== undefined ? crafts[i] : m.craftId,
+            secondCraftId: seconds[i] !== undefined ? seconds[i] : m.secondCraftId,
+          };
+        });
+      }
+      // ② 每侧落位：存活者复位、新人填空位
+      const seatSide = (side) => {
+        const avail = side.map((m) => map[String(m.position)]).filter(Boolean).slice();
+        const seated = {};
+        const empty = [];
+        side.forEach((m) => {
+          const want = Number(m.servantId);
+          const hit = avail.findIndex((s) => s.servantId === want);
+          if (hit >= 0) {
+            seated[m.position] = { ...avail.splice(hit, 1)[0], changed: false };
+          } else {
+            empty.push(m.position);
+          }
+        });
+        empty.forEach((pos) => {
+          const s = avail.shift();
+          if (s) seated[pos] = { ...s, changed: true };
+        });
+        return side
+          .filter((m) => seated[m.position])
+          .map((m) => ({ position: String(m.position), ...seated[m.position] }));
+      };
+      const isFront = (p) => String(p || "").startsWith("front");
+      const front = seatSide(players.filter((m) => isFront(m.position)));
+      const back = seatSide(players.filter((m) => !isFront(m.position)));
+      const ordered = (list) => list.filter((s) => s.changed).concat(list.filter((s) => !s.changed));
+      return ordered(front).concat(ordered(back));
+    },
+    // 下拉里一条成员：从者 + 礼装都取自**这一条自己**（合并同分行后，不同条的礼装可能不一样）
+    sameScoreMember(result, slot) {
+      if (!slot) return null;
+      const base = ((result && result.team) || [])
+        .filter((m) => !m.isSupport)
+        .find((m) => String(m.position) === String(slot.position)) || {};
+      const craft = this.craftById(slot.craftId);
+      const secondCraft = this.craftById(slot.secondCraftId);
       return {
-        position: base.position,
-        posLabel: this.positionLabel(base.position),
-        servantId: sid,
-        name: this.resultMemberName({ ...base, servantId: sid }),
-        craftId,
-        secondCraftId,
+        position: slot.position,
+        posLabel: this.positionLabel(slot.position),
+        servantId: slot.servantId,
+        // 这一位跟本行相比是不是换了人（界面用它把换掉的头像描个橙边，一眼看到差异）
+        changed: !!slot.changed,
+        name: this.resultMemberName({ ...base, servantId: slot.servantId }),
+        craftId: slot.craftId,
+        secondCraftId: slot.secondCraftId,
         craftName: (craft && craft.name) || "",
         secondCraftName: (secondCraft && secondCraft.name) || "",
       };
     },
-    // 下拉里每一支按"前排 / 后排"分组（界面用头像展示，名字与礼装放悬浮提示）
+    // 下拉里每一支按"前排 / 后排"分组（界面用头像展示，名字与礼装放悬浮提示）。
+    // 顺序直接用 `altSlots` 给的（引擎已排好：各段换掉的在前），不再在这里排序。
     sameScoreRows(result, alt) {
-      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
-      const front = [];
-      const back = [];
-      players.forEach((m, i) => {
-        const entry = this.sameScoreMember(result, i, alt);
-        if (!entry) return;
-        (String(m.position || "").startsWith("front") ? front : back).push(entry);
-      });
+      const slots = this.altSlots(result, alt);
+      const isFront = (p) => String(p || "").startsWith("front");
+      const front = slots.filter((s) => isFront(s.position)).map((s) => this.sameScoreMember(result, s));
+      const back = slots.filter((s) => !isFront(s.position)).map((s) => this.sameScoreMember(result, s));
       const rows = [];
       if (front.length) rows.push({ label: "前排", members: front });
       if (back.length) rows.push({ label: "后排", members: back });
@@ -957,16 +1191,15 @@ const App = {
     },
     // 把某一支同分阵容渲染成"前排：… ｜ 后排：…"（文字版，反馈摘要用；带各自礼装）
     sameScoreTeamText(result, alt) {
-      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
-      const front = [];
-      const back = [];
-      players.forEach((m, i) => {
-        const e = this.sameScoreMember(result, i, alt);
-        if (!e) return;
+      const slots = this.altSlots(result, alt);
+      const isFront = (p) => String(p || "").startsWith("front");
+      const text = (s) => {
+        const e = this.sameScoreMember(result, s);
         const crafts = [e.craftName, e.secondCraftName].filter(Boolean).join(" + ");
-        const text = crafts ? `${e.name}（${crafts}）` : e.name;
-        (String(m.position || "").startsWith("front") ? front : back).push(text);
-      });
+        return crafts ? `${e.name}（${crafts}）` : e.name;
+      };
+      const front = slots.filter((s) => isFront(s.position)).map(text);
+      const back = slots.filter((s) => !isFront(s.position)).map(text);
       const parts = [];
       if (front.length) parts.push(`前排：${front.join("、")}`);
       if (back.length) parts.push(`后排：${back.join("、")}`);
@@ -976,6 +1209,162 @@ const App = {
       if (sName) parts.push(`助战礼装：${sName}`);
       return parts.join(" ｜ ");
     },
+    // ---------------- 同分下拉的排序与分节（2026-10-22 用户定口径）----------------
+    // 为什么要排：引擎给的顺序是 `itertools.product` 的（最后一位变化最快，
+    // 96 支里"只换 1 个人"的只有 8 支，会被整片埋掉）。
+    // 排序键（从优先到次要）：
+    //   ① 与本行差几个人（升序）—— 本行恒为 0，所以天然排第一；
+    //   ② 只动后排 > 只动前排 > 前后都动 —— 玩家最愿意动的是替补席，
+    //      前排有 +20% 先发加成、动了等于换主力；
+    //   ③ **换掉的是谁**（升序，见下）—— 段内先按"被替换者"成组，
+    //      读起来就是「把 A 换成 B/C/D」，而不是"换的人一直在跳"；
+    //   ④ 换**进来**的从者图鉴号（升序）—— 组内保持稳定；
+    //   ⑤ 原列表下标（兜底，保证同一份结果每次打开顺序完全一样）。
+    // 不参与排序的：Cost（同分队伍的 Cost 差异没有"更好"的语义，只是硬约束）、
+    // 稀有度/职阶（与"只算牵绊"这个目标无关）。
+    // 口径：改动数用**前排集合 Δ + 后排集合 Δ**，不用位置序号 ——
+    // 同分组的去重键本来就是"前排是谁、后排是谁"，按位置算会把"前排内部换位"误记成改动。
+    sameScoreDelta(result, alt) {
+      const head = ((result && result.team) || []).filter((m) => !m.isSupport);
+      const slots = this.altSlots(result, alt);
+      const isFront = (p) => String(p || "").startsWith("front");
+      const idsOf = (list, front) => new Set(
+        list.filter((x) => (front === null ? true : isFront(x.position) === front)).map((x) => Number(x.servantId)),
+      );
+      const hFront = idsOf(head, true);
+      const hBack = idsOf(head, false);
+      const aFront = idsOf(slots, true);
+      const aBack = idsOf(slots, false);
+      const outFront = [...hFront].filter((sid) => !aFront.has(sid));
+      const outBack = [...hBack].filter((sid) => !aBack.has(sid));
+      const changed = outFront.length + outBack.length;
+      // 0 = 只动后排｜1 = 只动前排｜2 = 前后都动（changed 为 0 时按 0 排，反正它排最前）
+      const side = outFront.length === 0 ? 0 : (outBack.length === 0 ? 1 : 2);
+      const dexOf = (sid) => Number((this.servantMap[sid] || {}).collectionNo || 999999);
+      // ③ 被换掉的人（图鉴号升序）—— "差 1 人"时就是"把这个人换成谁"的那一组
+      const goneIds = [...outFront, ...outBack].sort((a, b) => dexOf(a) - dexOf(b));
+      const gone = goneIds.map(dexOf);
+      const incoming = [...aFront, ...aBack].filter((sid) => !hFront.has(sid) && !hBack.has(sid));
+      const inIds = incoming.slice().sort((a, b) => dexOf(a) - dexOf(b));
+      const dex = inIds.map(dexOf);
+      return { changed, side, gone, goneIds, dex };
+    },
+    /** 排好序的同分替补：`[{ alt, index, delta }]`，index 是**过滤后列表**的下标 */
+    sameScoreSorted(result) {
+      const list = this.sameScoreListFiltered(result);
+      const rows = list.map((alt, index) => ({ alt, index, delta: this.sameScoreDelta(result, alt) }));
+      rows.sort((a, b) => {
+        if (a.delta.changed !== b.delta.changed) return a.delta.changed - b.delta.changed;
+        if (a.delta.side !== b.delta.side) return a.delta.side - b.delta.side;
+        // ③ 换掉的是谁 → ④ 换进来的是谁 → ⑤ 原下标（三段都是"逐位比数组"）
+        for (const key of ["gone", "dex"]) {
+          const da = a.delta[key] || [];
+          const db = b.delta[key] || [];
+          for (let i = 0; i < Math.max(da.length, db.length); i += 1) {
+            const x = i < da.length ? da[i] : -1;
+            const y = i < db.length ? db[i] : -1;
+            if (x !== y) return x - y;
+          }
+        }
+        return a.index - b.index;
+      });
+      return rows;
+    },
+    sameScoreSectionLabel(changed, side, total) {
+      const who = changed === 0
+        ? "本行原阵容"
+        : `差 ${changed} 人 · ${side === 0 ? "只动后排" : (side === 1 ? "只动前排" : "前后都动")}`;
+      return `${who} · ${total} 支`;
+    },
+    /** 折叠阈值：超过这么多支就先只显示前 20 支（一屏之内） */
+    sameScoreCollapseLimit() {
+      return 20;
+    },
+    /**
+     * 模板用的分节结果：`[{ key, label, items: [{ alt, index, delta }] }]`。
+     * 默认折叠到 20 支；展开状态按 rank 记（`sameScoreExpanded`）。
+     */
+    sameScoreSections(result) {
+      const rank = Number(result && result.rank);
+      const expanded = !!(this.sameScoreExpanded || {})[rank];
+      const budget0 = expanded ? Infinity : this.sameScoreCollapseLimit();
+      const grouped = [];
+      this.sameScoreSorted(result).forEach((row) => {
+        const key = `${row.delta.changed}:${row.delta.side}`;
+        const last = grouped[grouped.length - 1];
+        if (last && last.key === key) last.items.push(row);
+        else grouped.push({ key, changed: row.delta.changed, side: row.delta.side, items: [row] });
+      });
+      const out = [];
+      let budget = budget0;
+      for (const sec of grouped) {
+        if (budget <= 0) break;
+        const items = sec.items.slice(0, budget);
+        budget -= items.length;
+        // 组内标记："换掉的是谁"变了就插一条小标题（只在真的会换人时）
+        let lastGone = null;
+        items.forEach((it) => {
+          if (it.delta.changed > 0) {
+            const gk = (it.delta.gone || []).join(",");
+            if (gk !== lastGone) {
+              const names = (it.delta.goneIds || []).map((sid) => {
+                const s = this.servantMap[sid];
+                return (s && s.name) || `#${sid}`;
+              });
+              it.subLabel = `换掉 ${names.join("、") || "—"}`;
+              lastGone = gk;
+            }
+          }
+        });
+        out.push({
+          key: sec.key,
+          label: this.sameScoreSectionLabel(sec.changed, sec.side, sec.items.length),
+          items,
+          total: sec.items.length,
+        });
+      }
+      return out;
+    },
+    /** 被折叠起来的支数（0 = 已经全列出来了） */
+    sameScoreCollapsedCount(result) {
+      const shown = this.sameScoreSections(result).reduce((n, sec) => n + sec.items.length, 0);
+      return Math.max(0, this.sameScoreCount(result) - shown);
+    },
+    sameScoreExpandable(result) {
+      return this.sameScoreCount(result) > this.sameScoreCollapseLimit();
+    },
+    toggleSameScoreExpand(result) {
+      const rank = Number(result && result.rank);
+      if (!rank) return;
+      const cur = !!(this.sameScoreExpanded || {})[rank];
+      this.sameScoreExpanded = { ...(this.sameScoreExpanded || {}), [rank]: !cur };
+    },
+    /**
+     * 把一行里的某个成员换成「这一支」的从者 / 礼装，并把**按 id 显示的字面量**一起刷新。
+     *
+     * ⚠️ 引擎在成员里直接带了 name / craftName / secondCraftName（都是**本行原来那一支**的），
+     * 换队时只改 id 不改这几个字段 ⇒ 详情表里会"换成新人却还写着旧名字"、
+     * 礼装格"新礼装的图 + 旧礼装的名字"（2026-10-21 修 Cost 时一并查出）。
+     * 名字这类**纯展示**字段客户端能自己查库补，所以这里按 id 重取；
+     * 而 bonusDetail / traitHits 这类**算出来的**字段客户端算不出来，只能保持原样
+     * （同分替补由恒等式展开、数值本与本题相同，见 python-engine/engine/search.py 那段注释）。
+     */
+    displayedMemberWithSlot(m, servantId, craftId, secondCraftId) {
+      const next = { ...m, servantId, craftId, secondCraftId };
+      const s = this.servantMap[servantId];
+      if (s && s.name) next.name = s.name;
+      if (craftId !== m.craftId) {
+        const c = this.craftById(craftId);
+        next.craftName = c ? (c.name || "") : "";
+        if (c && c.craftType) next.craftType = c.craftType;
+      }
+      if (secondCraftId !== m.secondCraftId) {
+        const c2 = this.craftById(secondCraftId);
+        next.secondCraftName = c2 ? (c2.name || "") : "";
+        if (c2 && c2.craftType) next.secondCraftType = c2.craftType;
+      }
+      return next;
+    },
     // 这一行"当前显示"的队伍：若在同分下拉里选了某一支，就把**整支配置**换掉
     // （从者 + 每个位置的礼装 + 助战礼装；位置本身由方案决定，不变）
     displayedResultTeam(result) {
@@ -984,31 +1373,51 @@ const App = {
       const list = this.sameScoreListFiltered(result);
       if (!list.length) return team;
       const alt = list[this.sameScoreChoiceIndex(result)] || {};
-      const ids = (alt.servantIds || []).map(Number);
-      const mains = alt.craftIds || [];
-      const seconds = alt.secondCraftIds || [];
+      const slots = this.altSlots(result, alt);
       const players = team.filter((m) => !m.isSupport);
-      if (!ids.length || players.length !== ids.length) return team;
-      // 选中的这支和本行原本那支是同一套从者 ⇒ 原样返回（别把礼装也换掉）
-      if (players.every((m, i) => Number(m.servantId) === ids[i])) return team;
-      let cursor = 0;
-      return team.map((m) => {
-        if (m.isSupport) {
-          return {
-            ...m,
-            craftId: alt.supportCraftId !== undefined ? alt.supportCraftId : m.craftId,
-            secondCraftId: alt.supportSecondCraftId !== undefined ? alt.supportSecondCraftId : m.secondCraftId,
-          };
-        }
-        const i = cursor;
-        cursor += 1;
-        return {
-          ...m,
-          servantId: ids[i] !== undefined ? ids[i] : m.servantId,
-          craftId: mains[i] !== undefined ? mains[i] : m.craftId,
-          secondCraftId: seconds[i] !== undefined ? seconds[i] : m.secondCraftId,
-        };
+      if (!slots.length || players.length !== slots.length) return team;
+      // 选中的这支和本行原本那支是同一套从者（顺序可能不同）⇒ 原样返回（别把礼装也换掉）
+      const altIds = slots.map((s) => Number(s.servantId));
+      if (players.every((m) => altIds.indexOf(Number(m.servantId)) >= 0)) return team;
+      // 按**位置**取这一支的配置（引擎已经把 positions 给出来了，不再靠下标猜）
+      const byPos = {};
+      slots.forEach((s) => {
+        byPos[String(s.position)] = s;
       });
+      const swapped = team.map((m) => {
+        if (m.isSupport) {
+          return this.displayedMemberWithSlot(
+            m,
+            m.servantId,
+            alt.supportCraftId !== undefined ? alt.supportCraftId : m.craftId,
+            alt.supportSecondCraftId !== undefined ? alt.supportSecondCraftId : m.secondCraftId,
+          );
+        }
+        const slot = byPos[String(m.position)] || {};
+        return this.displayedMemberWithSlot(
+          m,
+          slot.servantId !== undefined ? slot.servantId : m.servantId,
+          slot.craftId !== undefined ? slot.craftId : m.craftId,
+          slot.secondCraftId !== undefined ? slot.secondCraftId : m.secondCraftId,
+        );
+      });
+
+      // 被换上来的人：引擎没给过他们的个体数值 ⇒ 按"自己的最优形态"重算一遍
+      // （公式与判据见 renderer/bond-math.js；队伍级的三项沿用本行引擎值）
+      const ctxInfo = this.teamBonusContext(result, alt, swapped);
+      const need = [];
+      const out = swapped.map((m) => {
+        if (m.isSupport) return m;
+        const slot = byPos[String(m.position)] || {};
+        if (!slot.changed) return m;
+        need.push(Number(m.servantId));
+        const bonus = this.recomputeMemberBonus(m, ctxInfo);
+        if (!bonus) return m;
+        return { ...m, stage: bonus.stage, bonusDetail: { ...(m.bonusDetail || {}), ...bonus.detail } };
+      });
+      // 形态数据还没取到 ⇒ 后台取回来（取到后界面自动重算，不是每帧都请求）
+      if (need.some((sid) => !(this.servantForms || {})[sid])) this.ensureServantForms(need);
+      return out;
     },
     sameScoreActive(result) {
       return this.sameScoreListFiltered(result).length > 1 && this.sameScoreChoiceIndex(result) > 0;
@@ -2273,7 +2682,8 @@ const App = {
         switch1 = !!(b && b.switch1);
         switch2 = !!(b && b.switch2);
       }
-      if (this.resultSettings.ignoreMaxBond) switch2 = true;
+      // 防御：这个方法也会被"同分替补重算"这类轻量路径调用，resultSettings 不一定挂得上
+      if (this.resultSettings && this.resultSettings.ignoreMaxBond) switch2 = true;
       return { maxBond, switch1, switch2 };
     },
     /** 把按等级推导出来的标记写回 Box（让界面上的"绊"角标、筛选、发送内容三者一致）。 */
@@ -3199,6 +3609,7 @@ const App = {
       this.expandedResult = null;
       this.expandedSameScore = null;
       this.sameScoreChoice = {};
+      this.sameScoreExpanded = {};
       this.compareSelectedRanks = [];
       this.compareVisible = false;
       this.currentPage = 1;
@@ -4009,7 +4420,8 @@ const App = {
     },
     exportJson(result) {
       // 导出"这一行当前显示"的阵容（若在同分下拉里选过某一支，就导出那一支）
-      const payload = { ...result, team: this.displayedResultTeam(result) };
+      // ⇒ Cost 也得跟着是这一支的，否则导出 JSON 里的 costUsed 与 team 自相矛盾
+      const payload = { ...result, team: this.displayedResultTeam(result), costUsed: this.resultCostUsed(result) };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -4613,7 +5025,7 @@ const App = {
           <div class="head">
             <strong>方案 #{{ r.rank }} ⭐ {{ r.totalMultiplier.toFixed(3) }}x</strong>
             <span v-if="showsBondPoints(r)" class="text-muted"><template v-if="r.baseBond">基础 {{ formatBondNumber(r.baseBond) }} → </template>预计总牵绊 {{ formatBondNumber(r.totalBondPoints) }}</span>
-            <span class="text-muted">Cost {{ r.costUsed }}/{{ costLimit }}</span>
+            <span class="text-muted" :title="sameScoreActive(r) ? '这一支的 Cost（同分替补的从者不同，Cost 会跟着变）' : ''">Cost {{ resultCostUsed(r) }}/{{ costLimit }}</span>
             <label class="compare-toggle" title="勾选后可多选方案用于“复制反馈摘要”或方案对比">
               <input type="checkbox" :checked="compareSelectedRanks.includes(r.rank)" @change="toggleCompareResult(r)" />
               选择
@@ -4636,34 +5048,49 @@ const App = {
               {{ sameScoreCount(r) }} 支分数完全相同（{{ Number(r.totalMultiplier).toFixed(3) }}x），点一支让它在本行显示<template
                 v-if="sameScoreHiddenCount(r) > 0">；{{ sameScoreHiddenCount(r) }} 支含已排除从者已隐藏</template>
             </div>
-            <div
-              v-for="(alt, i) in sameScoreListFiltered(r)"
-              :key="i"
-              class="same-score-item"
-              :class="{ active: sameScoreChoiceIndex(r) === i }"
-              @click="chooseSameScore(r, i)"
-            >
-              <span class="same-score-badge">{{ sameScoreChoiceIndex(r) === i ? '显示中' : '选它' }}</span>
-              <span class="same-score-score">{{ Number(r.totalMultiplier).toFixed(3) }}x</span>
-              <span class="same-score-team">
-                <span v-for="grp in sameScoreRows(r, alt)" :key="grp.label" class="same-score-rowgroup">
-                  <span class="same-score-rowlabel text-muted">{{ grp.label }}</span>
-                  <span
-                    v-for="m in grp.members"
-                    :key="m.position"
-                    class="same-score-avatar"
-                    :title="m.name + '（' + m.posLabel + '）' + (m.craftName ? '｜主礼装：' + m.craftName : '') + (m.secondCraftName ? '｜第二礼装位：' + m.secondCraftName : '')"
-                  >
-                    <img
-                      v-if="!avatarMissingSet.has(String(m.servantId))"
-                      :src="avatarPath(m.servantId)"
-                      alt=""
-                      @error="markAvatarBroken(m.servantId)"
-                    />
-                    <span v-else class="same-score-avatar-fallback">{{ (m.name || '?').charAt(0) }}</span>
+            <div v-for="sec in sameScoreSections(r)" :key="sec.key" class="same-score-section">
+              <div class="same-score-section-label text-muted">{{ sec.label }}</div>
+              <template v-for="item in sec.items" :key="item.index">
+              <div v-if="item.subLabel" class="same-score-sublabel text-muted">{{ item.subLabel }}</div>
+              <div
+                class="same-score-item"
+                :class="{ active: sameScoreChoiceIndex(r) === item.index }"
+                @click="chooseSameScore(r, item.index)"
+              >
+                <span v-if="sameScoreChoiceIndex(r) === item.index" class="same-score-badge">显示中</span>
+                <span class="same-score-team">
+                  <span v-for="grp in sameScoreRows(r, item.alt)" :key="grp.label" class="same-score-rowgroup">
+                    <span class="same-score-rowlabel text-muted">{{ grp.label }}</span>
+                    <span
+                      v-for="m in grp.members"
+                      :key="m.position"
+                      class="same-score-avatar"
+                      :class="{ changed: m.changed }"
+                      :title="m.name + '（' + m.posLabel + '）' + (m.craftName ? '｜主礼装：' + m.craftName : '') + (m.secondCraftName ? '｜第二礼装位：' + m.secondCraftName : '')"
+                    >
+                      <img
+                        v-if="!avatarMissingSet.has(String(m.servantId))"
+                        :src="avatarPath(m.servantId)"
+                        alt=""
+                        @error="markAvatarBroken(m.servantId)"
+                      />
+                      <span v-else class="same-score-avatar-fallback">{{ (m.name || '?').charAt(0) }}</span>
+                    </span>
                   </span>
                 </span>
-              </span>
+                <span v-if="sameScoreChoiceIndex(r) === item.index" class="same-score-badge">显示中</span>
+              </div>
+              </template>
+            </div>
+            <div v-if="sameScoreCollapsedCount(r) > 0" class="same-score-more">
+              <button class="secondary" @click="toggleSameScoreExpand(r)">
+                展开其余 {{ sameScoreCollapsedCount(r) }} 支
+              </button>
+            </div>
+            <div v-else-if="sameScoreExpandable(r)" class="same-score-more">
+              <button class="secondary" @click="toggleSameScoreExpand(r)">
+                收起（只看最少改动的前 {{ sameScoreCollapseLimit() }} 支）
+              </button>
             </div>
           </div>
           <div class="result-board">
@@ -4703,12 +5130,13 @@ const App = {
           <div v-if="expandedResult === r" class="result-detail">
             <div v-if="sameScoreActive(r)" class="same-score-note">
               ℹ️ 本行显示的是「同分可替换」阵容里的第 {{ sameScoreChoiceIndex(r) + 1 }} 支（共 {{ sameScoreCount(r) }} 支，分数完全相同 {{ Number(r.totalMultiplier).toFixed(3) }}x）。
-              礼装与站位沿用本行；若要换回引擎给的那一支，回列表点开「同分 {{ sameScoreCount(r) }} 支」再选。
+              站位沿用本行，礼装取这一支自己的配置（同一组里礼装相同，只是换了谁拿），<b>Cost 也随人变化</b>；
+              若要换回引擎给的那一支，回列表点开「同分 {{ sameScoreCount(r) }} 支」再选。
             </div>
             <div class="detail-summary">
               <div class="summary-item"><span class="label">总倍率</span><span class="value">x{{ Number(r.totalMultiplier).toFixed(3) }}</span></div>
               <div v-if="showsBondPoints(r)" class="summary-item"><span class="label">预计总牵绊</span><span class="value">{{ formatBondNumber(r.totalBondPoints) }}</span></div>
-              <div class="summary-item"><span class="label">Cost 使用</span><span class="value">{{ r.costUsed }}/{{ costLimit }}</span></div>
+              <div class="summary-item"><span class="label">Cost 使用</span><span class="value">{{ resultCostUsed(r) }}/{{ costLimit }}</span></div>
               <div class="summary-item"><span class="label">基础牵绊</span><span class="value">{{ formatBondNumber(r.baseBond || 0) }}</span></div>
               <div v-if="r.maxBondStats && r.maxBondStats.count" class="summary-item"><span class="label">满绊共享加成</span><span class="value">{{ r.maxBondStats.count }} 人 × 25%</span></div>
             </div>
@@ -5622,7 +6050,7 @@ const App = {
               </tr>
               <tr>
                 <td>Cost</td>
-                <td v-for="r in compareResults" :key="'cost-' + r.rank">{{ r.costUsed }}/{{ costLimit }}</td>
+                <td v-for="r in compareResults" :key="'cost-' + r.rank">{{ resultCostUsed(r) }}/{{ costLimit }}</td>
               </tr>
               <tr>
                 <td>队伍</td>

@@ -55,6 +55,7 @@ ASAR_NAME = "app.asar"
 # ⚠️ main/ 下的 .js 不用写在这里 —— 由 asar_sync_files() 自动收集（漏写会让测试包起不来）
 ASAR_SYNC_FILES = [
     "renderer/app.js",
+    "renderer/bond-math.js",  # 牵绊计算的纯函数层（同分替补重算个体数值）
     "renderer/style.css",
     "renderer/index.html",
     "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成

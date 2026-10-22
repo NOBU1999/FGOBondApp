@@ -1494,6 +1494,20 @@ label.team-config-check {
   border-radius: 10px;
 }
 .same-score-hint { font-size: 12px; line-height: 1.6; margin-bottom: 6px; }
+/* 分节（2026-10-22）：按"与本行差几个人"分层，每层一条小标题；层内只动后排优先 */
+.same-score-section + .same-score-section { margin-top: 6px; }
+.same-score-section-label {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  margin: 2px 0 2px 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.same-score-section:first-child .same-score-section-label { border-top: none; padding-top: 0; }
+/* 段内小组：把"换掉的是谁"标出来（同组里只是换进来的人不同） */
+.same-score-sublabel { font-size: 11px; margin: 4px 0 1px 8px; opacity: 0.85; }
+.same-score-more { margin-top: 6px; text-align: center; }
+.same-score-more .secondary { font-size: 12px; padding: 3px 10px; }
 .same-score-item {
   display: flex;
   align-items: baseline;
@@ -1507,6 +1521,7 @@ label.team-config-check {
 .same-score-item.active { background: rgba(110, 168, 254, 0.14); }
 .same-score-badge {
   flex: 0 0 auto;
+  margin-left: auto;
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 999px;
@@ -1514,6 +1529,10 @@ label.team-config-check {
   color: var(--muted);
 }
 .same-score-item.active .same-score-badge { color: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe); }
+/* 换掉的从者描一圈暖橙：一眼看出这一支跟本行差了谁（2026-10-22） */
+.same-score-avatar.changed { border-color: var(--warn, #ffb648); box-shadow: 0 0 0 1px rgba(255, 182, 72, 0.35); }
+/* 没换的那些压暗一点，眼睛自动落在橙圈上（本行那一条不压） */
+.same-score-item:not(.active) .same-score-avatar:not(.changed) { opacity: 0.55; }
 .same-score-score { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .same-score-team { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
 .same-score-rowgroup { display: inline-flex; align-items: center; gap: 4px; }
