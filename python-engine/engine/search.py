@@ -1911,7 +1911,100 @@ def _craft_multiset_key(item: Dict[str, Any]) -> Any:
     return tuple(sorted(crafts))
 
 
-def _entry_key(entry: Dict[str, Any], slot_order: Sequence[str]) -> Any:
+def _ordered_alt_slots(
+    slot_order: Sequence[str],
+    head_sid_by_pos: Dict[str, int],
+    entry_by_pos: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """把一条同分阵容排成**可直接渲染**的顺序（2026-10-22 用户口径）。
+
+    规则：
+      · 先前排、后后排（两个分组各自连续）；
+      · 分组内**换掉的人在前、没换的在后**，同类内部仍按位置次序；
+      · `changed` 按**前后排集合**判定（只看这个人还在不在本行的同一侧），
+        这样"同一侧内部换位"不会被误记成多处改动；
+      · **留下的人坐回本行的位子**，空出来的位子才给换上来的人 ——
+        同侧内部次序对分数没有影响（同分去重键就是"前排是谁、后排是谁"的集合），
+        所以显示上把存活者复位，才不会出现"只换 1 个人却看起来好几个位置都变了"。
+
+    为什么放引擎里做：界面原来只能拿"同一批人"反推谁换了，那套反推既绕又容易错；
+    引擎生成时本来就知道每个位置是谁，直接把顺序和 changed 给出来，界面照着画即可。
+    """
+    head_front = [p for p in slot_order if p in FRONT_POSITIONS]
+    head_back = [p for p in slot_order if p not in FRONT_POSITIONS]
+    head_front_set = {head_sid_by_pos[p] for p in head_front if p in head_sid_by_pos}
+    head_back_set = {head_sid_by_pos[p] for p in head_back if p in head_sid_by_pos}
+
+    def seat(side_positions: Sequence[str], side_head: set) -> List[Dict[str, Any]]:
+        """把这一侧的成员按"存活者复位、新人填空位"落位；返回按位置次序的 slots。"""
+        pairs = [(p, entry_by_pos[p]) for p in side_positions if p in entry_by_pos]
+        remaining = list(pairs)
+        seated: Dict[str, Any] = {}
+        # ① 本行这一侧的人还留着的 ⇒ 回原位
+        for pos in side_positions:
+            want = head_sid_by_pos.get(pos)
+            hit = next((k for k, (_p, v) in enumerate(remaining) if v[0] == want), None)
+            if hit is not None:
+                seated[pos] = remaining.pop(hit)[1]
+        # ② 空出来的位子按那一支自己的次序补进来
+        for pos in side_positions:
+            if pos in seated:
+                continue
+            if not remaining:
+                break
+            seated[pos] = remaining.pop(0)[1]
+        out = []
+        for pos in side_positions:
+            if pos not in seated:
+                continue
+            sid, craft, second = seated[pos]
+            out.append({
+                "position": pos,
+                "servantId": sid,
+                "craftId": craft,
+                "secondCraftId": second,
+                "changed": sid not in side_head,
+            })
+        return out
+
+    front = seat(head_front, head_front_set)
+    back = seat(head_back, head_back_set)
+    return (
+        [x for x in front if x["changed"]]
+        + [x for x in front if not x["changed"]]
+        + [x for x in back if x["changed"]]
+        + [x for x in back if not x["changed"]]
+    )
+
+
+def _alt_payload(
+    slot_order: Sequence[str],
+    head_sid_by_pos: Dict[str, int],
+    entry_by_pos: Dict[str, Any],
+    sup: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """一条同分阵容的对外结构：`positions` 已按展示顺序给出，三个数组与它对齐。
+
+    字段说明（同步写在 shared/contracts/engine-protocol.md）：
+      positions      —— 展示顺序：先前排后后排，各段"换掉的在前"
+      servantIds     —— 与 positions 对齐
+      craftIds / secondCraftIds —— 同上（礼装跟着人走）
+      changed        —— 与 positions 对齐：这一位是不是换上来的人（前后排集合口径）
+      supportCraftId / supportSecondCraftId —— 助战礼装
+    """
+    slots = _ordered_alt_slots(slot_order, head_sid_by_pos, entry_by_pos)
+    return {
+        "positions": [s["position"] for s in slots],
+        "servantIds": [s["servantId"] for s in slots],
+        "craftIds": [s["craftId"] for s in slots],
+        "secondCraftIds": [s["secondCraftId"] for s in slots],
+        "changed": [1 if s["changed"] else 0 for s in slots],
+        "supportCraftId": (sup or {}).get("craftId"),
+        "supportSecondCraftId": (sup or {}).get("secondCraftId"),
+    }
+
+
+def _entry_key(entry: Dict[str, Any], slot_order: Optional[Sequence[str]] = None) -> Any:
     """下拉里一条"同分阵容"的规范键：**前排成员集合 + 后排成员集合**。
 
     用户口径（2026-10-10 第三次确认）：
@@ -1919,43 +2012,79 @@ def _entry_key(entry: Dict[str, Any], slot_order: Sequence[str]) -> Any:
       · 组内**不要**出现"只是交换了位置"的队伍同时出现，但**前后排要分开算**
         （同一批人，谁站前排是**真区别**：前排 +20% 先发加成）。
     所以键里只有"前排是谁、后排是谁"，没有礼装、也没有前排内部/后排内部的次序。
+
+    2026-10-22：条目改用 `positions` 记录每个位置（展示顺序），不再依赖外部 slot_order；
+    旧结构（只有平行数组）仍按 slot_order 兜底，保证旧存档/旧结果能读。
     """
+    positions = entry.get("positions")
+    ids = entry.get("servantIds") or []
+    if positions:
+        pairs = list(zip(positions, ids))
+    elif slot_order:
+        pairs = list(zip(slot_order, ids))
+    else:
+        pairs = []
     front = set()
     back = set()
-    for pos, sid in zip(slot_order, entry.get("servantIds") or []):
+    for pos, sid in pairs:
         (front if pos in FRONT_POSITIONS else back).add(sid)
     return (frozenset(front), frozenset(back))
 
 
-def _alt_from_item(item: Dict[str, Any], slot_order: Sequence[str]) -> Optional[Dict[str, Any]]:
-    """把一行结果**自身**转成下拉里一条「同分阵容」的结构（servantIds/craftIds/...）。
+def _rebase_alt(
+    alt: Dict[str, Any],
+    slot_order: Sequence[str],
+    head_sid_by_pos: Dict[str, int],
+) -> Dict[str, Any]:
+    """把一条已经生成的同分阵容**改挂到另一个 head 上**（合并同分行时用）。
+
+    为什么必须重算：`changed` 和展示顺序都是**相对"本行(head)"**算出来的。
+    合并时 B 行自己的替补会被并进 A 行，那时它的 `changed` 还是按 B 算的 ——
+    实测就出现过"人换了却没标橙"（河上彦斋那份预设的方案 6）。
+    所以并进来时按 A 重新生成一遍：从者/礼装/位置都不变，只重算 changed 并重排。
+    """
+    positions = alt.get("positions") or list(slot_order)
+    ids = alt.get("servantIds") or []
+    crafts = alt.get("craftIds") or []
+    seconds = alt.get("secondCraftIds") or []
+    entry: Dict[str, Any] = {}
+    for i, pos in enumerate(positions):
+        if i >= len(ids):
+            break
+        entry[pos] = (
+            ids[i],
+            crafts[i] if i < len(crafts) else None,
+            seconds[i] if i < len(seconds) else None,
+        )
+    if len(entry) < len(slot_order):
+        return alt  # 位置对不上（两侧位置集合不同）⇒ 原样保留，别丢数据
+    sup = {"craftId": alt.get("supportCraftId"), "secondCraftId": alt.get("supportSecondCraftId")}
+    return _alt_payload(slot_order, head_sid_by_pos, entry, sup)
+
+
+def _alt_from_item(
+    item: Dict[str, Any],
+    slot_order: Sequence[str],
+    head_sid_by_pos: Optional[Dict[str, int]] = None,
+) -> Optional[Dict[str, Any]]:
+    """把一行结果**自身**转成下拉里一条「同分阵容」（可渲染结构，见 _alt_payload）。
 
     供同分合并使用：被合并掉的那一行，它自己这套阵容也要进组——
     原实现只把它的 sameScoreTeams 并进 head，它自己那一套却从不加入，
     于是「与前面某行同分且礼装多重集相同」的队伍会**从榜上整个消失**（数据丢失）。
-    礼装按本行 team 的实际配置逐位给出（与 _same_score_team_alternatives 产出的
-    g[pos] = (sid, craft, second) 同构）；助战礼装单独放 supportCraftId。
+    礼装按本行 team 的实际配置逐位给出；助战礼装单独放 supportCraftId。
+    `head_sid_by_pos` 是**这一栏（head）**的 位置→从者，用来算 changed。
     """
     team = item.get("team") or []
     by_pos = {m.get("position"): m for m in team if not m.get("isSupport")}
     sup = next((m for m in team if m.get("isSupport")), None)
-    servant_ids: List[Any] = []
-    craft_ids: List[Any] = []
-    second_ids: List[Any] = []
+    entry: Dict[str, Any] = {}
     for pos in slot_order:
         m = by_pos.get(pos)
         if m is None:
             return None
-        servant_ids.append(m.get("servantId"))
-        craft_ids.append(m.get("craftId"))
-        second_ids.append(m.get("secondCraftId"))
-    return {
-        "servantIds": servant_ids,
-        "craftIds": craft_ids,
-        "secondCraftIds": second_ids,
-        "supportCraftId": (sup or {}).get("craftId") if sup else None,
-        "supportSecondCraftId": (sup or {}).get("secondCraftId") if sup else None,
-    }
+        entry[pos] = (m.get("servantId"), m.get("craftId"), m.get("secondCraftId"))
+    return _alt_payload(slot_order, head_sid_by_pos or {}, entry, sup)
 
 
 def _solution_dict(result: Dict[str, Any], rank: int) -> Dict[str, Any]:
@@ -4264,18 +4393,14 @@ def search_top_teams(
         groups, total = _same_score_team_alternatives(
             ctx, box, _alts_pool, bp.fixed_servant_ids, entry["team"], _alts_cache,
         )
-        # 每条同分阵容**自带它那一套礼装**（合并同分行以后，不同支的礼装可能不一样），
-        # 数组一律按本行 team 的位置顺序给出；界面点选时整支配置一起换（从者 + 礼装）。
+        # 每条同分阵容**自带它那一套礼装**（合并同分行以后，不同支的礼装可能不一样）。
+        # 2026-10-22：改由 `_alt_payload` 直接给出**可渲染顺序**（先前排后后排、
+        # 各段"换掉的在前"）并带 positions / changed —— 界面不再拿集合去反推谁换了。
         slot_order = [m["position"] for m in item["team"] if not m.get("isSupport")]
+        head_sid_by_pos = {m["position"]: m["servantId"] for m in item["team"] if not m.get("isSupport")}
         sup = next((m for m in item["team"] if m.get("isSupport")), None)
         item["sameScoreTeams"] = [
-            {
-                "servantIds": [g[pos][0] for pos in slot_order],
-                "craftIds": [g[pos][1] for pos in slot_order],
-                "secondCraftIds": [g[pos][2] for pos in slot_order],
-                "supportCraftId": (sup or {}).get("craftId"),
-                "supportSecondCraftId": (sup or {}).get("secondCraftId"),
-            }
+            _alt_payload(slot_order, head_sid_by_pos, g, sup)
             for g in groups if all(pos in g for pos in slot_order)
         ]
         item["sameScoreTotal"] = total
@@ -4301,23 +4426,30 @@ def search_top_teams(
             merged_items.append(item)
             continue
         union = list(head.get("sameScoreTeams") or [])
-        seen = {_entry_key(a, slot_order_ref) for a in union}
+        seen = {_entry_key(a) for a in union}
         # 🔴 2026-10-14 修复（同分合并丢行）：被合并的行**自己这套阵容**也要进组。
         # 原来只把它的 sameScoreTeams 并进 head，它自己那一套从不加入 ⇒
         # 任何「与前面某行同分且礼装多重集相同」的队伍会从榜上整个消失（数据丢失）。
         # 放在它自己的同分替补之前：本行是真实评估出来的阵容，替补是恒等式展开的。
-        own = _alt_from_item(item, slot_order_ref)
+        # 2026-10-22：changed 一律相对**这一栏的 head** 判定（这才是界面上"本行"）。
+        head_sid_by_pos = {
+            m.get("position"): m.get("servantId")
+            for m in (head.get("team") or [])
+            if not m.get("isSupport")
+        }
+        own = _alt_from_item(item, slot_order_ref, head_sid_by_pos)
         if own is not None:
-            k = _entry_key(own, slot_order_ref)
+            k = _entry_key(own)
             if k not in seen:
                 seen.add(k)
                 union.append(own)
         for alt in item.get("sameScoreTeams") or []:
-            k = _entry_key(alt, slot_order_ref)
+            k = _entry_key(alt)
             if k in seen:
                 continue
             seen.add(k)
-            union.append(alt)
+            # ⚠️ B 行自己的替补是相对 B 算的 changed/顺序 ⇒ 并进 A 必须按 A 重算
+            union.append(_rebase_alt(alt, slot_order_ref, head_sid_by_pos))
         head["sameScoreTeams"] = union[:_ALT_CAP]
         head["sameScoreTotal"] = max(int(head.get("sameScoreTotal") or 0), len(union))
     # 最后统一按"前排成员 / 后排成员"去重（合并进来的那些行各自也带着自己的排列，
@@ -4326,7 +4458,7 @@ def search_top_teams(
         deduped: List[Dict[str, Any]] = []
         seen_entry: Set[Any] = set()
         for alt in item.get("sameScoreTeams") or []:
-            k = _entry_key(alt, slot_order_ref)
+            k = _entry_key(alt)
             if k in seen_entry:
                 continue
             seen_entry.add(k)
