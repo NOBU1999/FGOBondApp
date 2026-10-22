@@ -26,6 +26,7 @@
 退出码：0 = 全部通过（含 SKIP/XFAIL）；1 = 有 FAIL/ERROR。
 """
 import sys
+import tempfile
 import traceback
 from collections import Counter
 from pathlib import Path
@@ -104,6 +105,76 @@ def cost12_pool(ctx, n=8):
 
 
 # ---------------- 检查项 ----------------
+@check("same_score_alt_rebase",
+       doc="合并同分行时，别的行的替补并进来必须按本行 head 重算 changed / 重排（预设方案6 的 bug）")
+def t_alt_rebase():
+    slot_order = ["front_left", "front_middle", "back_left", "back_middle", "back_right"]
+    head = {"front_left": 1, "front_middle": 2, "back_left": 3, "back_middle": 4, "back_right": 5}
+    # 另一行（会被并进来）的后排是 {3, 9, 5}：对它自己来说 9 是本位，对 head 来说是"换上来的人"
+    other = {"front_left": 1, "front_middle": 2, "back_left": 3, "back_middle": 9, "back_right": 5}
+    other_entry = {"front_left": (1, None, None), "front_middle": (2, None, None),
+                   "back_left": (3, None, None), "back_middle": (9, None, None), "back_right": (5, None, None)}
+    alt = search._alt_payload(slot_order, other, other_entry,
+                              {"craftId": -10, "secondCraftId": None})
+    require(alt["changed"] == [0, 0, 0, 0, 0], "相对它自己那一行不该算换人：%r" % (alt["changed"],))
+
+    rebased = search._rebase_alt(alt, slot_order, head)
+    idx = {p: i for i, p in enumerate(rebased["positions"])}
+    require(rebased["changed"][idx["back_middle"]] == 1,
+            "并进 head 后 back_middle 应为换上来的人：%r" % (rebased,))
+    require(sum(rebased["changed"]) == 1, "并进 head 后应只有 1 处换人：%r" % (rebased["changed"],))
+    require(rebased["servantIds"][idx["back_middle"]] == 9, "重排后位置上的人不能变")
+    # 去重键不变（前后排集合口径）
+    require(search._entry_key(alt) == search._entry_key(rebased), "rebase 不应改变去重键")
+
+
+@check("same_score_alt_display_order",
+       doc="同分替补的对外结构：positions 按「前排→后排，各段换掉的在前」排；changed 用前后排集合口径")
+def t_alt_display_order():
+    slot_order = ["front_left", "front_middle", "back_left", "back_middle", "back_right"]
+    head = {"front_left": 1, "front_middle": 2, "back_left": 3, "back_middle": 4, "back_right": 5}
+
+    def payload(entry):
+        return search._alt_payload(slot_order, head, entry, {"craftId": -10, "secondCraftId": None})
+
+    def entry(**over):
+        base = {
+            "front_left": (1, None, None), "front_middle": (2, None, None),
+            "back_left": (3, None, None), "back_middle": (4, None, None),
+            "back_right": (5, None, None),
+        }
+        base.update(over)
+        return base
+
+    # 1) 只换后排左：前排（未换）在前，后排"换掉的"在前、"没换的"在后
+    p = payload(entry(back_left=(9, None, None)))
+    require(p["positions"] == ["front_left", "front_middle", "back_left", "back_middle", "back_right"],
+            "只换后排左的顺序不对：%r" % (p["positions"],))
+    require(p["changed"] == [0, 0, 1, 0, 0], "changed 不对：%r" % (p["changed"],))
+    require(p["servantIds"][2] == 9, "换上来的人没落在 back_left：%r" % (p["servantIds"],))
+
+    # 2) 只换前排中：前排里"换掉的"要排到该段最前
+    p = payload(entry(front_middle=(8, None, None)))
+    require(p["positions"] == ["front_middle", "front_left", "back_left", "back_middle", "back_right"],
+            "前排换人后顺序不对：%r" % (p["positions"],))
+    require(p["changed"] == [1, 0, 0, 0, 0], "changed 不对：%r" % (p["changed"],))
+
+    # 3) 同一侧内部换位（集合不变）⇒ 一个人都不算换
+    p = payload(entry(front_left=(2, None, None), front_middle=(1, None, None)))
+    require(p["changed"] == [0, 0, 0, 0, 0], "同侧换位被误判成换人：%r" % (p["changed"],))
+
+    # 4) 前后都换：前排换掉的 → 前排没换的 → 后排换掉的 → 后排没换的
+    p = payload(entry(front_middle=(8, None, None), back_right=(9, None, None)))
+    require(p["positions"] == ["front_middle", "front_left", "back_right", "back_left", "back_middle"],
+            "前后都换时顺序不对：%r" % (p["positions"],))
+    require(p["changed"] == [1, 0, 1, 0, 0], "changed 不对：%r" % (p["changed"],))
+
+    # 5) 去重键只看前后排集合：同侧换位不产生新键
+    k1 = search._entry_key(payload(entry()))
+    k2 = search._entry_key(payload(entry(front_left=(2, None, None), front_middle=(1, None, None))))
+    require(k1 == k2, "同侧换位应被视为同一支队伍（去重键不同）")
+
+
 @check("trip_recheck_count_bounds",
        doc="⑨ 集合趟自由口径复评的条数上限：确定性 + 档位单调 + 落在 clamp 区间内（③-b 的靶子）")
 def t_trip_count():
@@ -191,7 +262,10 @@ def t_ub_ge_actual():
         "classGroup": "rider",
         "costLimit": 115,
         "topN": 200,
-        "timeoutMs": 30000,
+        # ⚠️ 预算别压太低：这个形状光是"生成候选池 + 枚举组合"就要 ~25 秒（2026-10-22 实测
+        #    首个评估出现在 24.6s），预算 30s 时第一阶段（50% = 15s）就先到期 ⇒
+        #    一条都没评估 ⇒ 用例假失败（坑 118）。给 90s 留出评估窗口。
+        "timeoutMs": 90000,
         "craftPoolSize": 60,
         "sortMode": "multiplier",
         "strategy": "total_max",
@@ -259,6 +333,53 @@ def t_ub_ge_actual():
     require(worst_gap <= 1e-9,
             "上界被击穿：%d/%d 组「实际 > 上界」，最大缺口 %.4f（实际 %.4f vs 上界 %.4f，阵容 %s）"
             % (len(broken), len(pairs), worst_gap, worst_a, worst_u, sorted(_k)))
+
+
+@check("download_retries_transient_failures",
+       doc="坑 121：大文件下载中途偶发断开要自动重试，别整条白跑（Atlas 实测在 84% 断过）")
+def t_download_retries():
+    from engine import data_fetcher as df
+
+    payload = b"0123456789" * 10
+    real_raw = df._download_range_raw
+    real_wait = df.DOWNLOAD_RETRY_WAIT
+    tmpdir = Path(tempfile.mkdtemp(prefix="fgo-dl-retry-"))
+    df.DOWNLOAD_RETRY_WAIT = 0.01  # 别在测试里真等 1.5s/3s
+    try:
+        # ① 前两次抛错、第三次成功 ⇒ 文件必须完整、且确实重试了
+        calls = {"n": 0}
+
+        def flaky(url, start, end):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise OSError("simulated SSL EOF")
+            return payload, len(payload)
+
+        df._download_range_raw = flaky
+        out = df.download_to_cache("http://example.invalid/x.json", tmpdir / "ok.json", "retry-test")
+        require(out.exists(), "重试成功后文件不存在")
+        require(out.read_bytes() == payload, "重试后文件内容不完整（%d 字节）" % out.stat().st_size)
+        require(calls["n"] == 3, "应「失败 2 次 + 成功 1 次」共 3 次调用，实际 %d 次" % calls["n"])
+
+        # ② 一直失败 ⇒ 用满重试次数后必须抛错（不能静默返回半截文件）
+        calls["n"] = 0
+
+        def broken(url, start, end):
+            calls["n"] += 1
+            raise OSError("always broken")
+
+        df._download_range_raw = broken
+        raised = False
+        try:
+            df.download_to_cache("http://example.invalid/y.json", tmpdir / "bad.json", "retry-test")
+        except Exception:  # noqa: BLE001
+            raised = True
+        require(raised, "永久失败时必须抛错，不能当成下载成功")
+        require(calls["n"] == df.DOWNLOAD_RETRIES + 1,
+                "重试次数应为 %d，实际调用 %d 次" % (df.DOWNLOAD_RETRIES + 1, calls["n"]))
+    finally:
+        df._download_range_raw = real_raw
+        df.DOWNLOAD_RETRY_WAIT = real_wait
 
 
 def main() -> int:
