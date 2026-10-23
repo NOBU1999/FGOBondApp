@@ -882,8 +882,8 @@ def build_database(
 # 灵衣名来源：Atlas 官方 raw 单从者接口。
 # 为什么不从整包 nice_servant.json 里取：那份导出**不含**灵衣名
 # （`extra.costumeLimitSvtIdMap` 是空表），灵衣名只在单从者的 raw 接口里。
-# ⚠️ 曾经打过 Chaldea 的镜像 `api.atlas.chaldea.center`，该域名已 404，
-#    错误被 except 吞掉 ⇒ 灵衣名表长期是空的（2026-10-22 查实）。
+# ⚠️ 旧代码打的是一个已经废弃的第三方镜像接口（域名早已 404），错误还被 except 吞掉
+#    ⇒ 灵衣名表长期是空的（2026-10-22 查实）。别再回去用镜像，只走官方 Atlas 接口。
 COSTUME_NAME_SOURCE = "https://api.atlasacademy.io/raw/{region}/servant/{id}"
 # 源名字常带前缀（"简易灵衣：…"、"簡易霊衣：…"、"眼镜灵衣：…"），界面自己会拼"灵衣："，所以先剥掉
 # ⚠️ 中日文两种写法都要认（JP 源里是「霊衣」，CN 源里是「灵衣」）
