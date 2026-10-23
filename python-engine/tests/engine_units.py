@@ -43,6 +43,9 @@ sys.path.insert(0, str(ROOT / "python-engine"))
 from engine import calculator, models, search  # noqa: E402
 
 CHECKS = []
+# 上界反例搜索的规模：12 个随机形状 × 1.2s ≈ 20 秒。别调大 —— 一个没人愿意跑的断言等于没有。
+UB_SWEEP_SHAPES = 12
+UB_SWEEP_BUDGET_MS = 1200
 
 
 class Skip(Exception):
@@ -380,6 +383,91 @@ def t_download_retries():
     finally:
         df._download_range_raw = real_raw
         df.DOWNLOAD_RETRY_WAIT = real_wait
+
+
+@check("upper_bound_ge_actual_sweep", needs_ctx=True,
+       doc="坑 94/113：随机形状上也不能出现「真实 > 上界」（上界合法性的常驻反例搜索）")
+def t_ub_sweep():
+    import random
+
+    ctx = load_ctx()
+    all_ids = sorted(s.id for s in ctx.servants.values())
+    rng = random.Random(20261023)  # 固定种子：失败可复现，通过也不是运气
+    real_ub = search._relaxed_score_upper_bound
+    shapes = pairs = 0
+    worst_slack = 0.0
+    bad = []
+    try:
+        for _ in range(UB_SWEEP_SHAPES):
+            box_ids = rng.sample(all_ids, rng.choice([8, 10, 12]))
+            crown = rng.random() < 0.4
+            raw = {
+                "box": [
+                    {
+                        "id": sid,
+                        "stage": rng.choice(["fourth", "third", "second", "initial"]),
+                        "maxBond": rng.random() < 0.15,
+                        "bondSwitch1": rng.random() < 0.8,
+                        "bondSwitch2": rng.random() < 0.3,
+                    }
+                    for sid in box_ids
+                ],
+                "mode": "crown" if crown else "normal",
+                "crownPositions": ["front_left", "front_right"] if crown else [],
+                "costLimit": rng.choice([100, 108, 112, 116]),
+                "topN": 20,
+                "timeoutMs": UB_SWEEP_BUDGET_MS,
+                "craftPoolSize": 60,
+                # ⚠️ 只测「倍率口径 + baseBond 0」：这样上界与结果行的 totalMultiplier 同量纲。
+                #    target_max 的上界是复合分（target×10000+总分）、点数口径是 ×baseBond 的点数尺度，
+                #    混进来会把"松弛"算成几万 —— 这两种测法都踩过坑，别再加回来。
+                "sortMode": "multiplier",
+                "strategy": "total_max",
+                "baseBond": 0,
+                "activityBonus": rng.choice([0.0, 0.0, 0.5]),
+            }
+            req = models.parse_request(raw)
+            ub_by_players = {}
+
+            def ub_wrap(c, r, players, *a, **kw):
+                v = real_ub(c, r, players, *a, **kw)
+                try:
+                    key = frozenset(p.servant_id for p in players if p.counted)
+                    if len(key) == 5 and v is not None:
+                        ub_by_players[key] = max(ub_by_players.get(key, -1e18), float(v))
+                except Exception:  # noqa: BLE001
+                    pass
+                return v
+
+            search._relaxed_score_upper_bound = ub_wrap
+            try:
+                res = search.search_top_teams(ctx, req, progress=lambda _m: None)
+            finally:
+                search._relaxed_score_upper_bound = real_ub
+            shapes += 1
+            for it in res.get("top20") or []:
+                score = it.get("totalMultiplier", it.get("multiplier"))
+                if score is None:
+                    continue
+                team = it.get("team") or []
+                ids = frozenset(int(m["servantId"]) for m in team if not m.get("isSupport"))
+                if len(ids) != 5 or ids not in ub_by_players:
+                    continue
+                ub = ub_by_players[ids]
+                pairs += 1
+                worst_slack = max(worst_slack, ub - float(score))
+                if float(score) > ub + 1e-9:
+                    bad.append((sorted(ids), float(score), ub))
+    finally:
+        search._relaxed_score_upper_bound = real_ub
+
+    require(pairs >= 20, "可比组太少（%d 组）——预算太小或库不对，判不出合法性" % pairs)
+    if bad:
+        worst = max(bad, key=lambda b: b[1] - b[2])
+        require(False, "上界被击穿 %d 组（共 %d 组），最差：真实 %.4f > 上界 %.4f，阵容 %s"
+                % (len(bad), pairs, worst[1], worst[2], worst[0]))
+    print("       · 反例搜索：%d 个形状 / 可比 %d 组 ／ 反例 0 ／ 最大松弛 %.4f"
+          % (shapes, pairs, worst_slack))
 
 
 def main() -> int:
