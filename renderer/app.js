@@ -47,6 +47,7 @@ const CROWN_CLASS_FILTERS = [
   { value: "berserker", label: "狂" },
   { value: "ex1", label: "EX1（尺仇月盾）" },
   { value: "ex2", label: "EX2（他批降兽）" },
+  { value: "exall", label: "全EX（EX1+EX2）" },
 ];
 
 const CROWN_CLASS_GROUPS = {
@@ -60,6 +61,19 @@ const CROWN_CLASS_GROUPS = {
   berserker: ["Berserker"],
   ex1: ["Ruler", "Avenger", "MoonCancer", "Shielder"],
   ex2: ["AlterEgo", "Foreigner", "Pretender", "Beast", "beastEresh", "unBeastOlgaMarie"],
+  // 全EX = EX1 + EX2（游戏里 Extra 是一个职阶，戴冠战按这个口径打时要把两组都算进来）
+  exall: [
+    "Ruler",
+    "Avenger",
+    "MoonCancer",
+    "Shielder",
+    "AlterEgo",
+    "Foreigner",
+    "Pretender",
+    "Beast",
+    "beastEresh",
+    "unBeastOlgaMarie",
+  ],
 };
 
 function formatBondNumber(v) {
@@ -4836,7 +4850,8 @@ const App = {
             <select v-if="superOn" v-model.number="superLevel" :disabled="calculating" title="覆盖倍数：越大越全，也越慢">
               <option :value="2.5">×2.5</option>
               <option :value="5">×5</option>
-              <option :value="10">×10</option>
+              <!-- 手机上不提供 ×10：它对内存的放大是 5~8 倍（实测 RSS 4.9GB），而 WebView 的堆上限抬不了 -->
+              <option v-if="!isAndroidPlatform()" :value="10">×10</option>
             </select>
             <span v-if="superOn" class="super-hint">不设时限</span>
           </div>
