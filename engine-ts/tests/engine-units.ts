@@ -1,4 +1,5 @@
 // 引擎「零件级」断言（TS 版，对齐 python-engine/tests/engine_units.py 的 9 项）
+// TS 侧另加 2 项（T1 便宜界：礼装项的单元不变量 + 与精确界的逐套对照），Python 版没有这两条。
 //
 // 为什么要有它：13 档指纹 / golden 对拍这些仪器只回答"结果变了没有"，
 // 不能回答"哪个函数坏了"。本文件把可以独立断言的性质钉在函数级，定位从"跑长串"变成"跑几秒"。
@@ -23,7 +24,9 @@ import type { CalculationRequest } from "../src/models.ts";
 import { searchTopTeams } from "../src/search.ts";
 import {
   altPayload,
+  cheapCraftBound,
   entryKey,
+  fractionalCraftBound,
   rebaseAlt,
   defaultTripRecheckCount,
   relaxedScoreUpperBound as relaxedScoreUpperBoundRef,
@@ -294,6 +297,189 @@ check(
   require_(bad.length === 0, `枚举里出现重复装同一张不可重复礼装：${JSON.stringify(bad.slice(0, 2))}`);
   const same = generateCraftCombinationsWithCost(ctx, pool, 3, 300, null);
   require_(JSON.stringify(same) === JSON.stringify(out), "同一输入两次枚举结果不同 ⇒ 非确定性");
+});
+
+// ---------------- T1 便宜界（暂时没接进主循环，但性质必须钉死） ----------------
+// 为什么现在就钉：它是"两步筛选"的唯一前提（先便宜界筛、再精确界），而它只在探针里
+// （`.temp\ts\t1_legality.mjs`）验过 —— 探针活不过换机器，而且**"真实串上 0 反例"不等于合法**
+// （2026-10-24 这两条断言当场抓出真错，见下面 pinned 现场）。两条断言各自守一头：
+//   ① 单元：礼装项上界 ≥ 同一批礼装的整数最优（守 Cost / 免费槽 / 可重复三件事）；
+//   ② 整链：便宜界 ≥ 主循环真正用的精确界（任何一套阵容都不许反过来）。
+
+type ToyCraft = { id: number; cost: number; val: number; rep: boolean };
+
+/** 造一个只含「礼装价目表」的最小 ctx：fractionalCraftBound 只读 ctx.crafts（Cost 与 repeatable）。 */
+function toyCraftCtx(crafts: ToyCraft[]): DataContext {
+  const m = new Map<number, any>();
+  for (const c of crafts) m.set(c.id, { id: c.id, cost: c.cost, repeatable: c.rep, is_bond_ce: false });
+  return { crafts: m } as unknown as DataContext;
+}
+/** 穷举「整数最优」：每张取 0/1（可重复的取 0..剩余槽）；免费槽**优先免最贵的**（这只是可行性最有利的排法）。 */
+function toyIntegerOptimum(crafts: ToyCraft[], slots: number, budget: number, freeCount: number): number {
+  let best = 0;
+  const counts = new Array(crafts.length).fill(0);
+  const walk = (i: number, usedSlots: number): void => {
+    if (i === crafts.length) {
+      const costs: number[] = [];
+      let val = 0;
+      for (let k = 0; k < crafts.length; k++) {
+        for (let c = 0; c < counts[k]; c++) costs.push(crafts[k].cost);
+        val += counts[k] * crafts[k].val;
+      }
+      costs.sort((a, b) => b - a);
+      let paid = 0;
+      for (let k = Math.min(freeCount, costs.length); k < costs.length; k++) paid += costs[k];
+      if (paid <= budget + 1e-9 && val > best) best = val;
+      return;
+    }
+    const room = slots - usedSlots;
+    const maxCopies = crafts[i].rep ? room : Math.min(1, room);
+    for (let c = 0; c <= maxCopies; c++) {
+      counts[i] = c;
+      walk(i + 1, usedSlots + c);
+    }
+    counts[i] = 0;
+  };
+  walk(0, 0);
+  return best;
+}
+
+check(
+  "fractional_craft_bound_ge_integer_optimum",
+  "T1 的礼装项（两条松弛取小）必须 ≥ 同一批礼装实际能取到的整数最优（守 Cost + 免费槽 + 可重复）",
+)(async () => {
+  const rng = makeRng(20261024);
+  const rounds = 400;
+  let tight = 0;
+  let gapped = 0;
+  let worstGap = 0;
+  let worstDesc = "";
+  for (let t = 0; t < rounds; t++) {
+    const nCrafts = 2 + Math.floor(rng.random() * 6); // 2..7
+    const slots = 1 + Math.floor(rng.random() * 5); // 1..5
+    const freeCount = rng.random() < 0.5 ? 0 : Math.min(slots, 1 + Math.floor(rng.random() * 2)); // 0..2
+    const budget = rng.choice([0, 12, 24, 40, 60]);
+    const crafts: ToyCraft[] = [];
+    for (let i = 0; i < nCrafts; i++) {
+      crafts.push({
+        id: 990000 + i, // 远离通用 5% 那类可重复礼装的 id
+        cost: rng.choice([0, 4, 8, 12, 20]),
+        val: rng.random() < 0.1 ? 0 : Math.round(rng.random() * 2000) / 1000,
+        rep: rng.random() < 0.2,
+      });
+    }
+    const toy = toyCraftCtx(crafts);
+    const scores = new Map<number, number>(crafts.map((c) => [c.id, c.val]));
+    const zero = freeCount > 0 ? Array.from({ length: slots }, (_, i) => i < freeCount) : null;
+    const cheap = fractionalCraftBound(toy, scores, slots, budget, zero);
+    const opt = toyIntegerOptimum(crafts, slots, budget, freeCount);
+    require_(
+      cheap >= opt - 1e-9,
+      `上界低于整数最优：cheap=${cheap.toFixed(6)} < opt=${opt.toFixed(6)}` +
+        `（slots=${slots} budget=${budget} free=${freeCount} crafts=${JSON.stringify(crafts)}）`,
+    );
+    // 最松的那一版（完全不管 Cost）也得是上界 —— 它是"②那一半"的底座，坏了会让上面的取小失去意义
+    require_(
+      cheapCraftBound(toy, scores, slots) >= opt - 1e-9,
+      `忽略 Cost 的"每槽取最大分"低于整数最优：slots=${slots} crafts=${JSON.stringify(crafts)}`,
+    );
+    const gap = cheap - opt;
+    if (gap < 1e-9) tight += 1;
+    else gapped += 1;
+    if (gap > worstGap) {
+      worstGap = gap;
+      worstDesc = `slots=${slots} budget=${budget} free=${freeCount}`;
+    }
+  }
+  require_(tight > 0, `${rounds} 组玩具里没有一组「上界 = 整数最优」⇒ 用例分布不像真实礼装局面`);
+  require_(gapped > 0, `${rounds} 组玩具里没有一组「上界 > 整数最优」⇒ 用例没测到"放松"的那一面`);
+
+  // 回归现场（2026-10-24 由这条断言抓出的真错）：槽数紧 + Cost 悬殊时，
+  // 旧实现（守槽数的单价贪心）先取 B/E/A/C 各一件 ⇒ 5.185，**低于真值 5.535**（E×3 + C）。
+  const pinned: ToyCraft[] = [
+    { id: 990001, cost: 8, val: 1.247, rep: false },
+    { id: 990002, cost: 0, val: 0.937, rep: false },
+    { id: 990003, cost: 20, val: 1.734, rep: false },
+    { id: 990004, cost: 0, val: 1.267, rep: true },
+  ];
+  const pinnedToy = toyCraftCtx(pinned);
+  const pinnedScores = new Map<number, number>(pinned.map((c) => [c.id, c.val]));
+  const pinnedOpt = toyIntegerOptimum(pinned, 4, 0, 2);
+  const pinnedCheap = fractionalCraftBound(pinnedToy, pinnedScores, 4, 0, [true, true, false, false]);
+  require_(Math.abs(pinnedOpt - 5.535) < 1e-9, `回归现场的整数最优应是 5.535（E×3 + C），实算 ${pinnedOpt}`);
+  require_(
+    pinnedCheap >= pinnedOpt - 1e-9,
+    `回归现场又击穿：旧算法 5.185 < 真值 ${pinnedOpt}，现在给 ${pinnedCheap.toFixed(3)}`,
+  );
+
+  console.log(
+    `       · ${rounds} 组玩具：上界 = 整数最优 ${tight} 组 / 上界更高 ${gapped} 组，最大 gap ${worstGap.toFixed(3)}（${worstDesc}）；` +
+      `回归现场（旧算法 5.185 < 真值 5.535）现在 = ${pinnedCheap.toFixed(3)}`,
+  );
+});
+
+check(
+  "cheap_bound_ge_exact_bound",
+  "T1（便宜界）必须 ≥ T2（主循环真正用的精确界）—— 反过来就是误杀真队，两步筛选的前提",
+  { needsCtx: true },
+)(async () => {
+  const ctx = await loadCtx();
+  const allIds = [...ctx.servants.values()].map((s) => s.id).sort((a, b) => a - b);
+  const rng = makeRng(20261024);
+  const shapes = 6;
+  let pairs = 0;
+  let minSlack = Infinity;
+  let maxSlack = -Infinity;
+  let sumSlack = 0;
+  const bad: [number, number, number][] = [];
+  for (let s = 0; s < shapes; s++) {
+    // 小 Box + 短预算：一轮就够跑出几百次上界比较；冠位形状专门覆盖「免费槽（第二礼装位）」
+    const boxIds = rng.sample(allIds, rng.choice([10, 12, 14]));
+    const crown = rng.random() < 0.4;
+    const req = parseRequest({
+      box: boxIds.map((sid) => ({
+        id: sid,
+        stage: rng.choice(["fourth", "third", "second", "initial"]),
+        maxBond: rng.random() < 0.15,
+        bondSwitch1: rng.random() < 0.8,
+        bondSwitch2: rng.random() < 0.3,
+      })),
+      mode: crown ? "crown" : "normal",
+      crownPositions: crown ? ["front_left", "front_right"] : [],
+      costLimit: rng.choice([100, 108, 112, 116]),
+      topN: 20,
+      timeoutMs: 1500,
+      craftPoolSize: 60,
+      sortMode: "multiplier",
+      strategy: "total_max",
+      baseBond: 0,
+      activityBonus: rng.choice([0, 0, 0.5]),
+    });
+    const hooks: SearchHooks = {
+      onBound: ({ ub, cheap }) => {
+        pairs += 1;
+        const slack = cheap - ub;
+        if (slack < -1e-9 && bad.length < 5) bad.push([ub, cheap, slack]);
+        if (slack < minSlack) minSlack = slack;
+        if (slack > maxSlack) maxSlack = slack;
+        sumSlack += slack;
+      },
+    };
+    await searchTopTeams(ctx, req, null, null, hooks);
+  }
+  require_(pairs >= 500, `只有 ${pairs} 次可比的上界计算 —— 太少，判不出合法性（预算或库不对）`);
+  if (bad.length > 0) {
+    const worst = bad.reduce((a, b) => (b[2] < a[2] ? b : a));
+    require_(
+      false,
+      `便宜界低于精确界：${bad.length} 组反例（共 ${pairs} 组），最差 slack ${worst[2].toFixed(6)}` +
+        `（精确 ${worst[0].toFixed(6)} vs 便宜 ${worst[1].toFixed(6)}）`,
+    );
+  }
+  console.log(
+    `       · ${shapes} 个形状 / 可比 ${pairs} 次：反例 0；便宜界 − 精确界 平均 ${(sumSlack / pairs).toFixed(4)}、` +
+      `最大 ${maxSlack.toFixed(4)}、最小 ${minSlack.toFixed(4)}`,
+  );
 });
 
 check(

@@ -10,7 +10,8 @@
 ```
 src/         22 个源文件（求值 / 上界 / 建队 / 池 / 主流程 / 数据管线 / 验证串 / 平台层）
 entry/       worker.ts（桌面 worker_threads）、web.ts（安卓 WebView Worker，浏览器目标）
-tests/       engine-units.ts —— 9 项零件级断言，等价 python-engine/tests/engine_units.py
+tests/       engine-units.ts —— 11 项零件级断言（9 项对齐 python-engine/tests/engine_units.py，
+             另 2 项是本侧特有的上界性质：礼装项 ≥ 整数最优、便宜界 ≥ 精确界）
 ```
 
 ## 平台层（关键）
@@ -37,7 +38,7 @@ node scripts/build-engine-ts.mjs --web    # → dist/engine-ts/web.mjs（安卓/
 ## 断言
 
 ```powershell
-node engine-ts/tests/engine-units.ts            # 9 项，约 41 秒
+node engine-ts/tests/engine-units.ts            # 11 项，约 44 秒
 node engine-ts/tests/engine-units.ts --list
 node engine-ts/tests/engine-units.ts --only=dp
 ```
