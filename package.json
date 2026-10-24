@@ -31,9 +31,12 @@
     "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
     "@capacitor/filesystem": "^8.1.0",
+    "@types/node": "^26.6.5",
     "electron": "latest",
     "electron-builder": "latest",
+    "esbuild": "^0.28.2",
     "sql.js": "^1.13.0",
+    "typescript": "^7.0.2",
     "vue": "^3.5.42"
   },
   "build": {
