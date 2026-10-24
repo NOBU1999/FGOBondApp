@@ -147,6 +147,20 @@ for (const file of ["sql-wasm.js", "sql-wasm.wasm"]) {
 }
 log("sql.js 运行时 → vendor/sqljs（sql-wasm.js + sql-wasm.wasm）");
 
+// ---------------------------------------------------------------- TS 引擎（P4b-2）
+// 引擎 bundle 是 classic worker 用 `importScripts` 加载的 IIFE（engine-ts/web.js），
+// 跟包放在 `engine-ts/` 下；`engine.txt` 是灰度开关（ts = 走 TS Worker，缺省/其他 = Chaquopy）。
+const TS_DIST = path.join(ROOT, "dist", "engine-ts");
+const tsBundle = path.join(TS_DIST, "web.js");
+if (existsSync(tsBundle)) {
+  mkdirSync(path.join(OUT, "engine-ts"), { recursive: true });
+  cpSync(tsBundle, path.join(OUT, "engine-ts", "web.js"));
+  writeFileSync(path.join(OUT, "engine-ts", "engine.txt"), "ts", "utf8");
+  log(`TS 引擎 → engine-ts/web.js（${(statSync(tsBundle).size / 1024).toFixed(0)}KB，engine.txt=ts）`);
+} else {
+  log("⚠️ 没有 dist/engine-ts/web.js（先跑 node scripts/build-engine-ts.mjs --web）⇒ 安卓继续走 Python");
+}
+
 prepareDatabase(path.join(OUT, "db", "fgo_data.db"));
 
 // 事件加成表（桌面读 db 同目录的 JSON；有就一起带上）

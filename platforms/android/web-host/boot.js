@@ -60,6 +60,148 @@
   let initError = null;
 
   // -------------------------------------------------------------------------
+  // 计算引擎：TypeScript Worker（与桌面同一份代码）＋ Python（Chaquopy）回退
+  //   · 灰度开关：`./engine-ts/engine.txt` 内容为 `ts` 才走 Worker（P5 之后默认）
+  //   · Worker 的 sql.js / wasm 从随包 `vendor/sqljs/` 取，库字节由主线程 `db.export()` 交过去
+  //   · 初始化失败自动回退 Python（老 APK 里没有 engine-ts 目录时也能跑）
+  // -------------------------------------------------------------------------
+  const TS_ENGINE_FLAG = "./engine-ts/engine.txt";
+  const TS_ENGINE_ENTRY = "./platforms/android/web-host/engine-worker.js";
+  let tsEnabled = false;
+  let tsEngineWorker = null;
+  let tsEngineReady = null; // Promise：Worker 报 ready 之后 resolve
+  let tsEngineFailure = null; // 初始化失败的原因（一旦失败就不再尝试）
+  let tsPending = null; // { resolve, reject }：同一时刻只允许一个计算
+  let tsQueue = Promise.resolve();
+
+  /** 灰度开关：读 engine.txt（读不到 = 不启用，老包里没这个文件） */
+  async function detectTsEngine() {
+    try {
+      const resp = await fetch(TS_ENGINE_FLAG, { cache: "no-store" });
+      if (!resp.ok) return false;
+      const text = String(await resp.text()).trim().toLowerCase();
+      return text === "ts" || text === "typescript";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** 建 Worker 并等它把 sql.js + 引擎都加载完（失败只 reject，不重试） */
+  function ensureTsEngine() {
+    if (tsEngineReady) return tsEngineReady;
+    tsEngineReady = new Promise((resolve, reject) => {
+      let settled = false;
+      const settleOk = () => {
+        if (settled) return;
+        settled = true;
+        resolve(true);
+      };
+      const settleFail = (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      let worker;
+      try {
+        worker = new Worker(TS_ENGINE_ENTRY);
+      } catch (err) {
+        settleFail(err);
+        return;
+      }
+      tsEngineWorker = worker;
+      worker.onerror = (event) => {
+        const message = (event && event.message) || "TS 引擎 Worker 出错";
+        pushDiag("error", "TS 引擎 Worker 出错：" + message);
+        settleFail(new Error(message));
+        settlePending(new Error(message));
+      };
+      worker.onmessage = (event) => {
+        const msg = event && event.data;
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type === "ready") {
+          pushDiag("info", "TS 引擎 Worker 已就绪");
+          settleOk();
+          return;
+        }
+        if (msg.type === "progress") {
+          emitProgress(msg.line);
+          return;
+        }
+        if (msg.type === "result") {
+          settlePending(null, msg.payload);
+          return;
+        }
+        if (msg.type === "error") {
+          const err = new Error(msg.message || "计算失败");
+          if (!settled) settleFail(err);
+          settlePending(err);
+        }
+      };
+      // 15 秒还没 ready 就当不可用（真机上几千毫秒都可能，别设太紧）
+      setTimeout(() => settleFail(new Error("TS 引擎 Worker 启动超时")), 15000);
+    });
+    return tsEngineReady;
+  }
+
+  function settlePending(err, payload) {
+    const pending = tsPending;
+    tsPending = null;
+    if (!pending) return;
+    if (err) pending.reject(err);
+    else pending.resolve(payload);
+  }
+
+  /** 一次计算：库字节交过去，进度走 emitProgress，结果原样返回（与桌面同结构） */
+  async function tsCalculate(payload) {
+    await ensureTsEngine();
+    // 串行化：界面会连着调（主结果 + 各个种子预设），Worker 侧一次只算一个
+    const run = tsQueue.then(
+      () =>
+        new Promise((resolve, reject) => {
+          const db = window.__fgoDb;
+          if (!db) {
+            reject(new Error("本地数据库还没就绪"));
+            return;
+          }
+          // 引擎只读静态数据；给它一份独立副本，transfer 过去（主线程这份随即失效，无妨）
+          let bytes;
+          try {
+            bytes = db.export();
+          } catch (err) {
+            reject(err);
+            return;
+          }
+          tsPending = { resolve, reject };
+          try {
+            tsEngineWorker.postMessage(
+              { type: "calc", dbBytes: bytes.buffer, request: payload },
+              [bytes.buffer],
+            );
+          } catch (err) {
+            tsPending = null;
+            reject(err);
+          }
+        }),
+    );
+    tsQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /** 取消：TS Worker 走"置标志"（引擎让步时读到），Python 走 Chaquopy 插件 */
+  function cancelTsEngine() {
+    if (!tsEngineWorker || !tsPending) return false;
+    try {
+      tsEngineWorker.postMessage({ type: "cancel" });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 诊断日志（本地文件 + 内存环形缓冲，界面设置里可读取/复制）
   //   记：脚本报错、未处理的 Promise、初始化失败、引擎报错、头像下载失败、保存失败
   //   注意：安卓没有"程序目录"给用户翻，所以不做成文件给用户找，而是让界面能直接复制
@@ -148,6 +290,8 @@
   // 平台能力：安卓版暂不支持的部分给出明确提示（而不是静默失败）
   api.calculate = makeDeferred("calculate");
   api.cancelEngine = () => {
+    // TS 引擎：置标志，引擎在搜索循环里让步时读到 ⇒ 超级模式体面收尾、普通模式抛「已取消」
+    if (cancelTsEngine()) return Promise.resolve({ ok: true, graceful: true });
     const cap = window.Capacitor;
     const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
     if (plugin && typeof plugin.cancel === "function") {
@@ -891,8 +1035,31 @@
       },
     });
 
-    // 引擎：经 Chaquopy 跑真 CPython；协议与桌面一致（一份请求 JSON → 一份结果 JSON）
+    // 引擎选型（灰度开关）：`engine.txt` = ts 就走 TS Worker，否则 Chaquopy
+    tsEnabled = await detectTsEngine();
+    pushDiag("info", tsEnabled ? "计算引擎：TypeScript Worker" : "计算引擎：Python（Chaquopy）");
+
+    // 引擎：TS 走 Worker（与桌面同一份代码）；否则经 Chaquopy 跑真 CPython
+    // 两条路的协议一样：一份请求对象 → 一份结果对象
     bridge.calculate = async (payload) => {
+      if (tsEnabled && !tsEngineFailure) {
+        try {
+          await ensureTsEngine();
+        } catch (err) {
+          tsEngineFailure = (err && err.message) || String(err);
+          tsEnabled = false;
+          pushDiag("error", `TS 引擎不可用，回退 Python：${tsEngineFailure}`);
+        }
+      }
+      if (tsEnabled && !tsEngineFailure) {
+        emitProgress("正在计算...");
+        try {
+          return await tsCalculate(payload);
+        } catch (err) {
+          pushDiag("error", `引擎计算失败：${(err && err.message) || err}`);
+          throw err;
+        }
+      }
       try {
         const cap = window.Capacitor;
         const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
