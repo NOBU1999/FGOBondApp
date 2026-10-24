@@ -176,6 +176,12 @@ export class SearchCancelled extends Error {}
 export interface SearchHooks {
   upperBound?: (...args: Parameters<typeof relaxedScoreUpperBound>) => number;
   /**
+   * 每次算完一套阵容的上界后回调，给"合法性硬检查"用：`ub` = 现在用的精确界（T2），
+   * `cheap` = 光看"Σ 前 K 大礼装项"的便宜界（T1）。理论上恒有 `cheap ≥ ub`；
+   * 断言它、并统计"按 cheap 剪枝还能活下来多少"，就是决定要不要把 T1 接到主循环之前的唯一依据。
+   */
+  onBound?: (info: { ub: number; cheap: number }) => void;
+  /**
    * 每隔多少毫秒「让出一次事件循环」。
    *
    * 只给**网页宿主**用（安卓 WebView 的 Worker）：那边点"停止"是主线程 postMessage 过来，
@@ -526,6 +532,43 @@ export function comboRelaxedScore(combo: number[], craftScores: Map<number, numb
   return pySum(parts);
 }
 
+/**
+ * 便宜礼装项（T1 的核心）：只取"每个空槽能拿到的最好分数"，**完全忽略 Cost 与礼装唯一性**。
+ *
+ * 口径（可证明是上界）：
+ *   · 取所有候选礼装的松弛分，降序；
+ *   · 第 i 个槽的上界 = max(第 i 大的礼装分, 可重复礼装里的最大分)；
+ *     —— 可重复礼装（通用礼装那类）能占任意多个槽，所以每个槽都能拿到它的分；
+ *   · 累加 K 个槽。Cost、槽位限制、非可重复礼装的唯一性一律不管（放松只会高估）。
+ *
+ * 为什么它一定 ≥ 精确界：任何合法组合里的每张礼装，要么是可重复的（分数 ≤ 可重复最大值），
+ * 要么是非可重复的（互不相同 ⇒ 第 i 张 ≤ 第 i 大），逐项对上就压不住。
+ */
+export function cheapCraftBound(
+  ctx: DataContext,
+  craftScores: Map<number, number>,
+  freeSlots: number,
+): number {
+  const slots = Math.max(0, Math.trunc(freeSlots));
+  if (slots === 0) return 0;
+  const repeatableIds = repeatableCraftIds(ctx);
+  let repMax = 0;
+  const values: number[] = [];
+  for (const [cid, v] of craftScores) {
+    const val = Number(v) || 0;
+    if (val <= 0 && !repeatableIds.has(cid)) continue;
+    if (repeatableIds.has(cid) && val > repMax) repMax = val;
+    values.push(val);
+  }
+  values.sort((a, b) => b - a);
+  let total = 0;
+  for (let i = 0; i < slots; i++) {
+    const distinct = i < values.length ? values[i] : 0;
+    total += distinct > repMax ? distinct : repMax;
+  }
+  return total;
+}
+
 export function relaxedScoreUpperBound(
   ctx: DataContext,
   req: CalculationRequest,
@@ -540,6 +583,8 @@ export function relaxedScoreUpperBound(
   zeroCostSlots: boolean[] | null = null,
   fixedBondCraftIds: number[] | null = null,
   exactCraftScore: number | null = null,
+  /** 用便宜礼装项（T1）代替精确项 —— 只给合法性检查与将来的"两步筛选"用；生产默认 false */
+  cheapCraft = false,
 ): number {
   const repeatableIds = repeatableCraftIds(ctx);
   let baseline = relaxedBaseScore(ctx, req, players);
@@ -547,7 +592,9 @@ export function relaxedScoreUpperBound(
     baseline += relaxedCraftScore(ctx, req, ctx.crafts.get(cid), players);
   }
   let bestCraftScore: number;
-  if (exactCraftScore !== null) {
+  if (cheapCraft) {
+    bestCraftScore = cheapCraftBound(ctx, craftScores, freeSlotsCount);
+  } else if (exactCraftScore !== null) {
     bestCraftScore = exactCraftScore;
   } else {
     const scores: number[] = [];
@@ -1594,6 +1641,26 @@ export async function searchTopTeams(
           exact,
         );
         if (ubOut !== null) ubOut.set(servantSetKey, ub);
+        if (hooks?.onBound) {
+          // 同一次调用的便宜界（T1）：只把礼装项换成"Σ 前 K 大"，其余口径一模一样
+          const cheap = ubFn(
+            ctx,
+            req,
+            dpPlayers,
+            craftScores,
+            dpCombos,
+            supportTopOptions,
+            supportSecondOptions,
+            craftPool,
+            freeSlotsCount,
+            ceBudget,
+            freeBondZeroCost,
+            bp.fixed_bond_craft_ids,
+            exact,
+            true,
+          );
+          hooks.onBound({ ub, cheap });
+        }
         if (traitOut !== null && dpCombos.length > 0) {
           for (const [, combo0] of dpCombos) {
             for (const cid0 of combo0) {
