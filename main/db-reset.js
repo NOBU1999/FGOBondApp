@@ -15,7 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const database = require("./database");
 const { getDbPath } = require("./paths");
-const { PythonProcess } = require("./python-process");
+const { createEngine } = require("./engine-factory");
 
 // 静态数据表（按外键依赖顺序清空）
 const STATIC_TABLES = [
@@ -126,7 +126,7 @@ async function resetStaticData({ onProgress } = {}) {
   const cleared = clearStaticTables(dbPath);
 
   // 3) 强制重建（优先用本地缓存，缓存缺失时才联网）
-  const engine = new PythonProcess({ dbPath });
+  const engine = createEngine({ dbPath, mode: "update" });
   if (onProgress) engine.on("progress", (text) => onProgress(text));
   let engineResult = null;
   try {
