@@ -50,6 +50,10 @@ class EngineTsProcess extends EventEmitter {
         mode,
         payload: payload === undefined ? null : payload,
       },
+      // 堆上限：默认值（64 位约 4GB）不够极端形状用。实测「超级×10 + 结果条数 1000 + 359 人 Box」时
+      // **活堆只有 ~580MB，但分配太快、增量标记追不上** ⇒ 4.07GB 处直接 SIGABRT。
+      // 给到 6GB 同样的输入 139s 跑完（结果 10.920）。真更大的形状仍然会崩 —— 那是下面的错误文案负责说清楚。
+      resourceLimits: { maxOldGenerationSizeMb: 6144 },
     });
     this.worker = worker;
     this._stderrTail = "";
@@ -77,6 +81,12 @@ class EngineTsProcess extends EventEmitter {
 
     worker.on("error", (err) => {
       this._appendLog(String(err && err.stack ? err.stack : err));
+      // 内存耗尽：V8 是先 abort 再抛 ERR_WORKER_OUT_OF_MEMORY，两者都给一句人话
+      const message = String((err && err.message) || err);
+      if (/out of memory|heap limit|ERR_WORKER_OUT_OF_MEMORY|assembly failure/i.test(message)) {
+        this._finish(new Error("计算规模超出内存：请把「结果条数」调小，或把超级模式档位降一档"));
+        return;
+      }
       this._finish(err);
     });
 
@@ -87,7 +97,9 @@ class EngineTsProcess extends EventEmitter {
         this._finish(new Error("计算引擎没有返回输出"));
       } else {
         const tail = this._stderrTail.trim();
-        this._finish(new Error(tail || `计算引擎退出码 ${code}`));
+        // 非 0 退出且没有引擎自己的输出 ⇒ 多半是 V8 内存耗尽被 abort（拿不到 message）
+        const hint = "计算规模超出内存：请把「结果条数」调小，或把超级模式档位降一档";
+        this._finish(new Error(tail || hint));
       }
     });
   }
