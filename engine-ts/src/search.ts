@@ -34,6 +34,7 @@ import {
 } from "./team.ts";
 import { evaluateTeam, pyRound } from "./evaluate.ts";
 import { pySum } from "./pysum.ts";
+import { getPlatform } from "./platform.ts";
 import {
   RelaxedPlayer,
   craftComboActualCost,
@@ -1830,7 +1831,19 @@ export async function searchTopTeams(
   }
 
   const fullCombos: [number, number[]][] = [...craftCombosWithCost];
-  const servantSweepLimit = defaultSweepLimit(req);
+  // 内存安全阀：网页宿主（安卓 WebView Worker）的堆抬不上去，极端形状会把 worker 打崩。
+  // 超上限就裁剪本轮枚举量，并在结果里标 `workCapped`、进度里说清楚——宁可少搜一点也不要崩。
+  const rawSweepLimit = defaultSweepLimit(req);
+  const platformCap = getPlatform().maxWorkPerRound;
+  const workCap = Number.isFinite(platformCap) && Number(platformCap) > 0 ? Number(platformCap) : Infinity;
+  const servantSweepLimit = Math.min(rawSweepLimit, workCap);
+  const workCapped = servantSweepLimit < rawSweepLimit;
+  if (workCapped) {
+    report(
+      `本次搜索规模按设备内存上限裁剪（每轮最多 ${servantSweepLimit.toLocaleString("en-US")} 个阵容；` +
+        `可把「结果条数」或超级档位调小以恢复完整搜索）`,
+    );
+  }
 
   // 第一轮：静态分候选池，等距抽样建 Top 基线
   const firstDeadline = start + Math.min(timeoutSeconds, Math.max(5.0, timeoutSeconds * 0.5));
@@ -2530,6 +2543,8 @@ export async function searchTopTeams(
     top20: mergedItems,
     sortMode: req.sort_mode,
     truncated,
+    // 网页宿主按内存上限裁剪过本轮枚举量（桌面恒为 false）——界面可据此提示"手机上没搜满"
+    ...(workCapped ? { workCapped: true } : {}),
     _elapsed: pyRound(nowSec() - start, 3),
     _processed: processedTotal,
     _verifyPhase: {

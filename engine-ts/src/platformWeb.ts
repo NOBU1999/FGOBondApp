@@ -71,6 +71,15 @@ export const webPlatform: Platform = {
     return g.__FGO_ENV__?.[key];
   },
 
+  // 内存安全阀：手机 WebView 的 Worker 堆抬不上去（桌面是靠 `resourceLimits` 给到 6GB），
+  // 极端形状（超级×10 + 结果条数 1000 + 359 人 Box）每个 worker 要枚举 37 万阵容 ⇒ 会把 worker 打崩。
+  // 12 万 ≈ 桌面实测"活堆 227MB / RSS 3.2GB"那一档的一半，留足余量；宿主可用 FGO_WEB_WORK_CAP 覆盖。
+  maxWorkPerRound: (() => {
+    const g = globalThis as any;
+    const raw = Number(g.__FGO_ENV__?.FGO_WEB_WORK_CAP ?? 120000);
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 120000;
+  })(),
+
   readFileBytes(): Uint8Array {
     throw new Error("网页宿主没有文件系统：请由宿主读取库字节并调用 registerDbBytes()");
   },

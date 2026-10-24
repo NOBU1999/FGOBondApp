@@ -43,6 +43,17 @@ export interface Platform {
 
   // ---- sql.js ----
   loadSqlJs(opts?: SqlJsOptions): Promise<any>;
+
+  /**
+   * 每轮最多枚举多少个阵容（内存安全阀；不设 = 不限）。
+   *
+   * 为什么需要：极端形状（超级×10 + 结果条数 1000 + 359 人 Box）每轮要枚举 37 万个阵容，
+   * 桌面实测峰值 RSS 4.86GB —— 桌面可以把堆抬到 6GB，**WebView Worker 抬不了**，
+   * 而且那种时候崩的是整个 worker（玩家看到的是"卡死/闪退"）。
+   * ⇒ 网页宿主按平台给一个上限，超了就裁剪并在结果里标 `workCapped`、进度里说清楚
+   *   （宁可少搜一点并如实告知，也不要崩）。
+   */
+  readonly maxWorkPerRound?: number;
 }
 
 let CURRENT: Platform | null = null;
