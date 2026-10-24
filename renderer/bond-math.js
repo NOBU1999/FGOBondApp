@@ -6,7 +6,7 @@
  * 只用在同分替补这种"引擎没返回个体数值"的场合。抽出来才能拿引擎的现成结果
  * 逐位对拍（探针 `.temp/probe-bond-math-parity.cjs`），也能被渲染层与测试共用一份。
  *
- * 口径抄自 python-engine/engine/calculator.py：
+ * 口径与引擎的 calculator 一致：
  *   multiplier = (1 + 前排系数) × (1 + 通用 + 助战 + 特性 + 满绊25%×人数 + 活动 + 光环 + 个人)
  *   bondPoints = multiplier × 基础牵绊 + 固定值
  *   满绊且"自身参与收益"关闭（maxBond && !switch2）⇒ 该位倍率直接记 0

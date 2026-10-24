@@ -78,7 +78,7 @@ export const nodePlatform: Platform = {
 
   async loadSqlJs(opts: SqlJsOptions = {}): Promise<any> {
     if (SQL_MODULE) return SQL_MODULE;
-    const root = opts.appRoot ?? APP_ROOT ?? process.env.FGO_APP_ROOT ?? "D:/dsh-agent/fgo/FGOBondApp";
+    const root = opts.appRoot ?? APP_ROOT ?? process.env.FGO_APP_ROOT ?? process.cwd();
     const initSqlJs = loadInitSqlJs(root);
     const wasmPath = findSqlWasm(root);
     // 直接给字节：不依赖 locateFile / cwd / wasm 的 URL 解析

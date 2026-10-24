@@ -24,7 +24,7 @@ npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不
 界面（`renderer/`，将来是 `shared/ui/`）**只能**通过 `window.fgo.<方法>` 与宿主说话：
 
 - 不许 `require`、不许 `ipcRenderer`、不许直接读文件 / 起进程 / 弹系统菜单
-- 违规由 `npm run check:platform` 拦下（扫 `shared/`、`renderer/`、`python-engine/engine/`）
+- 违规由 `npm run check:platform` 拦下（扫 `shared/`、`renderer/`）
 
 **归属**三类：
 
@@ -118,12 +118,12 @@ npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不
 | 能力 | 桌面实现 | 网页 / 安卓实现 |
 |---|---|---|
 | 键值 / 数据存储 | SQLite（`db/fgo_data.db`） | 浏览器本地库（IndexedDB / OPFS）或原生 SQLite |
-| 引擎执行 | 子进程（`engine.exe`） | Web Worker + WASM |
+| 引擎执行 | 子进程 → 现为 `worker_threads` 里的 TS 引擎 | Web Worker + WASM（同一份 TS 代码） |
 | 进度推送 | IPC 事件 | `postMessage` |
 | 剪贴板 | Electron `clipboard` | `navigator.clipboard` + 兜底（选中文本提示用户手动复制） |
 | 文件导入 | 对话框 / 粘贴文本 | `<input type="file">` / 粘贴 |
 | 文件导出 | 保存对话框 | 浏览器下载（Blob） |
-| 联网更新数据 | Python `urllib` | 不做（随包发版） |
+| 联网更新数据 | TS 数据管线（`engine-ts/src/dataFetch.ts`） | 不做（随包发版） |
 | 自更新 | 解压覆盖程序目录（程序内只提供"检查更新"） | APK 覆盖安装；网页不涉及 |
 
 ## 4. 变更流程（阶段 3 之后生效）

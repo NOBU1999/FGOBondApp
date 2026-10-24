@@ -1,4 +1,4 @@
-// P2：请求模型与 JSON 解析（逐条对齐 python-engine/engine/models.py）
+// P2：请求模型与 JSON 解析（逐条对齐旧实现的 models）
 export const POSITIONS = [
   "front_left",
   "front_middle",

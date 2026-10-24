@@ -19,7 +19,7 @@
  *
  * 前置：
  *   - 需要 db/fgo_data.db（静态数据）。缺库时对应套件会 SKIP，不会误报通过。
- *   - engine 套件需要能跑 python（PYTHON 环境变量可覆盖解释器路径）。
+ *   - engine 套件会真的起一次引擎（`node engine-ts/src/main.ts --mode calculate`），约十几秒。
  *
  * 退出码：0 = 全部通过（含 SKIP）；1 = 有失败。
  */
@@ -372,10 +372,10 @@ async function runBridgeSuite() {
 // ---------------------------------------------------------------------------
 function runEngineOnce(request) {
   return new Promise((resolve, reject) => {
-    const python = process.env.PYTHON || "python";
-    const child = spawn(python, [path.join("python-engine", "engine_launcher.py"), "--mode", "calculate", "--db", DB_ARG], {
+    // 引擎只有 TS 一种实现：直接跑 engine-ts 的命令行入口（Node 直接执行 .ts）
+    const child = spawn(process.execPath, [path.join("engine-ts", "src", "main.ts"), "--mode", "calculate", "--db", DB_ARG], {
       cwd: ROOT,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
@@ -426,8 +426,7 @@ function runEngineOnce(request) {
  */
 function runEngineOnceViaFile(request) {
   return new Promise((resolve, reject) => {
-    const python = process.env.PYTHON || "python";
-    const script = path.join(ROOT, "python-engine", "engine_launcher.py");
+    const script = path.join(ROOT, "engine-ts", "src", "main.ts");
     mkdirSync(TMP_DIR, { recursive: true });
     const reqFile = path.join(TMP_DIR, "engine-req.json");
     const outFile = path.join(TMP_DIR, "engine-out.json");
@@ -438,10 +437,10 @@ function runEngineOnceViaFile(request) {
     const fdIn = openSync(reqFile, "r");
     const fdOut = openSync(outFile, "w");
     const fdErr = openSync(errFile, "w");
-    const child = spawn(python, [script, "--mode", "calculate", "--db", DB_ARG], {
+    const child = spawn(process.execPath, [script, "--mode", "calculate", "--db", DB_ARG], {
       cwd: ROOT,
       stdio: [fdIn, fdOut, fdErr],
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      env: { ...process.env },
     });
     const cleanup = () => {
       for (const fd of [fdIn, fdOut, fdErr]) {

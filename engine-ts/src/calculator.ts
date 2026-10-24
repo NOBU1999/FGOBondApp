@@ -1,5 +1,5 @@
 // P2 求值层（第一批）：数据上下文 + 特性掩码 + 特性收益表
-// 逐条对齐 python-engine/engine/calculator.py 的 1~425 行与 TraitBenefitTable。
+// 逐条对齐旧 Python 实现（v0.3.0 前）的 calculator 与 TraitBenefitTable。
 import { STAGES } from "./constants.ts";
 import { allRows, getMeta, openDatabase } from "./database.ts";
 

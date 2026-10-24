@@ -1361,7 +1361,7 @@ const App = {
      * 礼装格"新礼装的图 + 旧礼装的名字"（2026-10-21 修 Cost 时一并查出）。
      * 名字这类**纯展示**字段客户端能自己查库补，所以这里按 id 重取；
      * 而 bonusDetail / traitHits 这类**算出来的**字段客户端算不出来，只能保持原样
-     * （同分替补由恒等式展开、数值本与本题相同，见 python-engine/engine/search.py 那段注释）。
+     * （同分替补由恒等式展开、数值本与本题相同，见 search 模块那段注释）。
      */
     displayedMemberWithSlot(m, servantId, craftId, secondCraftId) {
       const next = { ...m, servantId, craftId, secondCraftId };
@@ -3023,7 +3023,7 @@ const App = {
       // 安卓的系统文件选择器**只认 MIME 类型**：Capacitor 会把 accept 里的扩展名翻成 MIME，
       // 翻不出来的（.php 不在安卓的 MimeTypeMap 里）会被直接丢掉，
       // 最后只剩 text/plain + application/json 两个过滤条件；
-      // 而抓包文件通常被系统认成 octet-stream → 在选择器里是灰的、点不动（玩家反馈的问题）。
+      // 而抓包文件通常被系统认成 octet-stream → 在选择器里是灰的、点不动。
       // 所以安卓上放开过滤（*/*），让所有文件都能选；桌面端保留扩展名过滤，方便找人。
       let android = false;
       try { android = !!(this.isAndroidPlatform && this.isAndroidPlatform()); } catch (_) { android = false; }

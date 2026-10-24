@@ -1,4 +1,4 @@
-// P3.5 数据管线：Atlas Academy 拉取 + 全量建库（对齐 python-engine/engine/data_fetcher.py）
+// P3.5 数据管线：Atlas Academy 拉取 + 全量建库（对齐旧实现的 data_fetcher）
 //
 // 判据与引擎侧一致：**同样输入 ⇒ 同样的库**。网络那几条路（分段 Range + 分段重试、
 // HEAD 元信息、灵衣名 raw 单从者接口）在离线闸门里被关掉，其余全部走真实实现。
@@ -32,9 +32,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export interface DataConfig {
   /** FGOBondApp 根 */
   projectRoot: string;
-  /** `python-engine/engine/data`（译名表、阶段特性补丁）或将来 engine-ts 的 data 目录 */
+  /** 仓库 `data/`（译名表、活动名补充、阶段特性补丁） */
   engineDataDir: string;
-  /** `.cache/raw` */
+  /** `<应用根>/.cache/raw` */
   rawCacheDir: string;
   /** 默认库路径 */
   dbPath: string;
@@ -44,8 +44,8 @@ export interface DataConfig {
 
 export const dataCfg: DataConfig = {
   projectRoot: path.resolve(HERE, "..", ".."),
-  engineDataDir: path.resolve(HERE, "..", "..", "python-engine", "engine", "data"),
-  rawCacheDir: path.resolve(HERE, "..", "..", "python-engine", ".cache", "raw"),
+  engineDataDir: path.resolve(HERE, "..", "..", "data"),
+  rawCacheDir: path.resolve(HERE, "..", "..", ".cache", "raw"),
   dbPath: process.env.FGO_DB_PATH
     ? process.env.FGO_DB_PATH
     : path.resolve(HERE, "..", "..", "db", "fgo_data.db"),

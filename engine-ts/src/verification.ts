@@ -1,4 +1,4 @@
-// P3.5+：验证串**生成**链路（对齐 python-engine/engine/verification.py 的生成部分）
+// P3.5+：验证串**生成**链路（对齐旧实现的 verification 生成部分）
 //
 // 只搬生成侧：应用只"生成 + 复制"验证串（`renderer/app.js` 无导入入口），
 // 解码只发生在开发侧 `reproduce_verification.py`（依赖 pyppmd + cryptography，不进仓库）。

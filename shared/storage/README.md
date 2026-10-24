@@ -13,7 +13,7 @@ shared/storage/           ← 接口（本目录）
 platforms/win/...         ← better-sqlite3 / node:sqlite 实现
 platforms/web/...         ← IndexedDB / OPFS 实现（阶段 4）
 platforms/android/...     ← 原生 SQLite 实现（阶段 5）
-python-engine/engine/database.py  ← 引擎侧的只读实现（现成，阶段 1 归位）
+engine-ts/src/database.ts        ← 引擎侧的只读实现（sql.js）
 ```
 
 ## 接口分两组（初步划分，阶段 1 细化）
@@ -30,7 +30,7 @@ python-engine/engine/database.py  ← 引擎侧的只读实现（现成，阶段
 1. 接口方法**只能是异步**（浏览器侧必然是异步；桌面侧用同步实现包一层 Promise 即可）。
 2. 入参出参**必须是可 JSON 序列化的普通对象**（不许传 SQLite 语句、游标、行对象）。
 3. 不许把 SQL 语句泄漏到接口外面（业务层只说"要什么"，不说"怎么查"）。
-4. 引擎侧（Python）只需要 A 组 + 只读访问，保持现状即可。
+4. 引擎侧（TS）只需要 A 组 + 只读访问，保持现状即可。
 
 ## 待办（阶段 1）
 

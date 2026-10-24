@@ -13,23 +13,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-python-engine/.cache/
-python-engine/.pytest_cache/
 
 # ---------- 鏋勫缓/鎵撳寘浜х墿 ----------
 release/
 dist/
+.cache/
 build/
 *.exe
 *.tgz
-python-engine/build/
-python-engine/dist/
-python-engine/engine.exe
-python-engine/err_*.txt
-python-engine/out_*.json
-python-engine/update*_err.txt
-python-engine/update*_out.txt
-python-engine/*.log
 
 # ---------- 鏈湴鏁版嵁搴?----------
 db/*.db
@@ -71,10 +62,6 @@ scripts/dev-tests/
 *bilibiligame.net*
 FGO鏂规#*.json
 # 浠呮湰鏈轰娇鐢ㄧ殑楠岃瘉涓插鐜板伐鍏凤紝涓嶉殢鍏紑浠撳簱鍙戝竷
-python-engine/reproduce_verification.py
-python-engine/verification_server.py
-python-engine/verification_ui.html
-python-engine/start_verification_server.bat
 
 # ---------- 涓存椂/娌欑 ----------
 .pyinstaller-tmp/

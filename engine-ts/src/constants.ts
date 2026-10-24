@@ -1,4 +1,4 @@
-// P2 数据层 / 求值层：常量（对应 python-engine/engine/constants.py）
+// P2 数据层 / 求值层：常量（对应旧实现的 constants）
 // 不直接引用 `process`：网页/Worker 里没有它（平台层还没初始化时也要能取默认值）
 function envOr(key: string, dflt: string): string {
   try {

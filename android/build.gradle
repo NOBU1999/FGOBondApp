@@ -14,7 +14,7 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'com.google.gms:google-services:4.4.4'
-        // [v0.3.0 TS-only] 已移除 Chaquopy：APK 只带 TypeScript 引擎（引擎源码见 engine-ts/）
+        // APK 只带 TypeScript 引擎（源码见 engine-ts/），不需要 CPython 运行时
 
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files

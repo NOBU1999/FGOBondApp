@@ -24,16 +24,18 @@
 |---|---|
 | 桌面壳 / IPC / SQLite | Electron |
 | 前端 UI | Vue 3（全局构建，无打包器） |
-| 数据构建 / 收益计算 | Python 3 |
-| 本地存储 | SQLite |
+| 数据构建 / 收益计算 | TypeScript（同一份代码跑在桌面的 `worker_threads` 与安卓的 Web Worker 里） |
+| 本地存储 | SQLite（WASM，sql.js） |
 
 ```text
 .
 ├─ main/                 # Electron 主进程（IPC / 数据 / 更新检查）
 ├─ preload.js            # 渲染进程桥接
 ├─ renderer/             # 前端 UI
-├─ python-engine/
-│   └─ engine/           # Python 数据与计算引擎
+├─ engine-ts/
+│   ├─ src/              # 数据管线 + 计算引擎（TypeScript）
+│   └─ entry/            # 桌面 worker / 安卓 web worker 入口
+├─ data/                 # 随包数据表（译名表、阶段特性补丁）
 ├─ scripts/              # 数据/翻译/资源/发布辅助脚本
 ├─ docs/                 # 开发与集成文档
 └─ package.json
@@ -42,9 +44,9 @@
 ## 环境要求
 
 - Windows
-- Node.js（建议 18+）
-- Python 3.10+
+- Node.js（建议 20+；引擎直接用 `node` 执行 `.ts`，不需要额外构建步骤）
 - 首次构建本地数据时需要网络连接
+- 可选：Python 3（只有几个开发辅助脚本用到，例如补头像、生成译名表）
 
 ## 快速开始
 
@@ -59,16 +61,11 @@ npm install
 首次运行需要从 Atlas Academy 下载 JP 数据并生成数据库：
 
 ```powershell
-cd python-engine
-
-# 构建从者/礼装 SQLite 数据库
-python -m engine.data_fetcher --region JP
-
-# 生成活动加成表
-python -c "from engine.event_bonus import update_event_bond_bonus; update_event_bond_bonus('JP', r'..\db\fgo_data.db', use_cache=True)"
+# 拉数据 + 全量建库（同时生成活动加成表）
+node engine-ts/src/main.ts --mode update --db db/fgo_data.db
 ```
 
-Atlas 大文件会缓存到 `python-engine/.cache/raw/`，后续更新会更快。
+Atlas 大文件会缓存到 `.cache/raw/`，后续更新会更快（删掉会全量重下）。
 
 ### 3. 启动应用
 
@@ -76,7 +73,7 @@ Atlas 大文件会缓存到 `python-engine/.cache/raw/`，后续更新会更快�
 npm start
 ```
 
-开发模式会直接调用 Python 源码引擎，无需预先打包 `engine.exe`。
+开发模式直接用仓库里的 TS 引擎源码，不需要预先打包（出包时才需要 `npm run build:engine-ts`）。
 
 ### 4. 可选：补齐从者头像
 
@@ -108,11 +105,8 @@ python scripts/fetch_missing_avatars.py --region JP --db db/fgo_data.db
 本地打包参考：
 
 ```powershell
-# 1) 构建 Python 引擎
-cd python-engine
-python -m PyInstaller --clean --noconfirm pyinstaller.spec
-Copy-Item .\dist\engine.exe .\engine.exe
-cd ..
+# 1) 打包引擎（esbuild → dist/engine-ts/*，出包脚本也会自动判断要不要重打）
+npm run build:engine-ts
 
 # 2) 构建 Electron 便携目录
 npm run dist

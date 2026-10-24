@@ -185,7 +185,7 @@ function verifyAppDir(appDir) {
   console.log(`        体积 ${(totalBytes / 1048576).toFixed(1)} MB`);
 
   for (const must of [
-    // v0.3.0 起发布包只带 TypeScript 引擎（不再带 python-engine/engine.exe）
+    // 发布包只带 TypeScript 引擎（v0.3.1 起仓库里也没有 Python 侧了）
     "dist/engine-ts/worker.mjs",
     "dist/engine-ts/sql-wasm.wasm",
     "resources/app.asar",

@@ -46,7 +46,7 @@
         ],
         "top20CostUsedLte": 120,
         "top20MultiplierGt": 0,
-        "tokenMatches": "^(FGOBONDV3\\..+|)$"
+        "tokenMatches": "^(FGOBONDV3Z?\\..+|)$"
       }
     },
     {

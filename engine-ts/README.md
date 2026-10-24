@@ -1,16 +1,16 @@
-# engine-ts —— 引擎的 TypeScript 版（与 `python-engine/` 同源同判据）
+# engine-ts —— 引擎本体（唯一的实现）
 
-> ✅ **2026-10-24 起这是默认引擎**（桌面 `main/engine-factory.js` 默认 `ts`，安卓随包 `engine.txt` 写 `ts`）。
-> 想退回 Python：`FGO_ENGINE=python`，或在应用根放 `engine-ts/engine.txt` 内容 `python`。
-> ⚠️ 灰度收窄仍在：`check` / `update`（联网 + 写库）继续走 Python，`FGO_ENGINE_ALL=1` 才全切；
-> **v0.3.0 删掉 Python 侧时这两条一起改**（清单见 `文档\活跃\方案-引擎TS重写.md` §28.3）。
+> ✅ **这是唯一的引擎**（v0.3.0 起默认；v0.3.1 起仓库里已经没有 Python 侧了）。
+> 桌面跑 `entry/worker.ts`（`worker_threads`），安卓跑 `entry/web.ts`（WebView 里的经典 Worker）；
+> 计算 / `check` / `update` / 验证串**全部**在这里。
+> 想当"老行为基线"对拍：Python 实现已从仓库移除，只在开发侧本地归档（含 `engine.exe` 与解串脚本），**不再维护**。
 
 ## 结构
 
 ```
 src/         22 个源文件（求值 / 上界 / 建队 / 池 / 主流程 / 数据管线 / 验证串 / 平台层）
 entry/       worker.ts（桌面 worker_threads）、web.ts（安卓 WebView Worker，浏览器目标）
-tests/       engine-units.ts —— 11 项零件级断言（9 项对齐 python-engine/tests/engine_units.py，
+tests/       engine-units.ts —— 11 项零件级断言（9 项对齐旧实现，
              另 2 项是本侧特有的上界性质：礼装项 ≥ 整数最优、便宜界 ≥ 精确界）
 ```
 
@@ -47,4 +47,4 @@ node engine-ts/tests/engine-units.ts --only=dp
 
 只生成、不解码 PPMd/Fernet：TS 一律生成 `FGOBONDV3Z.`（zlib + Base64URL），
 `verification.decrypt_token` 先判该前缀 ⇒ 任何旧解码端都能读。
-历史串（V1/V2/V3）仍由开发侧 `python-engine/reproduce_verification.py` 解（不进包、不删）。
+历史串（V1/V2/V3）的解码实现**不随仓库发布**（只在开发侧本地保留，由维护者代跑）。

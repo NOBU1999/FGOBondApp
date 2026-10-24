@@ -6,7 +6,7 @@
  * 扫描范围：
  *   shared/              —— 公用区（跨平台共用代码，含将来搬进来的界面）
  *   renderer/            —— 当前共用界面（阶段 2 在这里改，阶段 4 搬进 shared/ui/）
- *   python-engine/engine/ —— 计算引擎核心（要能搬进浏览器 WASM）
+ *   （引擎侧自 v0.3.1 起只有 engine-ts/，它有自己的平台层，不在这里扫）
  *
  * 用法：
  *   node scripts/check_platform_leaks.mjs            # 报告；有「错误级」则退出码 1
@@ -41,12 +41,6 @@ const TARGETS = [
     lang: "js",
     exts: [".js", ".mjs", ".cjs", ".ts", ".vue", ".html", ".css"],
   },
-  {
-    dir: "python-engine/engine",
-    label: "计算引擎",
-    lang: "py",
-    exts: [".py"],
-  },
 ];
 
 const SKIP_DIRS = new Set([
@@ -70,12 +64,7 @@ const ALLOW_MARK = "platform-ok";
  * 已知的平台专属文件：整文件豁免，但会在报告里单独列出来（保持可见，不静默忽略）。
  * 目标是逐步把这些文件挪出共用/核心目录，而不是永久豁免。
  */
-const EXEMPT_FILES = new Map([
-  [
-    "python-engine/engine/data_fetcher.py",
-    "引擎侧联网下载层：只在「更新数据」时用，属平台专属能力；待在阶段 3/4 挪出引擎核心",
-  ],
-]);
+const EXEMPT_FILES = new Map([]);
 
 /** level: error = 必须修；warn = 可以先放着，属于「该走适配器」的提醒 */
 const RULES = [
@@ -193,63 +182,6 @@ const RULES = [
     hint: "桌面用 shell.openExternal，安卓用系统浏览器；走平台能力。",
   },
 
-  // ---------- Python / 引擎 ----------
-  {
-    lang: "py",
-    level: "error",
-    name: "PyInstaller 打包假设",
-    re: /sys\._MEIPASS|pyinstaller/i,
-    hint: "引擎核心要能在浏览器 WASM 里跑，不许依赖打包器行为。",
-  },
-  {
-    lang: "py",
-    level: "error",
-    name: "子进程",
-    re: /^\s*(import|from)\s+subprocess\b|\bsubprocess\./m,
-    hint: "引擎不许自己起进程。",
-  },
-  {
-    lang: "py",
-    level: "error",
-    name: "系统命令",
-    re: /os\.system\s*\(|os\.popen\s*\(/,
-    hint: "引擎不许调系统命令。",
-  },
-  {
-    lang: "py",
-    level: "error",
-    name: "Windows 专属 API",
-    re: /\bwinreg\b|\bwin32com\b|ctypes\.windll/,
-    hint: "Windows 专属能力不能进引擎核心。",
-  },
-  {
-    lang: "py",
-    level: "error",
-    name: "解释器路径假设",
-    re: /sys\.executable/,
-    hint: "WASM 环境下没有 sys.executable。",
-  },
-  {
-    lang: "py",
-    level: "error",
-    name: "桌面 GUI / 浏览器库",
-    re: /\btkinter\b|\bpyautogui\b|\bwebbrowser\b/,
-    hint: "引擎是纯计算进程，不许带界面。",
-  },
-  {
-    lang: "py",
-    level: "warn",
-    name: "引擎内直连网络",
-    re: /\burllib\b|\brequests\b|\bsocket\b|http\.client/,
-    hint: "只在数据更新时联网（data_fetcher.py，平台专属）；核心计算路径不许联网。",
-  },
-  {
-    lang: "py",
-    level: "warn",
-    name: "直接写文件",
-    re: /open\s*\(\s*['"][^'"]+['"]\s*,\s*['"][wax]/,
-    hint: "写盘要走存储接口；WASM 下只有虚拟文件系统。",
-  },
 ];
 
 /** 纯注释行不算泄漏（注释里提到 Electron / urllib 是文档说明，不是依赖） */

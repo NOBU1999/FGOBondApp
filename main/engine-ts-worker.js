@@ -9,7 +9,7 @@ const { getAppRoot } = require("./paths");
 /**
  * TypeScript 计算引擎（`engine-ts`）的宿主封装。
  *
- * 与 `PythonProcess` **同一套对外接口**（calculate / check / update / stop / stderrTail，
+ * 与旧实现 **同一套对外接口**（calculate / check / update / stop / stderrTail，
  * 以及 `progress` / `error` 事件），所以上层（ipc-handlers / db-reset）只需换构造处。
  *
  * 实现差异：不是 spawn 子进程，而是 `worker_threads` 里跑 `dist/engine-ts/worker.mjs`；
@@ -24,7 +24,7 @@ class EngineTsProcess extends EventEmitter {
     this._settled = false;
   }
 
-  /** 引擎日志尾部：上层失败时拿它写诊断日志（与 PythonProcess 同口径） */
+  /** 引擎日志尾部：上层失败时拿它写诊断日志（与旧实现同口径） */
   get stderrTail() {
     return this._stderrTail.trim();
   }
@@ -64,7 +64,7 @@ class EngineTsProcess extends EventEmitter {
       if (msg.type === "progress") {
         const line = String(msg.line ?? "").trim();
         if (line) {
-          // 与 PythonProcess 一致：日志尾部包含进度行（失败时要靠它定位）
+          // 与旧实现一致：日志尾部包含进度行（失败时要靠它定位）
           this._appendLog(line);
           this.emit("progress", line);
         }

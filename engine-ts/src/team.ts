@@ -1,4 +1,4 @@
-// P2b：队伍表示与求值（逐条对齐 python-engine/engine/calculator.py 的 425~920 行）
+// P2b：队伍表示与求值（逐条对齐旧实现的 calculator 425~920 行）
 import { FRONT_POSITIONS } from "./models.ts";
 import { STAGES, STAGE_ORDER } from "./constants.ts";
 import { CraftInfo, DataContext, traitMaskOf, type ServantInfo } from "./calculator.ts";

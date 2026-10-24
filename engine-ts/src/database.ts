@@ -1,4 +1,4 @@
-// P2 数据访问：用仓库已有的 sql.js（WASM SQLite）读库，对应 python-engine/engine/database.py 的查询部分
+// P2 数据访问：用仓库已有的 sql.js（WASM SQLite）读库，对应旧实现的 database 查询部分
 //
 // P4a：库字节与 sql.js 都走平台层（`src/platform.ts`），桌面/网页同一份代码。
 import { getPlatform } from "./platform.ts";

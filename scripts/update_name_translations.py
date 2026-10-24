@@ -5,7 +5,7 @@
 可改为从 chaldea-data GitHub 拉取（网络允许时）。
 
 输出：
-- python-engine/engine/data/name_translations.json
+- data/name_translations.json
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "python-engine" / "engine" / "data" / "name_translations.json"
+OUT = ROOT / "data" / "name_translations.json"
 NICE_TRAIT = "https://api.atlasacademy.io/export/CN/nice_trait.json"
 
 SECTIONS = ("svt_names", "ce_names", "costume_names", "event_names", "trait", "skill_detail")

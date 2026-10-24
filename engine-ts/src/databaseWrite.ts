@@ -148,7 +148,7 @@ let SQL_MODULE: any = null;
 /** 初始化 sql.js（异步，只做一次）。定位与 `database.ts` 一致：靠应用根目录的 package.json。 */
 export async function initSql(appRoot?: string): Promise<any> {
   if (SQL_MODULE) return SQL_MODULE;
-  const root = appRoot ?? process.env.FGO_APP_ROOT ?? "D:/dsh-agent/fgo/FGOBondApp";
+  const root = appRoot ?? process.env.FGO_APP_ROOT ?? process.cwd();
   const req = createRequire(path.join(root, "package.json"));
   const initSqlJs = req("sql.js");
   const wasmDir = path.dirname(req.resolve("sql.js/dist/sql-wasm.js"));

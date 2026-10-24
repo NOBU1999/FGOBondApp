@@ -37,7 +37,7 @@ const USER_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "c
 const USER_META_KEYS = ["server_region", "generic_bond_participation", "non_participating_craft_ids", "active_account_id"];
 
 // 静态数据表：与个人数据无关，随包发布 / 运行库刷新时整表替换
-// （必须与 python-engine/engine/data_fetcher.py 的 STATIC_DATA_TABLES、platforms/android/web-host/boot.js 的 STATIC_TABLES 一致）
+// （必须与 engine-ts/src/dataFetch.ts 的 STATIC_DATA_TABLES、platforms/android/web-host/boot.js 的 STATIC_TABLES 一致）
 const STATIC_TABLES = [
   "servants",
   "servant_stage_traits",
@@ -50,7 +50,7 @@ const STATIC_TABLES = [
 
 /**
  * 静态数据指纹：各静态表行数 + updated_at。
- * 与 python-engine 的 static_data_revision()、安卓 boot.js 的 staticDataRevision() 必须算出同一个值。
+ * 与 engine-ts 的 staticDataRevision()、安卓 boot.js 的 staticDataRevision() 必须算出同一个值。
  */
 function staticDataRevision(db) {
   const parts = [];

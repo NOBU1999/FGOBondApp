@@ -1,4 +1,4 @@
-// 引擎「零件级」断言（TS 版，对齐 python-engine/tests/engine_units.py 的 9 项）
+// 引擎「零件级」断言（11 项：9 项对齐旧实现，另 2 项是本侧特有的上界性质）
 // TS 侧另加 2 项（T1 便宜界：礼装项的单元不变量 + 与精确界的逐套对照），Python 版没有这两条。
 //
 // 为什么要有它：13 档指纹 / golden 对拍这些仪器只回答"结果变了没有"，
@@ -42,7 +42,7 @@ import {
 import { downloadToCache } from "../src/dataFetch.ts";
 import type { DataContext } from "../src/calculator.ts";
 
-const APP_ROOT = process.env.FGO_APP_ROOT ?? "D:/dsh-agent/fgo/FGOBondApp";
+const APP_ROOT = process.env.FGO_APP_ROOT ?? path.resolve(import.meta.dirname, "../..");
 const UB_SWEEP_SHAPES = 12;
 const UB_SWEEP_BUDGET_MS = 1200;
 

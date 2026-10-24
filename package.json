@@ -3,7 +3,7 @@
   "productName": "FGO牵绊推荐器",
   "version": "0.3.0",
   "androidDataRevision": 1,
-  "description": "FGO 牵绊收益推荐系统（Electron + Python 引擎）",
+  "description": "FGO 牵绊收益推荐系统（Electron + TypeScript 引擎）",
   "main": "main/index.js",
   "author": "FGOBond",
   "license": "AGPL-3.0-only",
@@ -17,9 +17,8 @@
     "android:sync": "npm run android:bundle && cap sync android",
     "android:debug": "npm run android:sync && cd android && gradlew assembleDebug",
     "android:release": "npm run android:sync && cd android && gradlew assembleRelease",
-    "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
     "build:engine-ts": "node scripts/build-engine-ts.mjs",
-    "dist": "npm run build:engine && npm run make:seed && electron-builder --win dir",
+    "dist": "npm run build:engine-ts && npm run make:seed && electron-builder --win dir",
     "make:seed": "node scripts/make_seed.cjs",
     "verify:package": "node scripts/verify_package.cjs",
     "android:bundle": "node scripts/android/build-web-bundle.mjs",
@@ -77,6 +76,10 @@
       {
         "from": "dist/engine-ts",
         "to": "dist/engine-ts"
+      },
+      {
+        "from": "data",
+        "to": "data"
       },
       {
         "from": "db/fgo_data.seed.db",

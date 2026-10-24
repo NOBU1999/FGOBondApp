@@ -6,7 +6,8 @@
 ----
 用户测试打包版时不想每次都重出包。这个脚本把「外面能改的部分」同步过去：
 
-  ✅ python-engine/engine.exe        引擎（PyInstaller 冻结版）
+  ✅ dist/engine-ts/*                引擎（TS worker / web bundle / sql.js）
+  ✅ data/*.json                     数据表（译名表、阶段特性补丁）
   ✅ db/fgo_data.seed.db             种子库（新装/首次运行用）
   ✅ db/event_bond_bonus.json        活动牵绊表
   ✅ resources/app.asar              界面 / 主进程（直接改写归档，不用重出包）
@@ -84,10 +85,15 @@ def asar_sync_files() -> list:
 
 # 直接放在 MyFGOApp 下的文件（不进 asar）
 PLAIN_FILES = [
-    ("python-engine/engine.exe", "python-engine/engine.exe"),
     ("db/fgo_data.seed.db", "db/fgo_data.seed.db"),
     ("db/event_bond_bonus.json", "db/event_bond_bonus.json"),
     ("使用说明.txt", "使用说明.txt"),
+]
+
+# 目录级同步：引擎产物、数据表（都是"外面能改、包里跟着变"的东西）
+PLAIN_DIRS = [
+    ("dist/engine-ts", "dist/engine-ts"),
+    ("data", "data"),
 ]
 
 def _latest_release_notes() -> list:
@@ -240,6 +246,31 @@ def main() -> int:
         if not args.check:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+
+    # ---- 1b) 目录级同步（引擎产物 / 数据表）----
+    for rel_src, rel_dst in PLAIN_DIRS:
+        src_dir = ROOT / rel_src
+        dst_dir = TEST_DIR / rel_dst
+        if not src_dir.exists():
+            skipped.append(f"{rel_dst}/（开发区没有 {rel_src}）")
+            continue
+        n = 0
+        for f in sorted(src_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            target = dst_dir / f.relative_to(src_dir)
+            same = target.exists() and target.stat().st_size == f.stat().st_size and \
+                target.read_bytes() == f.read_bytes()
+            if same:
+                continue
+            changes.append(f"{rel_dst}/{f.relative_to(src_dir)}  ←  {rel_src}/{f.relative_to(src_dir)}"
+                           f"  ({f.stat().st_size / 1024:.0f} KB)")
+            if not args.check:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
+            n += 1
+        if n == 0:
+            skipped.append(f"{rel_dst}/（内容一致）")
 
     for rel_src, rel_dst in HINT_FILES:
         src = ROOT / rel_src

@@ -60,31 +60,17 @@
   let initError = null;
 
   // -------------------------------------------------------------------------
-  // 计算引擎：TypeScript Worker（与桌面同一份代码）＋ Python（Chaquopy）回退
-  //   · 灰度开关：`./engine-ts/engine.txt` 内容为 `ts` 才走 Worker（P5 之后默认）
+  // 计算引擎：TypeScript Worker（与桌面同一份代码）—— **没有回退**
   //   · Worker 的 sql.js / wasm 从随包 `vendor/sqljs/` 取，库字节由主线程 `db.export()` 交过去
-  //   · 初始化失败自动回退 Python（老 APK 里没有 engine-ts 目录时也能跑）
+  //   · 初始化失败就**如实报错**并拒绝计算（没有别的引擎可退：
+  //     v0.3.1 起仓库里已经没有 Python 引擎，调不到的兜底只会把病因盖成"请重新安装"）
   // -------------------------------------------------------------------------
-  const TS_ENGINE_FLAG = "./engine-ts/engine.txt";
   const TS_ENGINE_ENTRY = "./platforms/android/web-host/engine-worker.js";
-  let tsEnabled = false;
   let tsEngineWorker = null;
   let tsEngineReady = null; // Promise：Worker 报 ready 之后 resolve
   let tsEngineFailure = null; // 初始化失败的原因（一旦失败就不再尝试）
   let tsPending = null; // { resolve, reject }：同一时刻只允许一个计算
   let tsQueue = Promise.resolve();
-
-  /** 灰度开关：读 engine.txt（读不到 = 不启用，老包里没这个文件） */
-  async function detectTsEngine() {
-    try {
-      const resp = await fetch(TS_ENGINE_FLAG, { cache: "no-store" });
-      if (!resp.ok) return false;
-      const text = String(await resp.text()).trim().toLowerCase();
-      return text === "ts" || text === "typescript";
-    } catch (_) {
-      return false;
-    }
-  }
 
   /** 建 Worker 并等它把 sql.js + 引擎都加载完（失败只 reject，不重试） */
   function ensureTsEngine() {
@@ -190,7 +176,7 @@
     return run;
   }
 
-  /** 取消：TS Worker 走"置标志"（引擎让步时读到），Python 走 Chaquopy 插件 */
+  /** 取消：TS Worker 走"置标志"（引擎让步时读到） */
   function cancelTsEngine() {
     if (!tsEngineWorker || !tsPending) return false;
     try {
@@ -292,11 +278,6 @@
   api.cancelEngine = () => {
     // TS 引擎：置标志，引擎在搜索循环里让步时读到 ⇒ 超级模式体面收尾、普通模式抛「已取消」
     if (cancelTsEngine()) return Promise.resolve({ ok: true, graceful: true });
-    const cap = window.Capacitor;
-    const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
-    if (plugin && typeof plugin.cancel === "function") {
-      return plugin.cancel().catch(() => ({ ok: true }));
-    }
     return Promise.resolve({ ok: true });
   };
   api.checkDataUpdate = () =>
@@ -1035,40 +1016,24 @@
       },
     });
 
-    // 引擎选型（灰度开关）：`engine.txt` = ts 就走 TS Worker，否则 Chaquopy
-    tsEnabled = await detectTsEngine();
-    pushDiag("info", tsEnabled ? "计算引擎：TypeScript Worker" : "计算引擎：Python（Chaquopy）");
+    pushDiag("info", "计算引擎：TypeScript Worker");
 
-    // 引擎：TS 走 Worker（与桌面同一份代码）；否则经 Chaquopy 跑真 CPython
-    // 两条路的协议一样：一份请求对象 → 一份结果对象
+    // 引擎：只有 TS Worker 一条路（与桌面同一份代码）。初始化失败就抛真实原因，不兜底。
     bridge.calculate = async (payload) => {
-      if (tsEnabled && !tsEngineFailure) {
+      if (!tsEngineFailure) {
         try {
           await ensureTsEngine();
         } catch (err) {
           tsEngineFailure = (err && err.message) || String(err);
-          tsEnabled = false;
-          pushDiag("error", `TS 引擎不可用，回退 Python：${tsEngineFailure}`);
+          pushDiag("error", `计算引擎初始化失败：${tsEngineFailure}`);
         }
       }
-      if (tsEnabled && !tsEngineFailure) {
-        emitProgress("正在计算...");
-        try {
-          return await tsCalculate(payload);
-        } catch (err) {
-          pushDiag("error", `引擎计算失败：${(err && err.message) || err}`);
-          throw err;
-        }
+      if (tsEngineFailure) {
+        throw new Error(`计算引擎不可用（${tsEngineFailure}）。请升级到新版，或卸载后重新安装安装包。`);
       }
+      emitProgress("正在计算...");
       try {
-        const cap = window.Capacitor;
-        const plugin = cap && cap.Plugins && cap.Plugins.PythonEngine;
-        if (!plugin) throw new Error("Python 引擎插件未注册（请重新安装 APK）");
-        emitProgress("正在计算...");
-        const res = await plugin.calculate({ requestJson: JSON.stringify(payload) });
-        const out = JSON.parse((res && res.resultJson) || "{}");
-        if (out && out.status === "error") throw new Error(out.message || "计算失败");
-        return out;
+        return await tsCalculate(payload);
       } catch (err) {
         pushDiag("error", `引擎计算失败：${(err && err.message) || err}`);
         throw err;

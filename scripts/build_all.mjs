@@ -12,7 +12,7 @@
  *                                                   #   + 拷进 release/MyFGOApp（不产 APK、不压 7z/zip、
  *                                                   #   不写发布清单与发布说明的下载表）
  *   node scripts/build_all.mjs --android-data-refresh   # 只刷新安卓数据：不 bump 版本，只把数据序号 +1，只出 APK
- *   node scripts/build_all.mjs --force-engine       # 强制重跑 PyInstaller 重建 engine.exe
+ *   node scripts/build_all.mjs --force-engine       # 强制重跑 engine-ts 打包（跳过 mtime 判断）
  *   node scripts/build_all.mjs --notes "本版更新内容…" --compatible-from 0.1.9
  *
  * 产物（都在 release/）：
@@ -237,7 +237,7 @@ function ensureManualJs() {
 // ---------------------------------------------------------------- 安卓 APK
 
 function buildAndroid() {
-  step("安卓 APK（Capacitor + Chaquopy，正式签名）");
+  step("安卓 APK（Capacitor 外壳 + TS 引擎，正式签名）");
   if (!JAVA_HOME) {
     fatal(
       "安卓构建需要 JDK 21，但没找到 JDK。请设置环境变量 JAVA_HOME，例如：\n" +
@@ -330,29 +330,19 @@ function newestMtime(targets) {
 
 function buildWindows() {
   step("Windows 便携版");
-  const engineExe = path.join(ROOT, "python-engine", "engine.exe");
-  // 关键：engine.exe 是预编译产物（PyInstaller）。只要引擎源码比它新就必须重建，
-  // 否则打出来的 Windows 包装的是旧引擎（实测踩过：解不了安卓版验证串）。
-  const engineSrcNewest = newestMtime([
-    path.join(ROOT, "python-engine", "engine"),
-    path.join(ROOT, "python-engine", "engine_launcher.py"),
-  ]);
-  const exeTime = existsSync(engineExe) ? statSync(engineExe).mtimeMs : 0;
-  const stale = !existsSync(engineExe) || engineSrcNewest > exeTime;
-  const exeTimeBefore = existsSync(engineExe) ? statSync(engineExe).mtimeMs : 0;
+  // 引擎只有 TS 一种实现：产物是 dist/engine-ts/worker.mjs（esbuild 打的 worker bundle）。
+  // 源码比产物新就重打；`--force-engine` 强制重打。产物缺了直接 fatal —— 宁可停下也不要打出没引擎的包。
+  const tsBundle = path.join(ROOT, "dist", "engine-ts", "worker.mjs");
+  const tsSrcNewest = newestMtime([path.join(ROOT, "engine-ts", "src"), path.join(ROOT, "engine-ts", "entry")]);
+  const bundleTime = existsSync(tsBundle) ? statSync(tsBundle).mtimeMs : 0;
+  const stale = !existsSync(tsBundle) || tsSrcNewest > bundleTime;
   if (FORCE_ENGINE || stale) {
-    log(stale && existsSync(engineExe) ? "引擎源码比 engine.exe 新 → 自动重建引擎" : "重建引擎（PyInstaller）");
-    // 引擎重建要 pip 装依赖：默认给国内镜像，避免卡在默认源（实测曾被中断反复重试十几分钟）
-    const pipEnv = { ...process.env, PIP_INDEX_URL: process.env.PIP_INDEX_URL || "https://pypi.tuna.tsinghua.edu.cn/simple" };
-    run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:engine"], { env: pipEnv });
-    // 防呆：脚本静默失败时（例如 .ps1 编码问题把命令吃进注释、或 PyInstaller 报错被吞）
-    // 会出现"说重建了、其实还是旧 exe"，那就会把旧引擎打进包 → 这里必须挡住。
-    if (!existsSync(engineExe) || statSync(engineExe).mtimeMs <= exeTimeBefore) {
-      fatal("engine.exe 没有被更新 → 引擎构建静默失败了，别继续打包");
-    }
-    log(`engine.exe 已更新（${humanSize(statSync(engineExe).size)}）`);
+    log(stale && existsSync(tsBundle) ? "引擎源码比产物新 → 重新打包引擎" : "打包引擎（build:engine-ts）");
+    npmRun("build:engine-ts");
+    if (!existsSync(tsBundle)) fatal("dist/engine-ts/worker.mjs 没有生成 → 引擎构建失败，别继续打包");
+    log(`引擎产物已更新（${humanSize(statSync(tsBundle).size)}）`);
   } else {
-    log("engine.exe 已是最新（跳过 PyInstaller；要强制重建加 --force-engine）");
+    log("引擎产物已是最新（跳过；要强制重打加 --force-engine）");
   }
 
   // 种子库：db/fgo_data.seed.db 是玩家首次运行时复制成运行库的模板，必须「复制一份再清空用户表」。

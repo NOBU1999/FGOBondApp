@@ -1,7 +1,7 @@
 # 宿主 ↔ 计算引擎 协议 · v1
 
 > **契约版本：1**（2026-09-18 阶段 3 固化）。破坏性变更 → 版本 +1，并同步三端宿主。
-> 事实来源：`python-engine/engine/main.py`（引擎侧）、`main/python-process.js`（宿主侧）。
+> 事实来源：`engine-ts/src/main.ts`（引擎侧命令行）、`main/engine-ts-worker.js`（宿主侧）。
 > 目标：**任何平台用同一份请求 JSON、同一份结果 JSON** ——
 > 桌面（Electron + 子进程）与网页 / 安卓（Worker + WASM）只是"传输方式"不同，协议不变。
 
@@ -31,14 +31,14 @@ npm run test:contracts -- --suite engine     # 错误路径 + 结构不变量 + 
 ### 1.1 桌面（现状，已实现）
 
 ```
-engine.exe --mode calculate --db <数据库绝对路径>
+node engine-ts/src/main.ts --mode calculate --db <数据库绝对路径>
   stdin :  一个 JSON 对象（请求），写完立即关闭
   stdout:  有且只有一个 JSON 对象（结果）——引擎不许往 stdout 写别的
   stderr:  进度与日志，逐行；进度行惯例前缀 "[progress] "
   退出码:  0 = 成功；1 = 失败（失败时 stdout 仍有 {"status":"error", ...}）
 ```
 
-宿主读取规则（`python-process.js` 现状）：stdout 全量缓存 → 取**最后一个能解析成 JSON 的行**；
+宿主读取规则（`engine-ts-worker.js` 现状）：Worker 回传 JSON 消息 → 取**最后一条能解析成结果的行**；
 stderr 逐行 → 作为进度事件转发给界面（保留最后 8KB 供报错用）。
 
 ### 1.2 浏览器 / 安卓（阶段 4 目标）
@@ -155,7 +155,7 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 
 ## 5. 引擎侧铁律（保证能搬到别的平台）
 
-1. **只用 Python 标准库**；第三方库必须有 `try/except` 降级（现状：`pyppmd`、`cryptography` 仅用于验证串，缺失时降级为"不产验证串"，不影响计算）。
+1. **不引入第三方运行时依赖**；平台能力（读盘 / 压缩 / 哈希）一律走 `src/platform*.ts`（现状：验证串只做 zlib 生成侧，历史 PPMd/Fernet 串不解析）。
 2. **不读固定路径**：数据库位置一律由 `--db` 传入（将来是浏览器虚拟文件系统里的路径）。
 3. **不写 stdout 日志**：stdout 只留给那一个结果 JSON；进度一律走 stderr。
 4. **不调系统命令、不开网络**（`data_fetcher.py` 是唯一例外，且属平台专属能力，阶段 1 挪出核心）。

@@ -147,19 +147,17 @@ for (const file of ["sql-wasm.js", "sql-wasm.wasm"]) {
 }
 log("sql.js 运行时 → vendor/sqljs（sql-wasm.js + sql-wasm.wasm）");
 
-// ---------------------------------------------------------------- TS 引擎（P4b-2）
-// 引擎 bundle 是 classic worker 用 `importScripts` 加载的 IIFE（engine-ts/web.js），
-// 跟包放在 `engine-ts/` 下；`engine.txt` 是灰度开关（ts = 走 TS Worker，缺省/其他 = Chaquopy）。
+// ---------------------------------------------------------------- TS 引擎（唯一的引擎）
+// 引擎 bundle 是 classic worker 用 `importScripts` 加载的 IIFE（engine-ts/web.js），跟包放在 `engine-ts/` 下。
+// 没有它安卓就没法算 —— 所以缺了直接 fail，不留"继续走别的引擎"这种歧义。
 const TS_DIST = path.join(ROOT, "dist", "engine-ts");
 const tsBundle = path.join(TS_DIST, "web.js");
-if (existsSync(tsBundle)) {
-  mkdirSync(path.join(OUT, "engine-ts"), { recursive: true });
-  cpSync(tsBundle, path.join(OUT, "engine-ts", "web.js"));
-  writeFileSync(path.join(OUT, "engine-ts", "engine.txt"), "ts", "utf8");
-  log(`TS 引擎 → engine-ts/web.js（${(statSync(tsBundle).size / 1024).toFixed(0)}KB，engine.txt=ts）`);
-} else {
-  log("⚠️ 没有 dist/engine-ts/web.js（先跑 node scripts/build-engine-ts.mjs --web）⇒ 安卓继续走 Python");
+if (!existsSync(tsBundle)) {
+  throw new Error("缺少 dist/engine-ts/web.js —— 先跑 node scripts/build-engine-ts.mjs --web");
 }
+mkdirSync(path.join(OUT, "engine-ts"), { recursive: true });
+cpSync(tsBundle, path.join(OUT, "engine-ts", "web.js"));
+log(`TS 引擎 → engine-ts/web.js（${(statSync(tsBundle).size / 1024).toFixed(0)}KB）`);
 
 prepareDatabase(path.join(OUT, "db", "fgo_data.db"));
 
@@ -169,33 +167,6 @@ if (existsSync(eventFile)) {
   cpSync(eventFile, path.join(OUT, "db", "event_bond_bonus.json"));
   log("event_bond_bonus.json 一并打包");
 }
-
-// ---------------------------------------------------------------- 暂存 Python 源码（给 Chaquopy 用）
-// 只挑真正需要的：engine 包的 .py 与 data/*.json（name_translations）+ 安卓入口。
-// 千万别把整个 python-engine/ 交给 Chaquopy —— 那里有 .cache/raw（200MB 数据抓取缓存）、
-// engine.exe / dist/ / build/（PyInstaller 产物），打进去会让 APK 暴涨到 116MB（实测）。
-const PY_OUT = path.join(ROOT, "dist", "android", "python");
-rmSync(PY_OUT, { recursive: true, force: true });
-mkdirSync(PY_OUT, { recursive: true });
-
-let pyCount = 0;
-function stagePython(srcDir, destDir) {
-  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
-    if (entry.name === "__pycache__") continue;
-    const src = path.join(srcDir, entry.name);
-    const dest = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      stagePython(src, dest);
-    } else if (entry.name.endsWith(".py") || entry.name.endsWith(".json")) {
-      mkdirSync(path.dirname(dest), { recursive: true });
-      cpSync(src, dest);
-      pyCount += 1;
-    }
-  }
-}
-stagePython(path.join(ROOT, "python-engine", "engine"), path.join(PY_OUT, "engine"));
-stagePython(path.join(ROOT, "platforms", "android", "python"), PY_OUT);
-log(`Python 源码已暂存：${path.relative(ROOT, PY_OUT)}（${pyCount} 个文件，${(dirSize(PY_OUT) / 1048576).toFixed(2)} MB）`);
 
 // ---------------------------------------------------------------- 注入启动脚本
 // 界面里显示的版本 = 安卓的 versionName（"0.1.13+260920"）：由 build_all.mjs 传进来，

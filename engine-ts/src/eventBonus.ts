@@ -1,5 +1,5 @@
 // P3.5：活动牵绊加成解析 + event_bond_bonus.json 生成
-// （对齐 python-engine/engine/event_bonus.py）
+// （对齐旧实现的 event_bonus）
 import fs from "node:fs";
 import path from "node:path";
 import { pyRound } from "./evaluate.ts";

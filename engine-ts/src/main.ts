@@ -1,4 +1,4 @@
-// P3.5：命令行入口（对齐 python-engine/engine/main.py 的 --mode calculate|check|update）
+// P3.5：命令行入口（--mode calculate|check|update）
 //
 // 用途：宿主（P4）还没接线之前，先用它冒烟 / 手工跑「更新数据」。
 // 验证串：生成侧已移植（`src/verification.ts`，TS 一律生成 zlib 变体 `FGOBONDV3Z.`，

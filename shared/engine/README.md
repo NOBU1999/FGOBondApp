@@ -8,7 +8,7 @@
 
 | 实现 | 用于 | 现状 |
 |---|---|---|
-| 子进程 | Windows 便携版 | ✅ 已有（`main/python-process.js`，Electron 专属，将来挪到平台层） |
+| 执行引擎 | Windows 便携版 | ✅ 已有（`main/engine-ts-worker.js`，`worker_threads`） |
 | Worker + WASM | 网页 / 安卓 | ⛔ 阶段 4 |
 | 原生宿主（可选） | 安卓加速 | ⛔ 阶段 7（仅在 WASM 太慢时） |
 

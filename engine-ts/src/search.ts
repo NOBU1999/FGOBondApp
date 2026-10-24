@@ -1377,8 +1377,8 @@ export async function searchTopTeams(
     addForced(req.target_servant_id);
   }
 
-  // ② 活动加成这一维（2026-10-24 玩家反馈：这一维原来在选池里几乎没有权重，
-  //    "全员活动加成"的整族阵容进不了池 ⇒ 5.3% 的漏解）。
+  // ② 活动加成这一维（这一维原来在选池里几乎没有权重，
+  //    "全员活动加成"的整族阵容进不了池 ⇒ 会漏解）。
   //    开关只决定「门槛」与「配额大小」，任何情况下都不允许这一维拿到 0 个名额。
   const evFloor = req.event_priority ? EVENT_GUARANTEE_FLOOR_OPTIONAL : EVENT_GUARANTEE_FLOOR_ALWAYS;
   const bonusQuota = Math.min(req.event_priority ? EVENT_GUARANTEE_CAP + 1 : EVENT_GUARANTEE_CAP - 1, 6);
