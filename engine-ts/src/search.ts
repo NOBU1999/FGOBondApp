@@ -180,7 +180,15 @@ export interface SearchHooks {
    * `cheap` = 光看"Σ 前 K 大礼装项"的便宜界（T1）。理论上恒有 `cheap ≥ ub`；
    * 断言它、并统计"按 cheap 剪枝还能活下来多少"，就是决定要不要把 T1 接到主循环之前的唯一依据。
    */
-  onBound?: (info: { ub: number; cheap: number }) => void;
+  onBound?: (info: {
+    ub: number;
+    cheap: number;
+    /** 该阵容的"每张礼装松弛分"（诊断 gap 用） */
+    craftScores: Map<number, number>;
+    freeSlots: number;
+    costBudget: number;
+    zeroCostSlots: boolean[] | null;
+  }) => void;
   /**
    * 每隔多少毫秒「让出一次事件循环」。
    *
@@ -569,6 +577,75 @@ export function cheapCraftBound(
   return total;
 }
 
+/**
+ * 分数背包上界（T1 正式版）：**遵守 Cost**、允许"最后一件取小数"、可重复礼装不限件数。
+ *
+ * 为什么不是"取前 K 大"：礼装预算往往只够装 2~3 张（实测一条真实串：5 个槽、预算 40、每张 12），
+ * 而"前 K 大"等于当 5 张都装得起 ⇒ 平均松 0.29、最大松 1.47。改成 LP 后平均 0.10、最大 0.53（同批 59,264 套实测）。
+ *
+ * 仍然是**可证明的上界**：LP 松弛的最优值 ≥ 整数最优（允许取小数只会更高），
+ * 而"每件最多 1 次（可重复礼装除外）"与"槽数上限"都保留在可行性里。
+ */
+export function fractionalCraftBound(
+  ctx: DataContext,
+  craftScores: Map<number, number>,
+  freeSlots: number,
+  costBudget: number,
+  zeroCostSlots: boolean[] | null = null,
+): number {
+  const slots = Math.max(0, Math.trunc(freeSlots));
+  if (slots === 0) return 0;
+  const repeatableIds = repeatableCraftIds(ctx);
+  const items: { val: number; cost: number; rep: boolean }[] = [];
+  let maxCost = 0;
+  for (const [cid, v] of craftScores) {
+    const val = Number(v) || 0;
+    const cost = Math.max(0, Number(ctx.crafts.get(cid)?.cost ?? 0));
+    if (cost > maxCost) maxCost = cost;
+    if (val <= 0) continue;
+    items.push({ val, cost, rep: repeatableIds.has(cid) });
+  }
+  // 免费槽（冠位第二礼装位那类 0 Cost 槽）：精确界在那里不花预算 ⇒ 上界也要给它留出容量，
+  // 否则会出现"便宜界 < 精确界"的反例（实测踩到：slack 低到 −1.2）。
+  const freeSlotCount = Array.isArray(zeroCostSlots) ? zeroCostSlots.filter(Boolean).length : 0;
+  // 单价降序（Cost 0 的排最前：不占预算）
+  const ratio = (it: { val: number; cost: number }): number => (it.cost === 0 ? Infinity : it.val / it.cost);
+  items.sort((a, b) => ratio(b) - ratio(a));
+  let cap = Math.max(0, costBudget) + freeSlotCount * maxCost;
+  let slotsLeft = slots;
+  let total = 0;
+  for (const it of items) {
+    if (slotsLeft <= 0) break;
+    const maxCopies = Math.min(slotsLeft, it.rep ? slotsLeft : 1);
+    if (it.cost === 0) {
+      total += it.val * maxCopies;
+      slotsLeft -= maxCopies;
+      continue;
+    }
+    const affordable = Math.min(maxCopies, Math.floor(cap / it.cost));
+    // 这一件能整件取完（含可重复礼装取满剩余槽）：取完继续下一件
+    if (affordable === maxCopies) {
+      total += it.val * affordable;
+      cap -= it.cost * affordable;
+      slotsLeft -= affordable;
+      continue;
+    }
+    // 取不完 ⇒ 这是 LP 的"最后一件"：先取能整件取的那几张，再对余额取一次小数，然后收工
+    if (affordable > 0) {
+      total += it.val * affordable;
+      cap -= it.cost * affordable;
+      slotsLeft -= affordable;
+    }
+    if (slotsLeft > 0 && cap > 0 && (it.rep || affordable === 0)) {
+      total += it.val * Math.min(1, cap / it.cost);
+      slotsLeft -= 1;
+      cap = 0;
+    }
+    break;
+  }
+  return total;
+}
+
 export function relaxedScoreUpperBound(
   ctx: DataContext,
   req: CalculationRequest,
@@ -593,7 +670,8 @@ export function relaxedScoreUpperBound(
   }
   let bestCraftScore: number;
   if (cheapCraft) {
-    bestCraftScore = cheapCraftBound(ctx, craftScores, freeSlotsCount);
+    // 便宜界走"分数背包"（守 Cost、含免费槽容量），而不是"前 K 大"（忽略 Cost）
+    bestCraftScore = fractionalCraftBound(ctx, craftScores, freeSlotsCount, costBudget, zeroCostSlots);
   } else if (exactCraftScore !== null) {
     bestCraftScore = exactCraftScore;
   } else {
@@ -1659,7 +1737,14 @@ export async function searchTopTeams(
             exact,
             true,
           );
-          hooks.onBound({ ub, cheap });
+          hooks.onBound({
+            ub,
+            cheap,
+            craftScores,
+            freeSlots: freeSlotsCount,
+            costBudget: ceBudget,
+            zeroCostSlots: freeBondZeroCost,
+          });
         }
         if (traitOut !== null && dpCombos.length > 0) {
           for (const [, combo0] of dpCombos) {
