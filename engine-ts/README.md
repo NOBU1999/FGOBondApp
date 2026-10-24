@@ -1,7 +1,9 @@
 # engine-ts —— 引擎的 TypeScript 版（与 `python-engine/` 同源同判据）
 
-> ⚠️ 仓库里这份是**正在灰度**的第二实现：默认仍然跑 Python 引擎，
-> 只有 `FGO_ENGINE=ts`（桌面）/ 宿主显式选择时才走这里。P5 才会把默认切过来并删掉 Chaquopy。
+> ✅ **2026-10-24 起这是默认引擎**（桌面 `main/engine-factory.js` 默认 `ts`，安卓随包 `engine.txt` 写 `ts`）。
+> 想退回 Python：`FGO_ENGINE=python`，或在应用根放 `engine-ts/engine.txt` 内容 `python`。
+> ⚠️ 灰度收窄仍在：`check` / `update`（联网 + 写库）继续走 Python，`FGO_ENGINE_ALL=1` 才全切；
+> **v0.3.0 删掉 Python 侧时这两条一起改**（清单见 `文档\活跃\方案-引擎TS重写.md` §28.3）。
 
 ## 结构
 
