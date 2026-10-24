@@ -75,6 +75,7 @@ import {
   generateServantCombinations,
   isMergedGenericUniversal5,
   isEventLimitedCraft,
+  maxPoolSize,
   reduceCandidateIds,
   sampleServantCombinations,
   supportCraftOptions,
@@ -93,10 +94,13 @@ export const EVENT_GUARANTEE_CAP = 5;
 export const EVENT_GUARANTEE_FLOOR_ALWAYS = 0.5;
 export const EVENT_GUARANTEE_FLOOR_OPTIONAL = 0.2;
 
-/** 超级模式的覆盖倍数（1.0 = 普通档位） */
+/** 超级模式的覆盖倍数（1.0 = 普通档位）；受平台上限约束（手机端最高 ×5） */
 export function superMult(req: CalculationRequest): number {
   const raw = Number((req as any).super_mode ?? 0) || 0;
-  return raw > 1.0 ? raw : 1.0;
+  if (raw <= 1.0) return 1.0;
+  const cap = getPlatform().maxSuperMult;
+  const limited = Number.isFinite(cap) && Number(cap) > 1 ? Math.min(raw, Number(cap)) : raw;
+  return limited;
 }
 
 export function superEnabled(req: CalculationRequest): boolean {
@@ -189,6 +193,11 @@ export interface SearchHooks {
     costBudget: number;
     zeroCostSlots: boolean[] | null;
   }) => void;
+  /**
+   * 候选池定稿后回调（诊断用；生产不传）。
+   * 回答"某支队为什么没被找到"的第一件事：那几个人到底进没进池。
+   */
+  onPool?: (info: { ids: number[]; cap: number; forced: number[]; bonusQuota: number }) => void;
   /**
    * 每隔多少毫秒「让出一次事件循环」。
    *
@@ -489,6 +498,15 @@ export function supportMaxRelaxedAdd(
 
 export type DpCombos = [number, number[]][];
 
+/**
+ * 礼装 DP 缓存的**条目上限**。
+ *
+ * 为什么需要上限：这个缓存每条要存 `craftScores`（60 项 Map）+ `players` + `dpCombos`，实测约 7KB/条；
+ * 极端形状（super×10 + topN1000）能攒到 **63.6 万条 ≈ 4GB**，而命中率只有 ~48%（每条平均被复用不到 1 次）。
+ * 30,000 条约 200MB，够覆盖"同一批阵容在几趟之间复用"的场景；超了就按插入顺序淘汰最旧的 10%（FIFO）。
+ */
+const DP_CACHE_MAX = 30000;
+
 export function prepareDpCraftCombosForTeam(
   ctx: DataContext,
   req: CalculationRequest,
@@ -503,17 +521,13 @@ export function prepareDpCraftCombosForTeam(
 ): [RelaxedPlayer[], Map<number, number>, DpCombos] {
   let key: string | null = null;
   if (cache !== null) {
-    key = [
-      [...mapping.entries()]
-        .map(([pos, sid]) => `${pos}:${sid}`)
-        .sort()
-        .join("|"),
-      costBudget,
-      candidateCraftIds.join(","),
-      (zeroCostSlots ?? []).map((z) => (z ? 1 : 0)).join(""),
-      bp.free_bond_positions.length,
-      topK,
-    ].join("#");
+    // 只把**真正会变**的部分放进键：这个 cache 是"一次搜索"一份的，
+    // candidateCraftIds / zeroCostSlots / freeSlots / topK 在整趟里都是常量 ⇒ 放进去纯属浪费内存
+    // （原来的键约 450 字节，63.6 万条光键就吃掉 ~280MB）。
+    key = `${[...mapping.entries()]
+      .map(([pos, sid]) => `${pos}:${sid}`)
+      .sort()
+      .join("|")}#${costBudget}`;
     const hit = cache.get(key);
     if (hit !== undefined) return hit;
   }
@@ -530,7 +544,18 @@ export function prepareDpCraftCombosForTeam(
     topK,
   );
   const result: [RelaxedPlayer[], Map<number, number>, DpCombos] = [players, craftScores, dpCombos];
-  if (key !== null) cache!.set(key, result);
+  if (key !== null) {
+    cache!.set(key, result);
+    // 有上限：超了就按插入顺序淘汰最旧的 10%（Map 的迭代顺序就是插入顺序）
+    if (cache!.size > DP_CACHE_MAX) {
+      const drop = Math.max(1, Math.trunc(DP_CACHE_MAX / 10));
+      let n = 0;
+      for (const k of cache!.keys()) {
+        cache!.delete(k);
+        if (++n >= drop) break;
+      }
+    }
+  }
   return result;
 }
 
@@ -1181,6 +1206,8 @@ export async function searchTopTeams(
   let secondRan = false;
   let secondProcessed = 0;
   let firstProcessed = 0;
+  /** 第一轮补（活动加成组单独穷举）处理的阵容数 */
+  let bonusProcessed = 0;
   let refineProcessed = 0;
   let optimizeProcessed = 0;
   let truncated = false;
@@ -1325,38 +1352,72 @@ export async function searchTopTeams(
 
   report("正在生成候选池...");
   await pump();
-  let reduced = reduceCandidateIds(
-    ctx,
-    playerCandidates,
-    chooseCount,
-    defaultServantComboLimit(req, chooseCount),
-    box,
-    traitIds,
-  );
-  if (
-    req.strategy === STRATEGY_TARGET_MAX &&
-    req.target_servant_id !== null &&
-    playerCandidates.includes(req.target_servant_id) &&
-    !reduced.includes(req.target_servant_id)
-  ) {
-    reduced.push(req.target_servant_id);
+  const comboLimit = defaultServantComboLimit(req, chooseCount);
+  const poolCap = maxPoolSize(chooseCount, comboLimit);
+  const basePool = reduceCandidateIds(ctx, playerCandidates, chooseCount, comboLimit, box, traitIds);
+
+  const bonusOf = (sid: number): number => {
+    const bs = box.get(sid);
+    return bs ? Number(bs.personal_bonus || 0) + Number(bs.aura_bonus || 0) : 0;
+  };
+  const heurOf = (sid: number): number => {
+    const bs = box.get(sid);
+    return bs ? servantHeuristic(ctx, bs, traitIds) : 0;
+  };
+
+  // 「必须留在池里」的配额（按优先级排）：池子超上限时只踢 base 尾部，不动这些。
+  const forced: number[] = [];
+  const addForced = (sid: number | null): void => {
+    if (sid === null || !playerCandidates.includes(sid)) return;
+    if (!forced.includes(sid)) forced.push(sid);
+  };
+
+  // ① 目标从者
+  if (req.strategy === STRATEGY_TARGET_MAX && req.target_servant_id !== null) {
+    addForced(req.target_servant_id);
   }
 
-  // 「活动从者优先」保送
+  // ② 活动加成这一维（2026-10-24 玩家反馈：这一维原来在选池里几乎没有权重，
+  //    "全员活动加成"的整族阵容进不了池 ⇒ 5.3% 的漏解）。
+  //    开关只决定「门槛」与「配额大小」，任何情况下都不允许这一维拿到 0 个名额。
   const evFloor = req.event_priority ? EVENT_GUARANTEE_FLOOR_OPTIONAL : EVENT_GUARANTEE_FLOOR_ALWAYS;
-  const reducedSet0 = new Set(reduced);
-  const evEligible = playerCandidates.filter(
-    (sid) => !reducedSet0.has(sid) && Number(box.get(sid)!.personal_bonus || 0) >= evFloor - 1e-9,
-  );
-  if (evEligible.length > 0) {
-    const evShare = traitShareWeight(ctx, playerCandidates, traitIds);
-    evEligible.sort((a, b) => {
-      const ha = servantHeuristic(ctx, box.get(a)!, traitIds) + clusterBonus(evShare, a);
-      const hb = servantHeuristic(ctx, box.get(b)!, traitIds) + clusterBonus(evShare, b);
-      return hb - ha;
-    });
-    reduced.push(...evEligible.slice(0, EVENT_GUARANTEE_CAP));
+  const bonusQuota = Math.min(req.event_priority ? EVENT_GUARANTEE_CAP + 1 : EVENT_GUARANTEE_CAP - 1, 6);
+  const byBonus = playerCandidates
+    .filter((sid) => bonusOf(sid) > 0)
+    .sort((a, b) => bonusOf(b) - bonusOf(a) || heurOf(b) - heurOf(a) || a - b);
+  const aboveFloor = byBonus.filter((sid) => bonusOf(sid) >= evFloor - 1e-9);
+  const pickBonus: number[] = [];
+  for (const sid of aboveFloor) {
+    if (pickBonus.length >= bonusQuota) break;
+    pickBonus.push(sid);
   }
+  for (const sid of byBonus) {
+    if (pickBonus.length >= bonusQuota) break;
+    if (!pickBonus.includes(sid)) pickBonus.push(sid);
+  }
+  for (const sid of pickBonus) addForced(sid);
+
+  // ③ 组装：配额优先 + base 补齐，**硬裁到 poolCap**。
+  //    不变量：C(池, 人数) ≤ 每轮组合上限 ⇒ 组合是全枚举而不是抽样（抽样就是丢解的地方）。
+  let reduced = ((): number[] => {
+    const out: number[] = [];
+    const seen0 = new Set<number>();
+    for (const sid of forced) {
+      if (out.length >= poolCap) break;
+      if (!seen0.has(sid)) {
+        out.push(sid);
+        seen0.add(sid);
+      }
+    }
+    for (const sid of basePool) {
+      if (out.length >= poolCap) break;
+      if (!seen0.has(sid)) {
+        out.push(sid);
+        seen0.add(sid);
+      }
+    }
+    return out;
+  })();
 
   // 低 Cost 补位（保证至少一套满自由礼装在 Cost 内可行）
   if (chooseCount > 0 && craftPool.length > 0 && bp.free_bond_positions.length > 0) {
@@ -1380,27 +1441,32 @@ export async function searchTopTeams(
     };
 
     if (!hasFeasibleFullCombo(reduced)) {
-      const byCost = [...playerCandidates].sort((a, b) => {
-        const ca = ctx.servants.has(a) ? ctx.servants.get(a)!.cost : 99;
-        const cb = ctx.servants.has(b) ? ctx.servants.get(b)!.cost : 99;
-        if (ca !== cb) return ca - cb;
-        return a - b;
-      });
+      // 替换语义：把"非配额里最贵的"换成一个便宜的，池子大小不变（不再 push 到上限之外）
+      const costOf = (sid: number): number => (ctx.servants.has(sid) ? ctx.servants.get(sid)!.cost : 99);
+      const byCost = [...playerCandidates].sort((a, b) => costOf(a) - costOf(b) || a - b);
+      const forcedSet = new Set(forced);
       for (const sid of byCost) {
         if (reduced.includes(sid)) continue;
-        if (reduced.length >= playerCandidates.length) break;
-        const trial = [...reduced, sid];
+        let swapOut: number | null = null;
+        for (const x of reduced) {
+          if (forcedSet.has(x)) continue;
+          if (costOf(x) <= costOf(sid)) continue;
+          if (swapOut === null || costOf(x) > costOf(swapOut)) swapOut = x;
+        }
+        if (swapOut === null) continue;
+        const trial = reduced.map((x) => (x === swapOut ? sid : x));
         if (hasFeasibleFullCombo(trial)) {
-          reduced.push(sid);
-          if (hasFeasibleFullCombo(reduced)) break;
+          reduced = trial;
+          break;
         }
       }
     }
   }
 
+  hooks?.onPool?.({ ids: [...reduced], cap: poolCap, forced: [...forced], bonusQuota });
+
   report("正在搜索组合...");
-  const freeSlotsCount = bp.free_bond_positions.length;
-  const freeBondZeroCost = bp.player_craft_slots
+  const freeSlotsCount = bp.free_bond_positions.length;  const freeBondZeroCost = bp.player_craft_slots
     .filter((cs) => cs.fixed_craft_id === null)
     .map((cs) => cs.index === 1);
   const craftCombosWithCost = generateCraftCombinationsWithCost(
@@ -1939,6 +2005,7 @@ export async function searchTopTeams(
     const pending: [number, number[]][] = [];
     for (const extrasTuple of combosIter) {
       if (maxProcessed !== null && processed >= maxProcessed) break;
+      if (overBudget()) break;
       await pump();
       if (expired(deadline)) {
         truncated = true;
@@ -2014,12 +2081,81 @@ export async function searchTopTeams(
     );
   }
 
+  // 第二道阀：**整次请求**的总工作量上限。
+  // 只裁"每轮"挡不住超级档位（它把轮数一起放大）——每轮都合规、总量照样堆到几 GB。
+  const plat = getPlatform();
+  const totalCapRaw = plat.maxTotalWorkPerRequest;
+  const totalWorkCap =
+    Number.isFinite(totalCapRaw) && Number(totalCapRaw) > 0 ? Number(totalCapRaw) : Infinity;
+  // 第三道阀（只有桌面能读 RSS）：超了就优雅收尾，把已算的结果交出去，而不是等 V8 崩、白等一场。
+  const rssCapRaw = plat.maxRssMb;
+  const rssCapBytes =
+    Number.isFinite(rssCapRaw) && Number(rssCapRaw) > 0 ? Number(rssCapRaw) * 1048576 : Infinity;
+  let budgetCapped = false;
+  let rssCapped = false;
+  let memCheckAt = 0;
+  const overBudget = (): boolean => {
+    if (budgetCapped) return true;
+    // 一条队伍都还没产出时不许裁：第一趟只算上界（ubOnly），这时候停下等于交了张白卷。
+    if (bestBySet.size === 0) return false;
+    if (processedTotal >= totalWorkCap) {
+      budgetCapped = true;
+      stopFlag[0] = true;
+      report(
+        `已达本次搜索的总工作量上限（${totalWorkCap.toLocaleString("en-US")} 个阵容），用现有结果收尾；` +
+          `要更完整的搜索请把「结果条数」或超级档位调小`,
+      );
+      return true;
+    }
+    // RSS 每 4096 套查一次（getmemoryUsage 有系统调用成本）
+    if (processedTotal >= memCheckAt && rssCapBytes !== Infinity && plat.memoryUsage) {
+      memCheckAt = processedTotal + 4096;
+      const m = plat.memoryUsage();
+      if (m.rss >= rssCapBytes) {
+        rssCapped = true;
+        budgetCapped = true;
+        stopFlag[0] = true;
+        report(
+          `内存占用已到本机安全上限（约 ${Math.round(m.rss / 1048576)}MB），用现有结果收尾；` +
+            `要更完整的搜索请把「结果条数」或超级档位调小`,
+        );
+        return true;
+      }
+    }
+    return false;
+  };
+
   // 第一轮：静态分候选池，等距抽样建 Top 基线
   const firstDeadline = start + Math.min(timeoutSeconds, Math.max(5.0, timeoutSeconds * 0.5));
   const firstLimit = phaseLimits ? Math.trunc(phaseLimits.firstProcessed ?? 0) : servantSweepLimit;
   const beforeFirst = processedTotal;
   await runWithCraftCombos(reduced, firstDeadline, null, servantSweepLimit, true, firstLimit);
   firstProcessed = processedTotal - beforeFirst;
+
+  // 第一轮补：「活动加成组」单独穷举一遍。
+  // 为什么必须单独一遍：这族阵容的价值来自"5 个人都有加成"（每人 +0.2 ≈ 全队 +1.0 倍率），
+  // 而单个加成从者放进大池会被"特性潜力/基础倍率"维度稀释掉 ⇒ 整族阵容进不了组合。
+  // 组内人数很少（活动从者通常十几个），C(n,5) 远低于每轮上限，所以可以**全枚举**。
+  const bonusGroup = ((): number[] => {
+    const ids = playerCandidates.filter((sid) => bonusOf(sid) > 0);
+    if (ids.length < chooseCount) return [];
+    ids.sort((a, b) => bonusOf(b) - bonusOf(a) || heurOf(b) - heurOf(a) || a - b);
+    // 组大小同样受"每轮上限"和"平台限流"双重约束（手机上不能因为这一趟把内存打爆）
+    const groupCap = maxPoolSize(chooseCount, Math.min(comboLimit, servantSweepLimit));
+    return ids.slice(0, Math.min(groupCap, ids.length));
+  })();
+  if (bonusGroup.length >= chooseCount && !expired(firstDeadline)) {
+    const beforeBonus = processedTotal;
+    await runWithCraftCombos(
+      bonusGroup,
+      firstDeadline,
+      null,
+      null,
+      true,
+      Math.min(comboLimit, servantSweepLimit),
+    );
+    bonusProcessed = processedTotal - beforeBonus;
+  }
 
   // 第二轮：补人后再粗搜
   let secondPoolIds: number[] = [];
@@ -2712,8 +2848,10 @@ export async function searchTopTeams(
     top20: mergedItems,
     sortMode: req.sort_mode,
     truncated,
-    // 网页宿主按内存上限裁剪过本轮枚举量（桌面恒为 false）——界面可据此提示"手机上没搜满"
-    ...(workCapped ? { workCapped: true } : {}),
+    // 按内存上限裁剪过（每轮 / 总量 / RSS 三道阀任一触发）——界面可据此提示"这次没搜满"
+    ...(workCapped || budgetCapped || rssCapped ? { workCapped: true } : {}),
+    ...(budgetCapped ? { budgetCapped: true } : {}),
+    ...(rssCapped ? { rssCapped: true } : {}),
     _elapsed: pyRound(nowSec() - start, 3),
     _processed: processedTotal,
     _verifyPhase: {

@@ -28,6 +28,19 @@ export const CLASS_GROUPS: Record<string, Set<string>> = {
     "beastEresh",
     "unBeastOlgaMarie",
   ]),
+  // 全EX = EX1 ∪ EX2：游戏里 Extra 是**一个**职阶，戴冠战按这个口径时两组都要算进来
+  exall: new Set([
+    "ruler",
+    "avenger",
+    "moonCancer",
+    "shielder",
+    "alterEgo",
+    "foreigner",
+    "pretender",
+    "beast",
+    "beastEresh",
+    "unBeastOlgaMarie",
+  ]),
 };
 
 export const STRATEGY_TOTAL_MAX = "total_max";

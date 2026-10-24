@@ -27,6 +27,21 @@ export const nodePlatform: Platform = {
     return process.env[key];
   },
 
+  // 桌面：总量给得很宽（实测最大形状 47.7 万套），只为挡住"无上界"的可能
+  maxTotalWorkPerRequest: (() => {
+    const raw = Number(process.env.FGO_TS_TOTAL_WORK ?? 1500000);
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 1500000;
+  })(),
+  // 桌面：RSS 软上限（堆上限 6GB，留余量）；超了优雅收尾，而不是等 V8 崩
+  maxRssMb: (() => {
+    const raw = Number(process.env.FGO_TS_MAX_RSS_MB ?? 5500);
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 5500;
+  })(),
+  memoryUsage() {
+    const m = process.memoryUsage();
+    return { heapUsed: m.heapUsed, rss: m.rss };
+  },
+
   readFileBytes(filePath: string): Uint8Array {
     return toU8(fs.readFileSync(filePath));
   },

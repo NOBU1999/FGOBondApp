@@ -80,6 +80,18 @@ export const webPlatform: Platform = {
     return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 120000;
   })(),
 
+  // 手机上限：超级模式最高 ×5（界面也已不再显示 ×10；这里兜住老请求 / 老存档）
+  maxSuperMult: 5,
+
+  // 网页 / 手机：**只裁每轮不够**（超级档位会把轮数一起放大）⇒ 再给一个总量上限。
+  // 25 万 ≈ 实测"关掉超级×10 后 4.2 形状只要 4.7 万套"的 5 倍余量；宿主可用 FGO_WEB_TOTAL_WORK 覆盖。
+  maxTotalWorkPerRequest: (() => {
+    const g = globalThis as any;
+    const raw = Number(g.__FGO_ENV__?.FGO_WEB_TOTAL_WORK ?? 250000);
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 250000;
+  })(),
+  // WebView 读不到进程 RSS（不提供 memoryUsage）⇒ 手机上只靠"工作量"这一道阀
+
   readFileBytes(): Uint8Array {
     throw new Error("网页宿主没有文件系统：请由宿主读取库字节并调用 registerDbBytes()");
   },

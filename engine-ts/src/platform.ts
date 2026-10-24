@@ -54,6 +54,36 @@ export interface Platform {
    *   （宁可少搜一点并如实告知，也不要崩）。
    */
   readonly maxWorkPerRound?: number;
+
+  /**
+   * 超级模式倍率的**平台上限**（不设 = 不限制）。
+   *
+   * 手机端不提供 ×10：它的内存放大是 5~8 倍（实测 4.9GB RSS），而 WebView 的堆上限抬不了。
+   * 界面已经不再显示 ×10 这一档，这里再兜一道 —— 老请求 / 存档里的 ×10 会被压到上限。
+   */
+  readonly maxSuperMult?: number;
+
+  /**
+   * **整次请求**的总工作量上限（单位：被枚举的阵容数，跨轮次累加）。
+   *
+   * 为什么还需要它：`maxWorkPerRound` 只裁"每轮"，超级档位会把轮数一起放大 ——
+   * 每轮都合规，总量照样能堆到几 GB（实测 super×10 + topN1000 + 359 人 = 47.7 万套）。
+   * 有了总量上限，内存上界就能算出来（≈ 处理量 × 1.2KB + 结果集），而不是靠"祈祷计划别太大"。
+   *
+   * 超限时**不报错**：用现有结果收尾，标 `workCapped`，进度里说明怎么恢复。
+   */
+  readonly maxTotalWorkPerRequest?: number;
+
+  /**
+   * 进程 RSS 的软上限（MB）。超了就**主动优雅收尾**（返回 partial），而不是等 V8 撞堆上限崩掉。
+   *
+   * 为什么堆上限不够：`resourceLimits.maxOldGenerationSizeMb` 只管 JS 堆，不管 wasm/sql.js/native buffer，
+   * 而且崩溃时用户已经等了两分钟、结果全丢。这里宁可少搜一点，也要把已算的结果交出去。
+   */
+  readonly maxRssMb?: number;
+
+  /** 读进程内存（只有能读的平台提供；读不到就不做 RSS 保护） */
+  memoryUsage?(): { heapUsed: number; rss: number };
 }
 
 let CURRENT: Platform | null = null;

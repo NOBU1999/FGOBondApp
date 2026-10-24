@@ -341,6 +341,20 @@ export function sampleServantCombinations(
 // ---------------------------------------------------------------------------
 // 候选池压缩
 // ---------------------------------------------------------------------------
+/**
+ * 候选池的**硬上限**：使 `C(n, 人数) ≤ maxCombos` 的最大 n。
+ *
+ * 为什么要有这条不变量：池子一旦超过它，组合就从「全枚举」退化成「抽样」——
+ * 而抽样就是丢解的地方（2026-10-24 的反馈：池 24 → C(24,5)=42,504 > 33,649，先钻进抽样区）。
+ * 保送/补位**只能用替换实现**，不能追加。
+ */
+export function maxPoolSize(chooseCount: number, maxCombos: number): number {
+  if (chooseCount <= 0) return Number.MAX_SAFE_INTEGER;
+  let k = chooseCount;
+  while (comb(k + 1, chooseCount) <= maxCombos) k += 1;
+  return Math.max(chooseCount, k);
+}
+
 export function reduceCandidateIds(
   ctx: DataContext,
   candidates: number[],

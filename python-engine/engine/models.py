@@ -37,6 +37,19 @@ CLASS_GROUPS: Dict[str, Set[str]] = {
         "beastEresh",
         "unBeastOlgaMarie",
     },
+    # 全EX = EX1 ∪ EX2：游戏里 Extra 是**一个**职阶，戴冠战按这个口径时两组都要算进来
+    "exall": {
+        "ruler",
+        "avenger",
+        "moonCancer",
+        "shielder",
+        "alterEgo",
+        "foreigner",
+        "pretender",
+        "beast",
+        "beastEresh",
+        "unBeastOlgaMarie",
+    },
 }
 
 # 策略
