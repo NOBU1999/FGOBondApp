@@ -1,6 +1,5 @@
 apply plugin: 'com.android.application'
-// Chaquopy：把真 CPython 与我们的计算引擎打进 APK（协议仍是 engine-protocol.md 的那一份 JSON）
-apply plugin: 'com.chaquo.python'
+// [v0.3.0 TS-only] 只用 TypeScript 引擎（WebView Worker），不再打包 CPython
 
 android {
     namespace = "com.nobu1999.fgobond"
@@ -71,20 +70,7 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-// Chaquopy 配置：Python 版本 + 引擎源码目录
-//   ../../dist/android/python 由 scripts/android/build-web-bundle.mjs 暂存，
-//   只含 engine 包的 .py / data/*.json 与安卓入口（**不要**指向 python-engine 根目录：
-//   那里有 .cache 抓包缓存 200MB 与 engine.exe，会让 APK 暴涨到 116MB）
-chaquopy {
-    defaultConfig {
-        version = "3.11"
-    }
-    sourceSets {
-        main {
-            srcDir "../../dist/android/python"
-        }
-    }
-}
+// [v0.3.0 TS-only] Chaquopy 配置块已删除（APK 里不再有 CPython 与 Python 引擎）
 
 try {
     def servicesJSON = file('google-services.json')

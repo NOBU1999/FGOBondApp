@@ -75,8 +75,8 @@
     },
     "extraFiles": [
       {
-        "from": "python-engine/engine.exe",
-        "to": "python-engine/engine.exe"
+        "from": "dist/engine-ts",
+        "to": "dist/engine-ts"
       },
       {
         "from": "db/fgo_data.seed.db",

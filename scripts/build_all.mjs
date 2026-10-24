@@ -37,7 +37,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import toolchain from "./lib/toolchain.cjs";
@@ -379,21 +379,32 @@ function buildWindows() {
   const appDir = path.join(RELEASE_DIR, "MyFGOApp");
   if (!existsSync(unpackedDir)) fatal("electron-builder 没有产出 release/win-unpacked");
   assertAppNotRunning();
+  let mergedInPlace = false;
   try {
     rmSync(appDir, { recursive: true, force: true });
   } catch (err) {
-    // 应用还开着时 Windows 会锁住 exe/dll（EPERM/EBUSY），而且会删到一半就停 → 给一句人话
-    if (err && (err.code === "EPERM" || err.code === "EBUSY")) {
-      fatal(
-        `删不掉 ${path.relative(ROOT, appDir)}：文件被占用。\n` +
-          "  → 先**关闭正在运行的应用**（含托盘/后台残留）再出包。\n" +
-          "  → 刚才可能已删掉部分文件（都是构建产物，重新出包会重建；用户数据在 db\\ 里，不受影响）。"
-      );
+    // assertAppNotRunning() 已经确认应用没在跑 ⇒ 这时还删不掉，只可能是**外部句柄**
+    // （实测：DSH 的文件索引会握着 release\\MyFGOApp 的目录句柄，删/改名都被拒）。
+    // 退化成「清空子项 + 原地合并」：内容与改名等价，只是省掉 rename。
+    if (!(err && (err.code === "EPERM" || err.code === "EBUSY"))) throw err;
+    log("删不掉 " + path.relative(ROOT, appDir) + "（目录被外部句柄占住）→ 改走「清空子项 + 原地合并」");
+    for (const name of readdirSync(appDir)) {
+      try {
+        rmSync(path.join(appDir, name), { recursive: true, force: true });
+      } catch (_) {
+        /* 单个子项被占也不影响：下面 cpSync 会覆盖它 */
+      }
     }
-    throw err;
+    cpSync(unpackedDir, appDir, { recursive: true, force: true });
+    rmSync(unpackedDir, { recursive: true, force: true });
+    mergedInPlace = true;
   }
-  renameSync(unpackedDir, appDir);
-  log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
+  if (!mergedInPlace) {
+    renameSync(unpackedDir, appDir);
+    log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
+  } else {
+    log(`electron-builder 产物已原地合并到：${path.relative(ROOT, appDir)}`);
+  }
   if (!existsSync(appDir)) fatal("没有产出 release/MyFGOApp");
 
   // 打包完立刻自检：种子库是否干净、有没有混入 node_modules / 安卓构建垃圾、语言包是否精简

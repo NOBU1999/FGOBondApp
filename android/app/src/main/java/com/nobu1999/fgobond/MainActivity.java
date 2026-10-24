@@ -9,7 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // 注册自定义插件：把 Python 计算引擎暴露给界面（window.fgo.calculate 最终落到它）
-        registerPlugin(PythonEnginePlugin.class);
+        // [v0.3.0 TS-only] PythonEnginePlugin 已移除（APK 里不再有 CPython）
         super.onCreate(savedInstanceState);   // WebView 在这之后才存在
 
         // 长按要留给界面做「自己的菜单 + 滑动批量选择」，所以关掉 WebView 自带的长按菜单

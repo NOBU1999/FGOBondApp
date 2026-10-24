@@ -3,15 +3,13 @@
 /**
  * 引擎选择的唯一入口。
  *
- * **默认 TypeScript**（2026-10-24 起）。两个让它"退回去"的开关：
- *   · 环境变量 `FGO_ENGINE=python`（开发/对拍时用）
- *   · `<appRoot>/engine-ts/engine.txt` 内容 `python`（测试目录里给玩家手测用）
+ * **只用 TypeScript**（v0.3.0 起）：计算 / check / update 全部走 TS，
+ * 发布包里**不再带** `python-engine/engine.exe`（体积与"两套实现"的债一起消掉）。
+ *
+ * 保留一个开关给开发/对拍：环境变量 `FGO_ENGINE=python`，且本地**确实有** engine.exe 时才生效；
+ * 没有就一律 TS，绝不出现"切错了直接报缺文件"这种坑。
  *
  * 两个实现对外接口完全一致（calculate / check / update / stop / stderrTail / progress 事件）。
- *
- * ⚠️ 灰度收窄仍在：`check` / `update` 继续走 Python（TS 的联网+写库还没在真机跑过），
- *    要全切设 `FGO_ENGINE_ALL=1`。**v0.3.0 删掉 Python 侧时，这两条要一起改成 TS**
- *    （清单见 `文档\活跃\方案-引擎TS重写.md` §28.3）。
  */
 const fs = require("fs");
 const path = require("path");
@@ -45,18 +43,34 @@ function tsBundleReady() {
   }
 }
 
+/** v0.3.0 起发布包只带 TS 引擎：Python 的 exe 不再随包，代码保留（回滚/对拍用） */
+function pythonEngineReady() {
+  try {
+    return fs.existsSync(path.join(getAppRoot(), "python-engine", "engine.exe"));
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * @param {{dbPath?: string, mode?: "calculate"|"check"|"update"}} opts
  */
 function createEngine({ dbPath, mode = "calculate" } = {}) {
-  const kind = engineKind();
-  const all = String(process.env.FGO_ENGINE_ALL || "") === "1";
-  const wanted = kind === "ts" && (all || mode === "calculate");
-  // 产物缺失时退回 Python：宁可慢一点，也别让"直接 npm start"的用户一算就报错
-  const useTs = wanted && tsBundleReady();
-  if (wanted && !useTs) {
+  // 只要 TS 产物在，就用 TS：这条**不再看 engine.txt** —— 发布包里已经没有 Python 引擎，
+  // 让人误切到 python 只会得到"缺文件"。开发/对拍要跑 Python 时显式设 FGO_ENGINE=python。
+  const forcedPython = String(process.env.FGO_ENGINE || "").toLowerCase() === "python" && pythonEngineReady();
+  const kind = forcedPython ? "python" : "ts";
+  // v0.3.0：**计算 / check / update 全走 TS**。发布包里不再有 Python 引擎，
+  // 保留 `FGO_ENGINE=python` 只给开发/对拍用（那时本地还有 engine.exe）。
+  const useTs = kind === "ts" && tsBundleReady();
+  if (kind === "ts" && !useTs) {
     console.warn(
       "[engine] 没找到 dist/engine-ts/worker.mjs，本次回退 Python 引擎（先跑 npm run build:engine-ts）",
+    );
+  }
+  if (!useTs && !pythonEngineReady()) {
+    throw new Error(
+      "计算引擎缺失：既没找到 dist/engine-ts/worker.mjs，也没有 python-engine/engine.exe。请重新安装或运行 npm run build:engine-ts。",
     );
   }
   if (useTs) {
