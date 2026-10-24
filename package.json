@@ -18,6 +18,7 @@
     "android:debug": "npm run android:sync && cd android && gradlew assembleDebug",
     "android:release": "npm run android:sync && cd android && gradlew assembleRelease",
     "build:engine": "powershell -ExecutionPolicy Bypass -File python-engine/build_engine.ps1",
+    "build:engine-ts": "node scripts/build-engine-ts.mjs",
     "dist": "npm run build:engine && npm run make:seed && electron-builder --win dir",
     "make:seed": "node scripts/make_seed.cjs",
     "verify:package": "node scripts/verify_package.cjs",
