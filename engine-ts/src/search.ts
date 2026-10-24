@@ -177,7 +177,7 @@ export interface SearchHooks {
   upperBound?: (...args: Parameters<typeof relaxedScoreUpperBound>) => number;
   /**
    * 每次算完一套阵容的上界后回调，给"合法性硬检查"用：`ub` = 现在用的精确界（T2），
-   * `cheap` = 光看"Σ 前 K 大礼装项"的便宜界（T1）。理论上恒有 `cheap ≥ ub`；
+   * `cheap` = 换成 T1 礼装项（两条松弛取小，见 `fractionalCraftBound`）的便宜界。理论上恒有 `cheap ≥ ub`；
    * 断言它、并统计"按 cheap 剪枝还能活下来多少"，就是决定要不要把 T1 接到主循环之前的唯一依据。
    */
   onBound?: (info: {
@@ -541,24 +541,17 @@ export function comboRelaxedScore(combo: number[], craftScores: Map<number, numb
 }
 
 /**
- * 便宜礼装项（T1 的核心）：只取"每个空槽能拿到的最好分数"，**完全忽略 Cost 与礼装唯一性**。
+ * 每个槽"最多能拿到多少分"（降序，已按"可重复礼装能占任意多槽"封顶）。
  *
- * 口径（可证明是上界）：
- *   · 取所有候选礼装的松弛分，降序；
- *   · 第 i 个槽的上界 = max(第 i 大的礼装分, 可重复礼装里的最大分)；
- *     —— 可重复礼装（通用礼装那类）能占任意多个槽，所以每个槽都能拿到它的分；
- *   · 累加 K 个槽。Cost、槽位限制、非可重复礼装的唯一性一律不管（放松只会高估）。
- *
- * 为什么它一定 ≥ 精确界：任何合法组合里的每张礼装，要么是可重复的（分数 ≤ 可重复最大值），
- * 要么是非可重复的（互不相同 ⇒ 第 i 张 ≤ 第 i 大），逐项对上就压不住。
+ * 只看礼装分、**完全不看 Cost**；`i` 越界的槽按 0 计。
  */
-export function cheapCraftBound(
+function perSlotCraftValues(
   ctx: DataContext,
   craftScores: Map<number, number>,
   freeSlots: number,
-): number {
+): number[] {
   const slots = Math.max(0, Math.trunc(freeSlots));
-  if (slots === 0) return 0;
+  if (slots === 0) return [];
   const repeatableIds = repeatableCraftIds(ctx);
   let repMax = 0;
   const values: number[] = [];
@@ -569,22 +562,40 @@ export function cheapCraftBound(
     values.push(val);
   }
   values.sort((a, b) => b - a);
-  let total = 0;
+  const out: number[] = [];
   for (let i = 0; i < slots; i++) {
     const distinct = i < values.length ? values[i] : 0;
-    total += distinct > repMax ? distinct : repMax;
+    out.push(distinct > repMax ? distinct : repMax);
   }
+  return out;
+}
+
+/** 忽略 Cost 的上界：每槽取"能拿到的最大分"再累加（最松的一版，留作对照与兜底）。 */
+export function cheapCraftBound(
+  ctx: DataContext,
+  craftScores: Map<number, number>,
+  freeSlots: number,
+): number {
+  let total = 0;
+  for (const v of perSlotCraftValues(ctx, craftScores, freeSlots)) total += v;
   return total;
 }
 
 /**
- * 分数背包上界（T1 正式版）：**遵守 Cost**、允许"最后一件取小数"、可重复礼装不限件数。
+ * 礼装项上界（T1）：**不要求它"最优"，只要求它"一定 ≥ 真实最优"**，并且几十 µs 内算完。
  *
- * 为什么不是"取前 K 大"：礼装预算往往只够装 2~3 张（实测一条真实串：5 个槽、预算 40、每张 12），
- * 而"前 K 大"等于当 5 张都装得起 ⇒ 平均松 0.29、最大松 1.47。改成 LP 后平均 0.10、最大 0.53（同批 59,264 套实测）。
+ * 两条**各自都合法**的松弛，取**较小者**（两个上界的最小值仍然是上界，而且更紧）：
+ *  ① **不看槽数**的分数背包：按"价值 / Cost"降序整件整件取，预算见底后对余额取一次小数；
+ *     每件的件数仍守上限（不可重复 1 件、可重复 ≤ 槽数 —— 真实解也不会超过槽数）。
+ *  ② **不看具体哪几张**的上界：每槽取"能拿到的最大分"（= `perSlotCraftValues`），
+ *     但**最多只累加 J 个槽**，`J = min(槽数, floor(容量 / 最便宜礼装的 Cost))`。
+ *     依据是必要条件：任何 j 张的合法组合都有 `j × 最小 Cost ≤ 容量`（只放松、不放宽）。
  *
- * 仍然是**可证明的上界**：LP 松弛的最优值 ≥ 整数最优（允许取小数只会更高），
- * 而"每件最多 1 次（可重复礼装除外）"与"槽数上限"都保留在可行性里。
+ * ⚠️ **2026-10-24 修过一次真错**：之前只有"守槽数的单价贪心"，它在"槽稀缺 + Cost 悬殊"时
+ * **会低于真实最优**（不是上界），反例见 `engine-units.ts::fractional_craft_bound_ge_integer_optimum`：
+ * 4 槽 / 预算 0 / 2 个免费槽，礼装 A(8,1.247) B(0,0.937) C(20,1.734) E(0,可重复,1.267)
+ * → 真实最优 `E×3+C = 5.535`，旧算法先按单价把 B/E/A/C 各取一件 ⇒ 5.185（低于真值、会误杀）。
+ * 四条真实串上是 0 反例，因为那些形状**槽数不紧**（预算先见底），这也说明"0 反例"不等于合法。
  */
 export function fractionalCraftBound(
   ctx: DataContext,
@@ -598,52 +609,58 @@ export function fractionalCraftBound(
   const repeatableIds = repeatableCraftIds(ctx);
   const items: { val: number; cost: number; rep: boolean }[] = [];
   let maxCost = 0;
+  let minCost = Infinity;
   for (const [cid, v] of craftScores) {
     const val = Number(v) || 0;
     const cost = Math.max(0, Number(ctx.crafts.get(cid)?.cost ?? 0));
     if (cost > maxCost) maxCost = cost;
     if (val <= 0) continue;
+    if (cost < minCost) minCost = cost;
     items.push({ val, cost, rep: repeatableIds.has(cid) });
   }
+  if (items.length === 0) return 0;
   // 免费槽（冠位第二礼装位那类 0 Cost 槽）：精确界在那里不花预算 ⇒ 上界也要给它留出容量，
   // 否则会出现"便宜界 < 精确界"的反例（实测踩到：slack 低到 −1.2）。
   const freeSlotCount = Array.isArray(zeroCostSlots) ? zeroCostSlots.filter(Boolean).length : 0;
-  // 单价降序（Cost 0 的排最前：不占预算）
+  const cap = Math.max(0, costBudget) + freeSlotCount * maxCost;
+
+  // ① 不看槽数的分数背包
   const ratio = (it: { val: number; cost: number }): number => (it.cost === 0 ? Infinity : it.val / it.cost);
-  items.sort((a, b) => ratio(b) - ratio(a));
-  let cap = Math.max(0, costBudget) + freeSlotCount * maxCost;
-  let slotsLeft = slots;
-  let total = 0;
-  for (const it of items) {
-    if (slotsLeft <= 0) break;
-    const maxCopies = Math.min(slotsLeft, it.rep ? slotsLeft : 1);
+  const byRatio = [...items].sort((a, b) => {
+    const ra = ratio(a);
+    const rb = ratio(b);
+    if (ra === rb) return 0;
+    // 降序：比大小而不是做减法 —— 两个 Infinity 相减会得到 NaN，排序结果会乱（旧版就这么错了）
+    return rb > ra ? 1 : -1;
+  });
+  let rest = cap;
+  let noSlotLimit = 0;
+  for (const it of byRatio) {
+    const maxCopies = it.rep ? slots : 1;
     if (it.cost === 0) {
-      total += it.val * maxCopies;
-      slotsLeft -= maxCopies;
+      noSlotLimit += it.val * maxCopies;
       continue;
     }
-    const affordable = Math.min(maxCopies, Math.floor(cap / it.cost));
-    // 这一件能整件取完（含可重复礼装取满剩余槽）：取完继续下一件
-    if (affordable === maxCopies) {
-      total += it.val * affordable;
-      cap -= it.cost * affordable;
-      slotsLeft -= affordable;
-      continue;
+    const afford = Math.min(maxCopies, Math.floor(rest / it.cost));
+    if (afford > 0) {
+      noSlotLimit += it.val * afford;
+      rest -= it.cost * afford;
     }
-    // 取不完 ⇒ 这是 LP 的"最后一件"：先取能整件取的那几张，再对余额取一次小数，然后收工
-    if (affordable > 0) {
-      total += it.val * affordable;
-      cap -= it.cost * affordable;
-      slotsLeft -= affordable;
+    if (afford < maxCopies) {
+      // 预算见底：对余额取一次小数，然后收工（更便宜的也装不下了）
+      if (rest > 0) noSlotLimit += it.val * Math.min(1, rest / it.cost);
+      break;
     }
-    if (slotsLeft > 0 && cap > 0 && (it.rep || affordable === 0)) {
-      total += it.val * Math.min(1, cap / it.cost);
-      slotsLeft -= 1;
-      cap = 0;
-    }
-    break;
   }
-  return total;
+
+  // ② 不看"具体哪几张"：每槽最大分 × 允许的槽数
+  const perSlot = perSlotCraftValues(ctx, craftScores, slots);
+  const jCap =
+    minCost > 0 && Number.isFinite(minCost) ? Math.min(slots, Math.floor(cap / minCost)) : slots;
+  let noCostDetail = 0;
+  for (let i = 0; i < jCap; i++) noCostDetail += perSlot[i];
+
+  return Math.min(noSlotLimit, noCostDetail);
 }
 
 export function relaxedScoreUpperBound(
@@ -670,7 +687,7 @@ export function relaxedScoreUpperBound(
   }
   let bestCraftScore: number;
   if (cheapCraft) {
-    // 便宜界走"分数背包"（守 Cost、含免费槽容量），而不是"前 K 大"（忽略 Cost）
+    // 便宜界走"两条松弛取小"（见 fractionalCraftBound），不是"忽略 Cost 的前 K 大"
     bestCraftScore = fractionalCraftBound(ctx, craftScores, freeSlotsCount, costBudget, zeroCostSlots);
   } else if (exactCraftScore !== null) {
     bestCraftScore = exactCraftScore;
@@ -1720,7 +1737,7 @@ export async function searchTopTeams(
         );
         if (ubOut !== null) ubOut.set(servantSetKey, ub);
         if (hooks?.onBound) {
-          // 同一次调用的便宜界（T1）：只把礼装项换成"Σ 前 K 大"，其余口径一模一样
+          // 同一次调用的便宜界（T1）：只把礼装项换掉（两条松弛取小），其余口径一模一样
           const cheap = ubFn(
             ctx,
             req,
