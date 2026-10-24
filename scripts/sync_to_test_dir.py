@@ -287,7 +287,20 @@ def main() -> int:
                 shutil.copy2(asar, backup)
                 tmp = asar.with_suffix(".new")
                 asar_pack(work, tmp)
-                os.replace(tmp, asar)
+                try:
+                    os.replace(tmp, asar)
+                except PermissionError:
+                    # app.asar 被映射时 Windows 拒绝 rename/delete，但允许原地覆盖 ⇒ 写一遍再截断
+                    print("  ⚠️ app.asar 正被占用（多半是上次的 Electron 残留句柄），改为原地覆盖写入")
+                    with open(asar, "r+b") as dst, open(tmp, "rb") as src:
+                        data = src.read()
+                        dst.seek(0)
+                        dst.write(data)
+                        dst.truncate()
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
                 changes.append(f"app.asar 已重打包（备份 {backup.name}）")
         else:
             skipped.append("app.asar（内容一致）")
