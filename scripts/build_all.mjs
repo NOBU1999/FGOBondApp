@@ -60,6 +60,8 @@ const SKIP_ANDROID = has("--skip-android");
 const FORCE_ENGINE = has("--force-engine");
 // 仅刷新安卓数据：基础版本号不动，只把安卓数据序号 +1；只出 APK（Windows 那边数据是应用内更新的，不需要）
 const ANDROID_DATA_REFRESH = has("--android-data-refresh");
+// 强制重写已发布版本的清单与发布说明（同一版重出包时才用；默认**不覆盖**已发布的记录）
+const FORCE_NOTES = has("--force-notes");
 // 只刷新测试目录（release/MyFGOApp）：重编引擎 + 打 win-unpacked + 改名到位，
 // **不产 APK、不压 7z/zip、不写发布清单与下载表** —— 用于"改完让用户先测一遍"。
 const TEST_ONLY = has("--test-only");
@@ -444,12 +446,28 @@ function buildWindows() {
 
 // ---------------------------------------------------------------- 清单 + 发布说明
 function writeManifestAndNotes() {
+  const manifestFile = path.join(RELEASE_DIR, `release-manifest-v${VERSION}.json`);
+  const notesFile = path.join(RELEASE_DIR, `RELEASE_NOTES_v${VERSION}.md`);
+
+  // 🔴 这个版本的清单已经存在 ⇒ 说明"这一版已经出过包（很可能已经发布了）"。
+  // 此时再跑一次（出测试包 / 只补一个平台）**绝对不能**改写清单与发布说明：
+  // 发布说明是已经贴到 GitHub Release / 网盘的那份，清单是它的附件记录，多写一行就把记录弄脏了。
+  // 真要重写（同一版重出包）：加 --force-notes；数据刷新那条路（--android-data-refresh）本来就是在改这一版的包，一并放行。
+  const recordExists = existsSync(manifestFile);
+  if (recordExists && !FORCE_NOTES && !ANDROID_DATA_REFRESH) {
+    step("发布清单与说明（跳过：该版本已出过包）");
+    log(`→ ${path.relative(ROOT, manifestFile)} 已存在 ⇒ **不覆盖**（说明与清单是已发布版本的记录）`);
+    log("   本次产物（没写进清单）：");
+    for (const a of artifacts) log(`   ${a.file}  ${humanSize(a.bytes)}  ${a.sha256}`);
+    log("   需要把这次产物也写进清单：重跑时加 --force-notes");
+    return { artifacts, skipped: true };
+  }
+
   step("发布清单与说明");
   const builtAt = new Date().toISOString();
   const versionCode = ANDROID_VERSION_CODE;
 
   // 合并已有清单：允许"分两次跑"（只出 APK / 只出 Windows）也能得到完整清单
-  const manifestFile = path.join(RELEASE_DIR, `release-manifest-v${VERSION}.json`);
   let previous = [];
   try {
     const old = JSON.parse(readFileSync(manifestFile, "utf8"));
@@ -472,7 +490,6 @@ function writeManifestAndNotes() {
 
   // 发布说明：**已手写过的就保留**（只刷新下载表与校验值），没有才出模板。
   // 踩过（2026-10-08 v0.2.0）：出包会把辛苦写好的说明覆盖回模板。
-  const notesFile = path.join(RELEASE_DIR, `RELEASE_NOTES_v${VERSION}.md`);
   const autoTail = [
     "## 下载",
     "",
@@ -561,10 +578,14 @@ if (TEST_ONLY) {
   console.log(`  测试目录已刷新：${path.relative(ROOT, path.join(RELEASE_DIR, "MyFGOApp"))}`);
   console.log("  ⚠️ 记得把用户数据从备份恢复回 db\\fgo_data.db（出包会清那目录）");
 } else if (artifacts.length) {
-  const manifest = writeManifestAndNotes();
+  const record = writeManifestAndNotes();
   step("完成");
-  for (const a of manifest.artifacts) console.log(`  ${a.file}  ${humanSize(a.bytes)}  ${a.sha256}`);
-  console.log("\n下一步：把 release/ 里的文件传到网盘 + GitHub Release（附上 RELEASE_NOTES 的内容）。");
+  for (const a of artifacts) console.log(`  ${a.file}  ${humanSize(a.bytes)}  ${a.sha256}`);
+  if (record && record.skipped) {
+    console.log("\n本次**没有更新发布记录**（该版本已经出过包）：产物只在 release/ 里，别上传。");
+  } else {
+    console.log("\n下一步：把 release/ 里的文件传到网盘 + GitHub Release（附上 RELEASE_NOTES 的内容）。");
+  }
 } else {
   log("没有生成任何产物（都跳过了？）");
 }
