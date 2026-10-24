@@ -39,6 +39,10 @@ const USER_TABLES = [
   "user_box",
   "user_exclusions",
   "user_teams",
+  // ⚠️ 必须搬：预设的「保存结果」（user_teams.result_id 指着它）。
+  // 2026-10-24 修：漏了这张表 ⇒ 每次更新数据都把已存的结果整表丢掉，预设却还指着旧 id，
+  // 表现就是"加载预设时有的结果加载不出来"。
+  "saved_results",
   "custom_crafts",
 ];
 

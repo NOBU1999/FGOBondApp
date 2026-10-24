@@ -131,7 +131,19 @@ export function createTeamsDomain({ sql }) {
         WHERE t.id = ?`,
       [Number(teamId)]
     );
-    if (!row) return null;
+    if (!row) {
+      // 兜底：老数据里 result_id 可能指向早已不存在的行（历史 bug：静态刷新没搬 saved_results）。
+      // 读到就顺手清掉，界面就会正常显示"没有保存的结果"，而不是静默失败。
+      try {
+        const dangling = sql.get("SELECT result_id AS resultId FROM user_teams WHERE id = ?", [Number(teamId)]);
+        if (dangling && dangling.resultId) {
+          sql.run("UPDATE user_teams SET result_id = NULL WHERE id = ?", [Number(teamId)]);
+        }
+      } catch (_) {
+        // 清不掉不影响本次返回
+      }
+      return null;
+    }
     const parse = (raw) => {
       if (raw === undefined || raw === null || raw === "") return null;
       try {
