@@ -79,59 +79,72 @@ export const nodePlatform: Platform = {
   async loadSqlJs(opts: SqlJsOptions = {}): Promise<any> {
     if (SQL_MODULE) return SQL_MODULE;
     const root = opts.appRoot ?? APP_ROOT ?? process.env.FGO_APP_ROOT ?? process.cwd();
+    const pair = findSqlAssets(root);
     const initSqlJs = loadInitSqlJs(root);
-    const wasmPath = findSqlWasm(root);
     // 直接给字节：不依赖 locateFile / cwd / wasm 的 URL 解析
-    SQL_MODULE = await initSqlJs({ wasmBinary: fs.readFileSync(wasmPath) });
+    const wasmBinary = fs.readFileSync(pair ? pair.wasm : requireSqlWasm(root));
+    SQL_MODULE = await initSqlJs({ wasmBinary });
     return SQL_MODULE;
   },
 };
 
 /**
  * 加载 sql.js 的 JS 部分（**不能静态 import**：发布包里没有 node_modules）。
- * 依次找：<appRoot>/dist/engine-ts/sql-wasm.js → 与 bundle 同目录 → appRoot 的 node_modules。
+ * ⚠️ js 与 wasm 必须**成对**取：2026-10-25 有用户报 `Cannot find module 'sql.js'`，
+ *    查下来是他机器上 `dist\engine-ts\` 里的 sql-wasm.js 不见了（主界面能用是因为主进程走 better-sqlite3）。
+ *    所以发布包里多带了一份备用副本 `resources\sqljs\`，这里按目录顺序找"两个文件都在"的那一份。
  */
 function loadInitSqlJs(appRoot: string): any {
-  const candidates = [
-    path.join(appRoot, "dist", "engine-ts", "sql-wasm.js"),
-    path.join(HERE, "sql-wasm.js"),
-    // 兜底：万一被装成了"dist 在 resources 下"的布局
-    path.join(appRoot, "resources", "dist", "engine-ts", "sql-wasm.js"),
-    path.join(appRoot, "resources", "app.asar.unpacked", "node_modules", "sql.js", "dist", "sql-wasm.js"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) {
-      const req = createRequire(p);
-      const mod = req(p);
-      return mod && mod.default && typeof mod.default === "function" ? mod.default : mod;
-    }
+  const pair = findSqlAssets(appRoot);
+  if (pair) {
+    const req = createRequire(pair.js);
+    const mod = req(pair.js);
+    return mod && mod.default && typeof mod.default === "function" ? mod.default : mod;
   }
+  // 最后兜底：源码/仓库里如果有 node_modules，允许 require 直接解析
   try {
     const req = createRequire(path.join(appRoot, "package.json"));
     return req("sql.js");
   } catch (_) {
-    // 2026-10-25 用户反馈：报「Cannot find module 'sql.js'」+ 一串 require stack，看不出该干嘛。
-    // 这里换成能照做的说法，并把找过的路径写出来（下次反馈时一眼能判断是不是装漏了文件）。
     throw new Error(
-      "缺少数据库组件（sql-wasm.js / sql-wasm.wasm），程序目录里的 dist 文件夹不完整。\n" +
-        "处理：把新版压缩包完整解压，覆盖到当前程序目录（要包含 dist 文件夹），或解压到一个干净的新目录再打开。\n" +
-        `找过：\n  ${candidates.join("\n  ")}`,
+      "缺少数据库组件（sql-wasm.js / sql-wasm.wasm），程序目录里的文件不完整。\n" +
+        "处理：把新版压缩包完整解压，覆盖到当前程序目录（要包含 dist 与 resources 文件夹），" +
+        "或解压到一个干净的新目录再打开。\n" +
+        `找过：\n  ${sqlAssetDirs(appRoot).join("\n  ")}`,
     );
   }
 }
 
-/** 找 sql-wasm.wasm：打包版在 bundle 旁边，源码运行在 node_modules 里 */
-function findSqlWasm(appRoot: string): string {
-  const candidates = [
-    path.join(appRoot, "dist", "engine-ts", "sql-wasm.wasm"), // 打包后（release/MyFGOApp/dist/engine-ts/）
-    path.join(HERE, "sql-wasm.wasm"),                          // 与 bundle 同目录运行
-    path.join(appRoot, "node_modules", "sql.js", "dist", "sql-wasm.wasm"), // 源码运行
+/** 依次尝试的目录（js 与 wasm 必须同在一处） */
+function sqlAssetDirs(appRoot: string): string[] {
+  return [
+    path.join(appRoot, "dist", "engine-ts"),              // 打包后的主位置（release/MyFGOApp/dist/engine-ts/）
+    HERE,                                                  // 与 bundle 同目录运行
+    path.join(appRoot, "resources", "sqljs"),              // 备用副本（若被装成 extraResources 布局）
+    path.join(appRoot, "sqljs"),                           // 备用副本（extraFiles 落在程序目录根下）
+    path.join(appRoot, "resources", "dist", "engine-ts"),  // 万一装成 resources 布局
+    path.join(appRoot, "node_modules", "sql.js", "dist"),   // 源码运行
+    path.join(HERE, "..", "..", "node_modules", "sql.js", "dist"),
   ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+}
+
+function findSqlAssets(appRoot: string): { js: string; wasm: string } | null {
+  for (const dir of sqlAssetDirs(appRoot)) {
+    const js = path.join(dir, "sql-wasm.js");
+    const wasm = path.join(dir, "sql-wasm.wasm");
+    if (fs.existsSync(js) && fs.existsSync(wasm)) return { js, wasm };
+  }
+  return null;
+}
+
+/** 兜底：只有 wasm 没有 js 的极怪布局（正常路径是 findSqlAssets 成对命中） */
+function requireSqlWasm(appRoot: string): string {
+  for (const dir of sqlAssetDirs(appRoot)) {
+    const wasm = path.join(dir, "sql-wasm.wasm");
+    if (fs.existsSync(wasm)) return wasm;
   }
   throw new Error(
-    `找不到 sql-wasm.wasm。找过：\n  ${candidates.join("\n  ")}\n` +
+    `找不到 sql-wasm.wasm。找过：\n  ${sqlAssetDirs(appRoot).join("\n  ")}\n` +
       "打包前请运行 npm run build:engine-ts（它会顺带把 wasm 复制到 dist/engine-ts/）",
   );
 }

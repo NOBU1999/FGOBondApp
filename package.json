@@ -97,6 +97,14 @@
       {
         "from": "使用说明.txt",
         "to": "使用说明.txt"
+      },
+      {
+        "from": "dist/engine-ts/sql-wasm.js",
+        "to": "sqljs/sql-wasm.js"
+      },
+      {
+        "from": "dist/engine-ts/sql-wasm.wasm",
+        "to": "sqljs/sql-wasm.wasm"
       }
     ]
   }
