@@ -355,29 +355,41 @@ function buildWindows() {
   // 配了 npmmirror 镜像）。若本地已有下载好的 electron zip，可用环境变量直接指定，完全不联网：
   //   $env:FGO_ELECTRON_DIST = "$env:LOCALAPPDATA\electron\Cache\electron-v44.1.1-win32-x64.zip"
   const electronArgs = ["--win", "dir"];
+  // 构建产物先落到仓库里的临时舞台 `.build/`，**不直接写 release/MyFGOApp**。
+  // 原因（2026-10-24 实测）：编辑器 / 索引类进程的文件句柄会握着 release/MyFGOApp 里的文件（典型是 app.asar），
+  // 于是 rmSync/rename 整个目录必被拒；而 Windows 上"目录里有文件被打开"就足以让目录不能改名。
+  // 落到中立目录后，最后一步只做"逐个覆盖进 release/MyFGOApp"（子项可写），彻底绕开目录句柄。
+  const stageDir = path.join(ROOT, ".build");
+  rmSync(stageDir, { recursive: true, force: true });
+  mkdirSync(stageDir, { recursive: true });
+  electronArgs.push(`--config.directories.output=${stageDir}`);
   if (process.env.FGO_ELECTRON_DIST) {
     log(`使用本地 electron 发行包：${process.env.FGO_ELECTRON_DIST}`);
     electronArgs.push(`--config.electronDist=${process.env.FGO_ELECTRON_DIST}`);
   }
   run(electronBuilder, electronArgs);
 
-  // electron-builder 的 dir 目标输出到 release/win-unpacked，
+  // electron-builder 这次输出到 `.build/win-unpacked`（见上面的 stageDir），
   // 而既有流程（make_release_meta / privacy_clean / fetch_missing_avatars）都约定
-  // 应用目录是 release/MyFGOApp → 这里改名到位。不这么做会打到上一次的旧目录里（实测踩过：
-  // 会产出"标签新版本、内容却是旧版本"的错包）。
-  const unpackedDir = path.join(RELEASE_DIR, "win-unpacked");
+  // 应用目录是 release/MyFGOApp → 这里把它搬到位。
+  const unpackedDir = path.join(stageDir, "win-unpacked");
   const appDir = path.join(RELEASE_DIR, "MyFGOApp");
-  if (!existsSync(unpackedDir)) fatal("electron-builder 没有产出 release/win-unpacked");
+  if (!existsSync(unpackedDir)) fatal(`electron-builder 没有产出 ${path.relative(ROOT, unpackedDir)}`);
   assertAppNotRunning();
   let mergedInPlace = false;
-  try {
-    rmSync(appDir, { recursive: true, force: true });
-  } catch (err) {
-    // assertAppNotRunning() 已经确认应用没在跑 ⇒ 这时还删不掉，只可能是**外部句柄**
-    // （实测：DSH 的文件索引会握着 release\\MyFGOApp 的目录句柄，删/改名都被拒）。
-    // 退化成「清空子项 + 原地合并」：内容与改名等价，只是省掉 rename。
-    if (!(err && (err.code === "EPERM" || err.code === "EBUSY"))) throw err;
-    log("删不掉 " + path.relative(ROOT, appDir) + "（目录被外部句柄占住）→ 改走「清空子项 + 原地合并」");
+  if (!existsSync(appDir)) {
+    // 目标不存在：能直接改名就改名，否则复制一份
+    try {
+      renameSync(unpackedDir, appDir);
+    } catch (_) {
+      mkdirSync(appDir, { recursive: true });
+      cpSync(unpackedDir, appDir, { recursive: true });
+    }
+  } else {
+    // 目标已存在（正常情况）。注意：**不要**去 rmSync/rename 这个目录本身 ——
+    // 只要它里面有文件被别的进程打开（索引器读过 app.asar 就是），Windows 就拒绝改名与删除。
+    // 这里只清空子项再覆盖，等价于全量替换，且不受目录句柄影响。
+    log("刷新 " + path.relative(ROOT, appDir) + "（清空子项 + 覆盖）");
     for (const name of readdirSync(appDir)) {
       try {
         rmSync(path.join(appDir, name), { recursive: true, force: true });
@@ -385,16 +397,22 @@ function buildWindows() {
         /* 单个子项被占也不影响：下面 cpSync 会覆盖它 */
       }
     }
-    cpSync(unpackedDir, appDir, { recursive: true, force: true });
-    rmSync(unpackedDir, { recursive: true, force: true });
+    try {
+      cpSync(unpackedDir, appDir, { recursive: true, force: true });
+    } catch (err) {
+      fatal(
+        "覆盖 " +
+          path.relative(ROOT, appDir) +
+          " 失败（" +
+          ((err && err.code) || "?") +
+          "）—— 多半是某个文件正被占用（例如被索引器读过 app.asar）。\n" +
+          "  处理：先退出那个占用它的程序（不用重启系统），然后重跑本次命令。",
+      );
+    }
     mergedInPlace = true;
   }
-  if (!mergedInPlace) {
-    renameSync(unpackedDir, appDir);
-    log(`electron-builder 产物已改名到位：${path.relative(ROOT, unpackedDir)} → ${path.relative(ROOT, appDir)}`);
-  } else {
-    log(`electron-builder 产物已原地合并到：${path.relative(ROOT, appDir)}`);
-  }
+  rmSync(stageDir, { recursive: true, force: true });
+  log(mergedInPlace ? `产物已覆盖进：${path.relative(ROOT, appDir)}` : `产物已就位：${path.relative(ROOT, appDir)}`);
   if (!existsSync(appDir)) fatal("没有产出 release/MyFGOApp");
 
   // 打包完立刻自检：种子库是否干净、有没有混入 node_modules / 安卓构建垃圾、语言包是否精简

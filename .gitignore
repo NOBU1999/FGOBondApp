@@ -15,6 +15,7 @@ __pycache__/
 .ruff_cache/
 
 # ---------- 鏋勫缓/鎵撳寘浜х墿 ----------
+.build/
 release/
 dist/
 .cache/

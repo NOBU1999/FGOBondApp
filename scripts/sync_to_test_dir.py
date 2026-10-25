@@ -60,6 +60,7 @@ ASAR_SYNC_FILES = [
     "renderer/style.css",
     "renderer/index.html",
     "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成
+    "renderer/assets/app-icon.png",  # 窗口图标 / favicon（servantface/ craftface/ 太大，不走这条路）
     "preload.js",
     "shared/bridge/data-bridge.mjs",
     "shared/domain/meta.mjs",
