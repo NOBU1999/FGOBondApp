@@ -4189,15 +4189,19 @@ const App = {
         this.calculating = false;
       }
     },
+    /** 更新数据的步骤表：**顺序 = 引擎真实执行顺序**（两个下载都在写入之前）。
+     *  doneDetail 是"这一格做完之后该显示什么" —— 只改 status 不改 detail 会让界面出现
+     *  「✅ 下载从者数据 / 开始下载...」这种自相矛盾的行（2026-10-25 用户截图指出）。 */
     initUpdateItems() {
       return [
-        { key: "check", label: "检查更新", status: "pending", detail: "", percent: null },
-        { key: "servant_download", label: "下载从者数据", status: "pending", detail: "", percent: null },
-        { key: "servant_write", label: "写入从者/特性", status: "pending", detail: "", percent: null },
-        { key: "equip_download", label: "下载礼装数据", status: "pending", detail: "", percent: null },
-        { key: "equip_write", label: "写入礼装数据", status: "pending", detail: "", percent: null },
-        { key: "costume", label: "更新灵衣名称", status: "pending", detail: "", percent: null },
-        { key: "done", label: "完成", status: "pending", detail: "", percent: null },
+        { key: "check", label: "检查更新", status: "pending", detail: "", percent: null, doneDetail: "已连接数据源" },
+        { key: "servant_download", label: "下载从者数据", status: "pending", detail: "", percent: null, doneDetail: "下载完成" },
+        { key: "equip_download", label: "下载礼装数据", status: "pending", detail: "", percent: null, doneDetail: "下载完成" },
+        { key: "servant_write", label: "写入从者/特性", status: "pending", detail: "", percent: null, doneDetail: "写入完成" },
+        { key: "equip_write", label: "写入礼装数据", status: "pending", detail: "", percent: null, doneDetail: "写入完成" },
+        { key: "costume", label: "更新灵衣名称", status: "pending", detail: "", percent: null, doneDetail: "全部完成" },
+        { key: "event", label: "活动牵绊加成", status: "pending", detail: "", percent: null, doneDetail: "已更新" },
+        { key: "done", label: "完成", status: "pending", detail: "", percent: null, doneDetail: "更新完成" },
       ];
     },
     setUpdateItem(key, status, detail, percent) {
@@ -4206,6 +4210,21 @@ const App = {
       item.status = status;
       if (detail !== undefined) item.detail = detail;
       if (percent !== undefined) item.percent = percent;
+    },
+    /** 标记某一步完成：**同时**把小字换成完成态（不换就会卡在"正在…"） */
+    markItemDone(key, detail) {
+      const item = this.updateItems.find((i) => i.key === key);
+      if (!item) return;
+      item.status = "done";
+      item.detail = detail !== undefined ? detail : (item.doneDetail || "完成");
+      if (item.percent !== null) item.percent = 100;
+    },
+    /** 左上角状态文字：跑完别显示"空闲"（上面全是 ✅ 完成，写着空闲像没跑） */
+    updateStateText() {
+      if (this.updateRunning) return "处理中...";
+      if (this.updateError) return "上次出错";
+      if (this.updateResult) return "上次完成";
+      return "空闲";
     },
     handleUpdateProgress(rawMsg) {
       if (!this.updateRunning || !this.updateItems.length) return;
@@ -4218,7 +4237,7 @@ const App = {
       };
       const markActiveDone = () => {
         const key = activeKey();
-        if (key) this.setUpdateItem(key, "done");
+        if (key) this.markItemDone(key);
       };
 
       if (msg.includes("正在检查数据更新")) {
@@ -4227,17 +4246,17 @@ const App = {
       }
       if (msg.includes("正在下载从者数据")) {
         markActiveDone();
-        this.setUpdateItem("servant_download", "running", "开始下载...", 0);
+        this.setUpdateItem("servant_download", "running", "开始下载...", null);
+        return;
+      }
+      if (msg.includes("正在下载礼装数据")) {
+        markActiveDone();
+        this.setUpdateItem("equip_download", "running", "开始下载...", null);
         return;
       }
       if (msg.includes("正在写入从者与特性数据")) {
         markActiveDone();
         this.setUpdateItem("servant_write", "running", "正在写入本地数据库...");
-        return;
-      }
-      if (msg.includes("正在下载礼装数据")) {
-        markActiveDone();
-        this.setUpdateItem("equip_download", "running", "开始下载...", 0);
         return;
       }
       if (msg.includes("正在写入礼装数据")) {
@@ -4252,30 +4271,47 @@ const App = {
         this.setUpdateItem("costume", "running", msg, pct);
         return;
       }
+      if (msg.includes("正在下载活动数据")) {
+        markActiveDone();
+        this.setUpdateItem("event", "running", "正在下载活动数据...", null);
+        return;
+      }
+      if (msg.includes("正在读取从者活动被动技能")) {
+        this.setUpdateItem("event", "running", "正在读取从者活动被动技能...");
+        return;
+      }
+      if (msg.includes("正在解析活动牵绊加成")) {
+        this.setUpdateItem("event", "running", "正在解析活动加成...");
+        return;
+      }
+      if (msg.includes("活动牵绊加成解析完成")) {
+        this.markItemDone("event", msg.replace(/^.*解析完成：/, "已解析："));
+        return;
+      }
       if (msg.includes("数据更新完成") || msg.includes("数据已是最新版本")) {
         markActiveDone();
-        this.setUpdateItem("done", "done", msg.includes("最新") ? "无需更新" : "更新完成");
+        this.markItemDone("done", msg.includes("最新") ? "无需更新" : "更新完成");
         return;
       }
 
-      // 下载百分比行
-      let m = msg.match(/nice_servant:\s*(\d+)%/);
-      if (m) {
-        this.setUpdateItem("servant_download", "running", `下载从者数据 ${m[1]}%`, Number(m[1]));
-        return;
-      }
-      if (msg.includes("nice_servant: done")) {
-        this.setUpdateItem("servant_download", "done", "下载完成");
-        return;
-      }
-      m = msg.match(/nice_equip:\s*(\d+)%/);
-      if (m) {
-        this.setUpdateItem("equip_download", "running", `下载礼装数据 ${m[1]}%`, Number(m[1]));
-        return;
-      }
-      if (msg.includes("nice_equip: done")) {
-        this.setUpdateItem("equip_download", "done", "下载完成");
-        return;
+      // 下载明细行：`nice_servant: 45% (30.0/66.0 MB, 0.19 MB/s, 约剩 172s)` / `nice_servant: done -> <路径>`
+      const dl = msg.match(/^(nice_servant|nice_equip|nice_event|basic_event_cn):\s*(.+)$/);
+      if (dl) {
+        const key =
+          dl[1] === "nice_servant" ? "servant_download" : dl[1] === "nice_equip" ? "equip_download" : "event";
+        const rest = dl[2].trim();
+        if (rest.startsWith("done")) {
+          this.markItemDone(key, "下载完成");
+          return;
+        }
+        const pm = rest.match(/^(\d+)%\s*(?:\(([^)]*)\))?/);
+        if (pm) {
+          const pct = Number(pm[1]);
+          const extra = pm[2] ? "（" + pm[2] + "）" : "";
+          this.setUpdateItem(key, "running", "下载中 " + pct + "%" + extra, pct);
+          return;
+        }
+        this.setUpdateItem(key, "running", rest);
       }
     },
     /**
@@ -4374,8 +4410,8 @@ const App = {
           this.setUpdateItem("done", "done", "无需更新");
         } else {
           const active = this.updateItems.find((i) => i.status === "running");
-          if (active) this.setUpdateItem(active.key, "done");
-          this.setUpdateItem("done", "done", "更新完成");
+          if (active) this.markItemDone(active.key);
+          this.markItemDone("done", "更新完成");
           try {
             await this.reloadAllData();
             this.updateResult = Object.assign({}, r, { uiReloaded: true });
@@ -4411,8 +4447,8 @@ const App = {
         this.setUpdateItem("reset_clear", "done", "已清空（个人数据保留）");
         const r = await window.fgo.resetStaticData();
         const active = this.updateItems.find((i) => i.status === "running");
-        if (active) this.setUpdateItem(active.key, "done");
-        this.setUpdateItem("done", "done", "重建完成");
+        if (active) this.markItemDone(active.key);
+        this.markItemDone("done", "重建完成");
         this.updateResult = r;
         // 静态数据变了，旧结果作废
         this.results = [];
@@ -5678,7 +5714,7 @@ const App = {
         <div v-if="updateTitle === '更新数据'" class="filters">
           <button class="secondary" :disabled="updateRunning" @click="runCheck()">检查刷新</button>
           <button class="secondary" :disabled="updateRunning" @click="runUpdate()">更新数据</button>
-          <span class="text-muted" style="align-self:center">{{ updateRunning ? '处理中...' : '空闲' }}</span>
+          <span class="text-muted" style="align-self:center">{{ updateStateText() }}</span>
         </div>
         <div v-if="updateTitle === '重置数据库'" class="text-muted" style="margin-bottom:10px">
           只重建静态数据（从者/礼装/特性/灵衣），账号 / Box / 排除 / 预设 / 自定义礼装都会保留；失败会自动回滚。
