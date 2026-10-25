@@ -95,6 +95,9 @@ function loadInitSqlJs(appRoot: string): any {
   const candidates = [
     path.join(appRoot, "dist", "engine-ts", "sql-wasm.js"),
     path.join(HERE, "sql-wasm.js"),
+    // 兜底：万一被装成了"dist 在 resources 下"的布局
+    path.join(appRoot, "resources", "dist", "engine-ts", "sql-wasm.js"),
+    path.join(appRoot, "resources", "app.asar.unpacked", "node_modules", "sql.js", "dist", "sql-wasm.js"),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) {
@@ -103,8 +106,18 @@ function loadInitSqlJs(appRoot: string): any {
       return mod && mod.default && typeof mod.default === "function" ? mod.default : mod;
     }
   }
-  const req = createRequire(path.join(appRoot, "package.json"));
-  return req("sql.js");
+  try {
+    const req = createRequire(path.join(appRoot, "package.json"));
+    return req("sql.js");
+  } catch (_) {
+    // 2026-10-25 用户反馈：报「Cannot find module 'sql.js'」+ 一串 require stack，看不出该干嘛。
+    // 这里换成能照做的说法，并把找过的路径写出来（下次反馈时一眼能判断是不是装漏了文件）。
+    throw new Error(
+      "缺少数据库组件（sql-wasm.js / sql-wasm.wasm），程序目录里的 dist 文件夹不完整。\n" +
+        "处理：把新版压缩包完整解压，覆盖到当前程序目录（要包含 dist 文件夹），或解压到一个干净的新目录再打开。\n" +
+        `找过：\n  ${candidates.join("\n  ")}`,
+    );
+  }
 }
 
 /** 找 sql-wasm.wasm：打包版在 bundle 旁边，源码运行在 node_modules 里 */
