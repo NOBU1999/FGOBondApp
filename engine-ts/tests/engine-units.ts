@@ -16,9 +16,11 @@
 // 退出码：0 = 全部通过（含 SKIP/XFAIL）；1 = 有 FAIL/ERROR
 import "../src/platformNode.ts";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { loadContext } from "../src/calculator.ts";
+import zlib from "node:zlib";
+import { costOverridesOf, loadContext, withServantCostOverrides } from "../src/calculator.ts";
 import { parseRequest } from "../src/models.ts";
 import type { CalculationRequest } from "../src/models.ts";
 import { searchTopTeams } from "../src/search.ts";
@@ -39,7 +41,7 @@ import {
   repeatableCraftIds,
   usesPointsScoring,
 } from "../src/relaxed.ts";
-import { downloadToCache } from "../src/dataFetch.ts";
+import { downloadRangeRaw, downloadToCache, gunzipIfNeeded, normalizeEtag } from "../src/dataFetch.ts";
 import type { DataContext } from "../src/calculator.ts";
 
 const APP_ROOT = process.env.FGO_APP_ROOT ?? path.resolve(import.meta.dirname, "../..");
@@ -613,6 +615,110 @@ check(
   } finally {
     fs.rmSync(tmpdir, { recursive: true, force: true });
   }
+});
+
+check(
+  "download_range_decodes_gzip_exactly_once",
+  "坑 124：Node 的 fetch 会自动解 gzip 却仍留着 content-encoding 头 → 别再「看头解压」，否则解两次报 incorrect header check",
+)(async () => {
+  const plain = Buffer.from(
+    JSON.stringify([{ id: 1, name: "アルトリア", costume: { "1": "霊衣" } }, { id: 2 }]),
+    "utf8",
+  );
+  // ① 纯函数层：真 gzip 要解开；明文（哪怕响应头说是 gzip）必须原样通过
+  const gz = zlib.gzipSync(plain);
+  require_(
+    Buffer.compare(Buffer.from(gunzipIfNeeded(new Uint8Array(gz))), plain) === 0,
+    "gunzipIfNeeded 没能解开真正的 gzip 体",
+  );
+  require_(
+    Buffer.compare(Buffer.from(gunzipIfNeeded(new Uint8Array(plain))), plain) === 0,
+    "gunzipIfNeeded 对明文又解了一次（线上就是这句报 incorrect header check）",
+  );
+
+  // ② 端到端：本地服务器照 Atlas 的样子回「206 + Range + content-encoding: gzip + gzip 体」，
+  //    下载结果必须逐字节等于明文原文（顺带验 content-range 里的总长度解析）
+  const server = http.createServer((_req, res) => {
+    const body = zlib.gzipSync(plain);
+    res.writeHead(206, {
+      "Content-Type": "application/json",
+      "Content-Encoding": "gzip",
+      "Content-Range": `bytes 0-${plain.length - 1}/${plain.length}`,
+      "Content-Length": String(body.length),
+    });
+    res.end(body);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  try {
+    const port = (server.address() as any).port;
+    const [data, total] = await downloadRangeRaw(`http://127.0.0.1:${port}/nice_servant.json`, 0, plain.length - 1);
+    require_(
+      Buffer.compare(Buffer.from(data), plain) === 0,
+      `下载回来的字节不对：拿到 ${data.length} 字节，应以 ${JSON.stringify(plain.subarray(0, 12).toString())} 开头，` +
+        `实际是 ${JSON.stringify(Buffer.from(data).subarray(0, 12).toString())}`,
+    );
+    require_(total === plain.length, `content-range 总长度解析错：应为 ${plain.length}，实际 ${total}`);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+check(
+  "etag_ignores_content_encoding_variant",
+  "坑 125：Atlas 的 ETag 带 Vary: Accept-Encoding（gzip 变体多 `-gzip`）→ 「检查更新」不能因为编码形态不同就报有更新",
+)(async () => {
+  const cases: [string, string][] = [
+    ['"abc123"', '"abc123"'],
+    ['"abc123-gzip"', '"abc123"'],
+    ['"abc123-br"', '"abc123"'],
+    ["abc123-gzip", "abc123"],
+    ["", ""],
+  ];
+  for (const [raw, want] of cases) {
+    const got = normalizeEtag(raw);
+    require_(got === want, `normalizeEtag(${JSON.stringify(raw)}) = ${JSON.stringify(got)}，应为 ${JSON.stringify(want)}`);
+  }
+  // 两代引擎对同一份数据拿到的 ETag 必须归一成同一个值，否则"数据没变也提示有更新"
+  require_(
+    normalizeEtag('"dmd5s4z6u461158f6g-gzip"') === normalizeEtag('"dmd5s4z6u461158f6g"'),
+    "gzip 变体与 identity 变体的 ETag 归一后仍不相等",
+  );
+});
+
+check(
+  "cost_override_request_scoped",
+  "玛修 Cost 可调（0/16）：覆盖只对本次请求生效，不能污染被复用的 ctx（13 档指纹 / 安卓宿主都复用 ctx）",
+  { needsCtx: true },
+)(async () => {
+  const base = await loadCtx();
+  const mash = base.servants.get(800100);
+  require_(!!mash, "库里没有玛修（800100）");
+  const before = mash!.cost;
+  const patched = withServantCostOverrides(base, costOverridesOf([{ servant_id: 800100, cost_override: 16 }]));
+  require_(
+    patched.servants.get(800100)!.cost === 16,
+    `覆盖后玛修 Cost 应是 16，实际 ${patched.servants.get(800100)!.cost}`,
+  );
+  require_(
+    base.servants.get(800100)!.cost === before,
+    `覆盖把原 ctx 也改了（${before} → ${base.servants.get(800100)!.cost}），下次请求会带着错值`,
+  );
+  require_(patched.crafts === base.crafts, "除 servants 外应保持同一引用（别把挂在 ctx 上的缓存也复制掉）");
+  require_(
+    patched.servant_mask(800100, "fourth") === base.servant_mask(800100, "fourth"),
+    "改 Cost 不该影响特性掩码",
+  );
+  // 没有覆盖时必须原样返回（零开销，也不破坏别处的对象相等判断）
+  require_(withServantCostOverrides(base, new Map()) === base, "没有覆盖时应原样返回 ctx");
+  require_(
+    withServantCostOverrides(base, costOverridesOf([{ servant_id: 800100, cost_override: null }])) === base,
+    "costOverride=null 表示不覆盖，不该造新 ctx",
+  );
+  const parsed = costOverridesOf([{ servant_id: 800100, cost_override: 0 }, { servant_id: 1 }]);
+  require_(
+    parsed.size === 1 && parsed.get(800100) === 0,
+    `costOverridesOf 应只收 800100=0，实际 ${JSON.stringify([...parsed])}`,
+  );
 });
 
 check(

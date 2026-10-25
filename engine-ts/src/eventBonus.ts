@@ -278,6 +278,8 @@ export interface EventBonusOptions {
   dbPath?: string | null;
   useCache?: boolean;
   progress?: ((message: string) => void) | null;
+  /** 下载明细（每 2% 一行）——界面进度条靠它，默认只写 stderr */
+  downloadLog?: ((message: string) => void) | null;
   sqlFactory?: any;
 }
 
@@ -285,9 +287,17 @@ export async function updateEventBondBonus(opts: EventBonusOptions = {}): Promis
   const region = opts.region ?? "JP";
   const useCache = opts.useCache ?? true;
   const progress = opts.progress ?? null;
+  const downloadLog = opts.downloadLog ?? undefined;
 
   if (progress) progress("正在下载活动数据...");
-  const events = await loadJsonCached(region, NICE_EVENT_FILE, dataCfg.rawCacheDir, "nice_event", useCache);
+  const events = await loadJsonCached(
+    region,
+    NICE_EVENT_FILE,
+    dataCfg.rawCacheDir,
+    "nice_event",
+    useCache,
+    downloadLog,
+  );
 
   if (progress) progress("正在读取从者活动被动技能...");
   const servants = await loadJsonCached(
@@ -296,6 +306,7 @@ export async function updateEventBondBonus(opts: EventBonusOptions = {}): Promis
     dataCfg.rawCacheDir,
     "nice_servant",
     useCache,
+    downloadLog,
   );
 
   if (progress) progress("正在解析活动牵绊加成...");
@@ -308,6 +319,7 @@ export async function updateEventBondBonus(opts: EventBonusOptions = {}): Promis
       dataCfg.rawCacheDir,
       "basic_event_cn",
       useCache,
+      downloadLog,
     );
     cnNamesById = new Map<number, string>();
     for (const e of cnBasic ?? []) {

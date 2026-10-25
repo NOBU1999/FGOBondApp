@@ -155,6 +155,19 @@ export class HttpError extends Error {
   }
 }
 
+/** 响应体 → 原始 JSON 字节。
+ *  ⚠️ **Node 的 fetch（undici）自己就把 gzip 解开了**，却仍然保留 `content-encoding: gzip` 响应头
+ *  （2026-10-25 实测 Atlas：头说 gzip、content-length 370，body 却是 1024 字节明文 JSON）。
+ *  旧 Python 实现走 urllib（**不**自动解压）才需要"看头解压"；照抄过来就成了**解压两次** ——
+ *  第二次拿到的是明文，zlib 直接报 `incorrect header check`，于是「更新数据」整条挂掉（v0.3.0 就这样）。
+ *  ⇒ 只认 gzip **魔数**（1f 8b），不信响应头：宿主解压过也好、没解压过也好，都对。 */
+export function gunzipIfNeeded(body: Uint8Array): Uint8Array {
+  if (body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b) {
+    return new Uint8Array(zlib.gunzipSync(body));
+  }
+  return body;
+}
+
 /** 请求一段原始 JSON 字节区间（Atlas 支持 Range；gzip 时每段独立解压） */
 export async function downloadRangeRaw(url: string, start: number, end: number): Promise<[Uint8Array, number]> {
   assertNet();
@@ -166,20 +179,17 @@ export async function downloadRangeRaw(url: string, start: number, end: number):
       signal: ctrl.signal,
     });
     if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
-    const enc = (resp.headers.get("content-encoding") ?? "").toLowerCase();
     if (resp.status === 206) {
       let totalRaw = 0;
       const contentRange = resp.headers.get("content-range") ?? "";
       if (contentRange.includes("/")) {
         totalRaw = parseInt(contentRange.slice(contentRange.lastIndexOf("/") + 1), 10) || 0;
       }
-      const body = new Uint8Array(await resp.arrayBuffer());
-      const raw = enc === "gzip" ? new Uint8Array(zlib.gunzipSync(body)) : body;
+      const raw = gunzipIfNeeded(new Uint8Array(await resp.arrayBuffer()));
       return [raw, totalRaw];
     }
     // 服务器不支持 Range 时整包读取
-    const body = new Uint8Array(await resp.arrayBuffer());
-    const raw = enc === "gzip" ? new Uint8Array(zlib.gunzipSync(body)) : body;
+    const raw = gunzipIfNeeded(new Uint8Array(await resp.arrayBuffer()));
     return [raw, raw.length];
   } finally {
     clearTimeout(timer);
@@ -310,6 +320,15 @@ export async function cacheIsFresh(cachePath: string, region: string, filename: 
   }
 }
 
+/** Atlas 的 ETag 响应带 `Vary: Accept-Encoding`：同一份文件，gzip 变体的 ETag 尾巴多一个 `-gzip`
+ *  （实测：要 identity 得 `"dmd5s4z6u461158f6g"`，要 gzip 得 `"dmd5s4z6u461158f6g-gzip"`）。
+ *  Node 的 fetch 会自动要 gzip，旧 Python 的 urllib 不要 ⇒ 同一份数据在两代引擎里 ETag 形态不同，
+ *  一比就是"有更新"（实测能复现：数据已是最新，检查更新仍报四条「有更新」）。
+ *  ⇒ 存和比之前都去掉压缩变体后缀，口径与宿主无关。 */
+export function normalizeEtag(v: string | null | undefined): string {
+  return String(v ?? "").replace(/-(?:gzip|br|deflate)(?=["']?$)/i, "");
+}
+
 export async function getRemoteExportMeta(
   region: string | null = null,
   filename: string = NICE_SERVANT_FILE,
@@ -323,7 +342,7 @@ export async function getRemoteExportMeta(
     const resp = await fetch(url, { method: "HEAD", headers: { "User-Agent": UA }, signal: ctrl.signal });
     if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
     return {
-      etag: resp.headers.get("etag") ?? "",
+      etag: normalizeEtag(resp.headers.get("etag")),
       last_modified: resp.headers.get("last-modified") ?? "",
     };
   } finally {
@@ -339,18 +358,20 @@ export async function loadJsonCached(
   cacheDir: string,
   label: string,
   useCache: boolean,
+  log?: (m: string) => void,
 ): Promise<any[]> {
+  const out = log ?? logStderr;
   const cachePath = path.join(cacheDir, `${region}_${filename}`);
   if (useCache && fs.existsSync(cachePath) && (await cacheIsFresh(cachePath, region, filename))) {
     return JSON.parse(fs.readFileSync(cachePath, "utf8"));
   }
   if (useCache && fs.existsSync(cachePath)) {
-    logStderr(`[data_fetcher] ${label}: 本地缓存已过期，重新下载`);
+    out(`[data_fetcher] ${label}: 本地缓存已过期，重新下载`);
   }
   const url = exportUrl(region, filename);
-  logStderr(`[data_fetcher] downloading ${url}`);
+  out(`[data_fetcher] downloading ${url}`);
   if (useCache) {
-    await downloadToCache(url, cachePath, label);
+    await downloadToCache(url, cachePath, label, null, out);
     return JSON.parse(fs.readFileSync(cachePath, "utf8"));
   }
   const bytes = await fetchBytes(url);
@@ -361,22 +382,24 @@ export async function loadNiceServants(
   region: string | null = null,
   useCache = true,
   cacheDir: string | null = null,
+  log?: (m: string) => void,
 ): Promise<any[]> {
   const r = regionOrDefault(region);
   const dir = cacheDir ?? dataCfg.rawCacheDir;
   fs.mkdirSync(dir, { recursive: true });
-  return loadJsonCached(r, NICE_SERVANT_FILE, dir, "nice_servant", useCache);
+  return loadJsonCached(r, NICE_SERVANT_FILE, dir, "nice_servant", useCache, log);
 }
 
 export async function loadNiceEquips(
   region: string | null = null,
   useCache = true,
   cacheDir: string | null = null,
+  log?: (m: string) => void,
 ): Promise<any[]> {
   const r = regionOrDefault(region);
   const dir = cacheDir ?? dataCfg.rawCacheDir;
   fs.mkdirSync(dir, { recursive: true });
-  return loadJsonCached(r, NICE_EQUIP_FILE, dir, "nice_equip", useCache);
+  return loadJsonCached(r, NICE_EQUIP_FILE, dir, "nice_equip", useCache, log);
 }
 
 // ---------------------------------------------------------------------------
@@ -724,6 +747,9 @@ export interface BuildOptions {
   dbPath?: string | null;
   useCache?: boolean;
   progress?: ((message: string) => void) | null;
+  /** 下载明细（每 2% 一行，含 MB/s 与剩余时间）。
+   *  ⚠️ 默认只写宿主 stderr；界面要看到进度条就必须由调用方接走（worker 入口会转发给界面）。 */
+  downloadLog?: ((message: string) => void) | null;
   /** 由调用方注入的 sql.js 工厂（默认从 node_modules 里找） */
   sqlFactory?: any;
 }
@@ -733,16 +759,17 @@ export async function buildDatabase(opts: BuildOptions = {}): Promise<Record<str
   const dbPath = opts.dbPath ?? dataCfg.dbPath;
   const useCache = opts.useCache ?? true;
   const progress = opts.progress ?? null;
+  const downloadLog = opts.downloadLog ?? null;
   const db = await connectWrite(dbPath, opts.sqlFactory);
   initDb(db);
   // 整趟写库放进一个事务（sql.js 逐条 autocommit 慢得多）
   db.run("BEGIN");
 
   if (progress) progress("正在下载从者数据...");
-  const servantsApi = await loadNiceServants(region, useCache);
+  const servantsApi = await loadNiceServants(region, useCache, null, downloadLog ?? undefined);
 
   if (progress) progress("正在下载礼装数据...");
-  const equipsApi = await loadNiceEquips(region, useCache);
+  const equipsApi = await loadNiceEquips(region, useCache, null, downloadLog ?? undefined);
 
   // 两份都拉成功后再清空旧数据，避免下载失败把本地可用库清掉
   clearDataTables(db);
@@ -773,7 +800,7 @@ export async function buildDatabase(opts: BuildOptions = {}): Promise<Record<str
   if (region !== "CN") {
     if (progress) progress("正在写入简中服特性数据...");
     try {
-      const cnServantsApi = await loadNiceServants("CN", useCache);
+      const cnServantsApi = await loadNiceServants("CN", useCache, null, downloadLog ?? undefined);
       for (const raw of cnServantsApi) {
         const parsed = parseServant(raw);
         if (parsed === null) continue;
@@ -813,7 +840,7 @@ export async function buildDatabase(opts: BuildOptions = {}): Promise<Record<str
       cnUnavailableIds = [];
       setMeta(db, "cn_equip_etag", "");
     } else {
-      const cnEquips = await loadNiceEquips("CN", useCache);
+      const cnEquips = await loadNiceEquips("CN", useCache, null, downloadLog ?? undefined);
       cnUnavailableIds = cnUnavailableBondCeIds(db, cnEquips);
       try {
         const cnMeta = await getRemoteExportMeta("CN", NICE_EQUIP_FILE);
@@ -1039,10 +1066,11 @@ export async function checkUpdate(
   const r = regionOrDefault(region);
   const db = await connectWrite(dbPath ?? dataCfg.dbPath, sqlFactory);
   initDb(db);
-  const localEtag = getMeta(db, "servant_etag") ?? "";
-  const localCnEquipEtag = getMeta(db, "cn_equip_etag") ?? "";
-  const localCnServantEtag = getMeta(db, "cn_servant_etag") ?? "";
-  const localEventEtag = getMeta(db, "event_etag") ?? "";
+  // ⚠️ 本地可能存着 Python 时代写下的、没有 `-gzip` 后缀的 ETag（见 normalizeEtag）
+  const localEtag = normalizeEtag(getMeta(db, "servant_etag"));
+  const localCnEquipEtag = normalizeEtag(getMeta(db, "cn_equip_etag"));
+  const localCnServantEtag = normalizeEtag(getMeta(db, "cn_servant_etag"));
+  const localEventEtag = normalizeEtag(getMeta(db, "event_etag"));
   const localUpdatedAt = getMeta(db, "updated_at") ?? "";
   exportDb(db, dbPath ?? dataCfg.dbPath);
 
@@ -1081,6 +1109,8 @@ export interface UpdateOptions extends BuildOptions {
 export async function updateDatabase(opts: UpdateOptions = {}): Promise<Record<string, any>> {
   const region = regionOrDefault(opts.region);
   const progress = opts.progress ?? null;
+  // 下载明细（每 2% 一行）走同一个 progress 通道：界面靠它画进度条，否则大文件下载期间界面纹丝不动
+  const downloadLog = opts.downloadLog ?? (progress ? (m: string) => progress(m) : null);
   if (progress) progress("正在检查数据更新...");
   const dbPath = opts.dbPath ?? dataCfg.dbPath;
   {
@@ -1094,6 +1124,7 @@ export async function updateDatabase(opts: UpdateOptions = {}): Promise<Record<s
     dbPath,
     useCache: opts.useCache ?? true,
     progress,
+    downloadLog,
     sqlFactory: opts.sqlFactory,
   });
   try {
@@ -1114,6 +1145,7 @@ export async function updateDatabase(opts: UpdateOptions = {}): Promise<Record<s
         dbPath,
         useCache: opts.useCache ?? true,
         progress,
+        downloadLog,
         sqlFactory: opts.sqlFactory,
       });
       Object.assign(stats, eventStats);
