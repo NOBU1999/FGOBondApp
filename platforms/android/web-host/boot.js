@@ -723,6 +723,7 @@
       ["user_box", "aura_bonus", "REAL DEFAULT 0"],
       ["user_box", "bond_rank", "INTEGER DEFAULT 0"],
       ["user_box", "bond_max_rank", "INTEGER DEFAULT 0"],
+      ["user_box", "cost_override", "INTEGER DEFAULT NULL"],
     ];
     let added = 0;
     for (const [table, column, ddl] of additions) {

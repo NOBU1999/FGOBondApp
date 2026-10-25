@@ -6,7 +6,7 @@
 // 应用没有"导入验证串"的入口，历史串由开发侧 `reproduce_verification.py` 解。
 // 平台实现必须最先加载（桌面走 Node：fs / zlib / sql.js）
 import "./platformNode.ts";
-import { loadContext } from "./calculator.ts";
+import { costOverridesOf, loadContext, withServantCostOverrides } from "./calculator.ts";
 import { parseRequest } from "./models.ts";
 import { searchTopTeams } from "./search.ts";
 import { checkUpdate, configureDataPaths, dataCfg, updateDatabase } from "./dataFetch.ts";
@@ -44,7 +44,9 @@ export async function calculateFromData(
   applyConfig(opts);
   const req = parseRequest(data);
   logProgress("正在加载本地数据...");
-  const ctx = await loadContext(opts.dbPath ?? dataCfg.dbPath, req.server_region);
+  const baseCtx = await loadContext(opts.dbPath ?? dataCfg.dbPath, req.server_region);
+  // 玛修那类"可调 Cost"的请求级覆盖（0/16）
+  const ctx = withServantCostOverrides(baseCtx, costOverridesOf(req.box));
 
   if (req.cost_limit < 50 || req.cost_limit > 200) {
     throw new Error("Cost上限需在50~200之间");

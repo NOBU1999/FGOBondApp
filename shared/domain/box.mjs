@@ -33,7 +33,7 @@ export function createBoxDomain({ sql, accounts, codec }) {
   function getUserBox(accountId) {
     const id = accounts.resolveAccountId(accountId);
     return sql.all(
-      "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus, bond_rank AS bondRank, bond_max_rank AS bondMaxRank FROM user_box WHERE account_id = ?",
+      "SELECT servant_id AS servantId, stage, is_max_bond AS isMaxBond, bond_switch1 AS bondSwitch1, bond_switch2 AS bondSwitch2, personal_bonus AS personalBonus, aura_bonus AS auraBonus, bond_rank AS bondRank, bond_max_rank AS bondMaxRank, cost_override AS costOverride FROM user_box WHERE account_id = ?",
       [id]
     );
   }
@@ -43,7 +43,7 @@ export function createBoxDomain({ sql, accounts, codec }) {
     return sql.tx(() => {
       sql.run("DELETE FROM user_box WHERE account_id = ?", [id]);
       const insertSql =
-        "INSERT INTO user_box (account_id, servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus, bond_rank, bond_max_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "INSERT INTO user_box (account_id, servant_id, stage, is_max_bond, bond_switch1, bond_switch2, personal_bonus, aura_bonus, bond_rank, bond_max_rank, cost_override) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
       for (const e of entries || []) {
         sql.run(insertSql, [
           id,
@@ -56,6 +56,10 @@ export function createBoxDomain({ sql, accounts, codec }) {
           Number(e.auraBonus || 0),
           Number(e.bondRank || 0),
           Number(e.bondMaxRank || 0),
+          // 玛修的 Cost 覆盖（0 / 16）；没设置就存 NULL
+          e.costOverride === null || e.costOverride === undefined || e.costOverride === ""
+            ? null
+            : Number(e.costOverride),
         ]);
       }
       return { ok: true, count: (entries || []).length, accountId: id };

@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import { parentPort, workerData } from "node:worker_threads";
 import { setAppRoot } from "../src/platformNode.ts";
-import { loadContext } from "../src/calculator.ts";
+import { costOverridesOf, loadContext, withServantCostOverrides } from "../src/calculator.ts";
 import { parseRequest } from "../src/models.ts";
 import { searchTopTeams } from "../src/search.ts";
 import { makeVerificationTokens } from "../src/verification.ts";
@@ -47,7 +47,9 @@ async function runCalculate(payload: Record<string, any>): Promise<Record<string
         }
       : null;
   progress("正在加载本地数据...");
-  const ctx = await loadContext(job.dbPath, req.server_region);
+  const baseCtx = await loadContext(job.dbPath, req.server_region);
+  // 玛修那类"可调 Cost"的请求级覆盖（0/16）——必须作用在整趟搜索与验证串上
+  const ctx = withServantCostOverrides(baseCtx, costOverridesOf(req.box));
 
   if (req.cost_limit < 50 || req.cost_limit > 200) {
     throw new Error("Cost上限需在50~200之间");

@@ -178,6 +178,7 @@ function ensureSchema(db) {
       aura_bonus REAL DEFAULT 0,
       bond_rank INTEGER DEFAULT 0,
       bond_max_rank INTEGER DEFAULT 0,
+      cost_override INTEGER DEFAULT NULL,
       PRIMARY KEY (account_id, servant_id)
     );
     CREATE TABLE IF NOT EXISTS user_teams (
@@ -272,6 +273,12 @@ function ensureSchema(db) {
   }
   try {
     db.exec("ALTER TABLE user_box ADD COLUMN bond_max_rank INTEGER DEFAULT 0");
+  } catch (_) {
+    // 列已存在
+  }
+  try {
+    // 玛修的 Cost 可调（0 / 16）：NULL = 用资料库里的值
+    db.exec("ALTER TABLE user_box ADD COLUMN cost_override INTEGER DEFAULT NULL");
   } catch (_) {
     // 列已存在
   }

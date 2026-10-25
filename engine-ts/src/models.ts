@@ -61,6 +61,8 @@ export class BoxServant {
   bond_switch2: boolean;
   personal_bonus: number;
   aura_bonus: number;
+  /** 请求级 Cost 覆盖（目前只给玛修用：0 或 16）。null = 用资料库里的 Cost */
+  cost_override: number | null = null;
   name = "";
   servant_class = "";
   cost = 0;
@@ -75,6 +77,7 @@ export class BoxServant {
     this.bond_switch2 = init.bond_switch2 ?? false;
     this.personal_bonus = init.personal_bonus ?? 0;
     this.aura_bonus = init.aura_bonus ?? 0;
+    this.cost_override = init.cost_override ?? null;
   }
 
   /** 开关一：是否参与全队满绊人数统计 */
@@ -178,6 +181,7 @@ function asInt(value: any, dflt = 0): number {
 export function parseBox(rawList: any[]): BoxServant[] {
   const out: BoxServant[] = [];
   for (const raw of rawList ?? []) {
+    const rawCost = raw["costOverride"];
     out.push(
       new BoxServant({
         servant_id: asInt(raw["id"]),
@@ -187,6 +191,8 @@ export function parseBox(rawList: any[]): BoxServant[] {
         bond_switch2: asBool(raw["bondSwitch2"], false),
         personal_bonus: asFloat(raw["personalBonus"], 0),
         aura_bonus: asFloat(raw["auraBonus"], 0),
+        cost_override:
+          rawCost === null || rawCost === undefined || rawCost === "" ? null : asInt(rawCost),
       }),
     );
   }

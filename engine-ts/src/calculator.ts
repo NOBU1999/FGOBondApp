@@ -140,6 +140,48 @@ export class DataContext {
   }
 }
 
+/** 请求里"谁要按别的 Cost 算"（目前只有玛修：0 或 16）。
+ *  取的是 box 里的 `cost_override`；没设置就是"不覆盖"。 */
+export function costOverridesOf(
+  box: Iterable<{ servant_id: number; cost_override?: number | null }>,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const b of box) {
+    const raw = b.cost_override;
+    if (raw === null || raw === undefined) continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) out.set(b.servant_id, n);
+  }
+  return out;
+}
+
+/** 把 Cost 覆盖应用到上下文。
+ *  ⚠️ ctx 会在**多个请求之间复用**（13 档指纹、安卓宿主都这么用）⇒ **绝不能就地改** ctx.servants 里的对象，
+ *  否则玛修的 16 会漏到下一次计算里。这里只造一份浅拷贝：servants 换新 Map、仅替换被覆盖的那几位，
+ *  其余字段（含挂在 ctx 上的缓存对象）仍是同一引用 ⇒ 没覆盖时零开销、也没缓存失效问题。 */
+export function withServantCostOverrides(
+  ctx: DataContext,
+  overrides: Map<number, number>,
+): DataContext {
+  if (overrides.size === 0) return ctx;
+  const servants = new Map(ctx.servants);
+  let changed = false;
+  for (const [sid, cost] of overrides) {
+    const src = servants.get(sid);
+    if (!src || src.cost === cost) continue;
+    const clone = Object.create(Object.getPrototypeOf(src)) as ServantInfo;
+    Object.assign(clone, src);
+    clone.cost = cost;
+    servants.set(sid, clone);
+    changed = true;
+  }
+  if (!changed) return ctx;
+  const patched = Object.create(Object.getPrototypeOf(ctx)) as DataContext;
+  Object.assign(patched, ctx);
+  patched.servants = servants;
+  return patched;
+}
+
 // ---------------------------------------------------------------------------
 // 载入
 // ---------------------------------------------------------------------------

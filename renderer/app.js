@@ -570,8 +570,7 @@ const App = {
       let total = 0;
       for (const slot of this.slots) {
         if (slot.isSupport) continue;
-        const s = this.servantMap[slot.servantId];
-        if (s) total += s.cost || 0;
+        if (slot.servantId !== null) total += this.servantCostOf(slot.servantId);
         const c = this.slotCraft(slot);
         if (c) total += c.cost || 0;
       }
@@ -777,6 +776,15 @@ const App = {
   },
   methods: {
     // ---------- 工具 ----------
+    /** 某位从者这次要按多少 Cost 算：玛修可被玩家改成 0/16（其余一律取资料库） */
+    servantCostOf(servantId) {
+      const id = Number(servantId);
+      const b = this.box && this.box[id];
+      const ov = b ? b.costOverride : null;
+      if (ov !== null && ov !== undefined && Number.isFinite(Number(ov))) return Number(ov);
+      const s = this.servantMap[id];
+      return s ? Number(s.cost || 0) : 0;
+    },
     formatBondNumber(v) { return formatBondNumber(v); },
     // 千分位（「本次搜索」那行用；组合数动辄几万）
     formatCount(v) {
@@ -854,8 +862,7 @@ const App = {
     },
     resultCostBreakdown(member) {
       if (!member || member.isSupport) return "";
-      const servant = this.servantMap[member.servantId];
-      const servantCost = servant ? Number(servant.cost || 0) : 0;
+      const servantCost = this.servantCostOf(member.servantId);
       const mainCost = this.craftCostById(member.craftId);
       const secondCost = this.craftCostById(member.secondCraftId);
       const total = servantCost + mainCost;
@@ -885,8 +892,7 @@ const App = {
       let total = 0;
       for (const m of team) {
         if (!m || m.isSupport) continue;
-        const servant = this.servantMap[m.servantId];
-        total += servant ? Number(servant.cost || 0) : 0;
+        total += this.servantCostOf(m.servantId);
         total += this.craftCostById(m.craftId);
       }
       return total;
@@ -2507,11 +2513,13 @@ const App = {
           auraBonus: e.auraBonus || 0,
           bondRank: e.bondRank || 0,
           bondMaxRank: e.bondMaxRank || 0,
+          // 玛修的 Cost 覆盖（0/16）；null/undefined = 不覆盖
+          costOverride: e.costOverride === null || e.costOverride === undefined ? null : Number(e.costOverride),
         };
       });
       this.servants.forEach((s) => {
         if (!saved[s.id]) {
-          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
+          saved[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0, costOverride: null };
         }
       });
       this.box = saved;
@@ -2667,6 +2675,10 @@ const App = {
           auraBonus: Number(this.box[s.id].auraBonus || 0),
           bondRank: Number(this.box[s.id].bondRank || 0),
           bondMaxRank: Number(this.box[s.id].bondMaxRank || 0),
+          costOverride:
+            this.box[s.id].costOverride === null || this.box[s.id].costOverride === undefined
+              ? null
+              : Number(this.box[s.id].costOverride),
         }));
       try { await window.fgo.saveUserBox(plainClone(entries), this.activeAccountId); } catch (_) { /* ignore */ }
       this.refreshAccounts();
@@ -2844,6 +2856,13 @@ const App = {
       this.box[id].auraBonus = Number(val || 0);
       this.persistBox();
     },
+    /** 玛修的 Cost 覆盖：0（游戏里就是 0）或 16（按 16 算） */
+    setCostOverride(id, val) {
+      if (!this.box[id]) return;
+      const empty = val === "" || val === null || val === undefined;
+      this.box[id].costOverride = empty ? null : Number(val);
+      this.persistBox();
+    },
     toggleBatchSelect(id) {
       if (this.dragClickSuppressed()) return;
       if (this.batchSelectedServants.includes(id)) {
@@ -2926,7 +2945,7 @@ const App = {
     resetBox() {
       if (!confirm("此操作将清空所有Box勾选、满绊标记、灵基阶段、个人加成设置，是否继续？")) return;
       this.servants.forEach((s) => {
-        this.box[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0 };
+        this.box[s.id] = { checked: false, stage: "fourth", maxBond: false, switch1: false, switch2: false, personalBonus: 0, auraBonus: 0, bondRank: 0, bondMaxRank: 0, costOverride: null };
       });
       this.slots = makeSlots();
       this.persistBox();
@@ -3896,6 +3915,8 @@ const App = {
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: Number(b.auraBonus || 0) / 100,
+          // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
+          costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
         };
       });
       const fixedServants = [];
@@ -3981,6 +4002,8 @@ const App = {
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: Number(b.auraBonus || 0) / 100,
+          // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
+          costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
         };
       });
       const mode = preset.mode || this.mode;
@@ -5824,6 +5847,17 @@ const App = {
             <label>玛修全队光环（%）</label>
             <input type="number" min="0" step="0.01" :value="box[servantDetail.servantId].auraBonus" @change="setAura(servantDetail.servantId, $event.target.value)" />
             <div class="text-muted" style="margin-top:2px">玛修在玩家队伍中时为全队提供该加成；作为助战时不生效。</div>
+          </div>
+          <div v-if="Number(servantDetail.servantId) === 800100" class="field">
+            <label>玛修的 Cost</label>
+            <select
+              :value="String(box[servantDetail.servantId].costOverride === null || box[servantDetail.servantId].costOverride === undefined ? 0 : box[servantDetail.servantId].costOverride)"
+              @change="setCostOverride(servantDetail.servantId, $event.target.value)"
+            >
+              <option value="0">0（游戏里的默认值，不占 Cost 上限）</option>
+              <option value="16">16（按 16 Cost 计算队伍）</option>
+            </select>
+            <div class="text-muted" style="margin-top:2px">改动会立刻用于算 Cost 上限与推荐结果，并跟账号一起保存。</div>
           </div>
           <div class="field" style="margin-top:8px;border-top:1px solid rgba(128,128,128,.25);padding-top:8px">
             <label>从活动导入该从者加成</label>
