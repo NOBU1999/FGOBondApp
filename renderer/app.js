@@ -1004,8 +1004,10 @@ const App = {
       const flags = this.bondFlagsFor(b);
       const frontline = BondMath.frontlineBonus(member.position);
       const maxBondBonus = 0.25 * Number(ctxInfo.maxBondCount || 0);
-      const aura = Number(b.auraBonus || 0);
-      const personal = Number(b.personalBonus || 0);
+      // ⚠️ Box 里存的是**百分数**（界面上写「20%」就是 20），而 bonusDetail 与 BondMath 一律用**小数**（0.2）。
+      // 这里漏了 /100 会让「同分替补换上来的人」显示成 21.00x（2026-10-25 用户报的预设就是这一条）。
+      const aura = Number(b.auraBonus || 0) / 100;
+      const personal = Number(b.personalBonus || 0) / 100;
       let multiplier = BondMath.memberMultiplier({
         frontline,
         universal: ctxInfo.universal,
