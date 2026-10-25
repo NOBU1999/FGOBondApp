@@ -102,13 +102,16 @@ function attachWindowDiagnostics(win) {
 }
 
 function createWindow() {
+  // 窗口标题带上版本号，显示在整个窗口最左上角（系统标题栏）。
+  // ⚠️ 页面加载后 Chromium 会用 <title> 覆盖窗口标题，所以必须先把那条更新拦掉。
+  const windowTitle = `FGO牵绊推荐器 v${app.getVersion()}`;
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     // 窄屏适配（阶段 2）：允许把窗口拉窄到手机宽度，方便在桌面上验证窄屏布局
     minWidth: 360,
     minHeight: 480,
-    title: "FGO牵绊推荐器",
+    title: windowTitle,
     // 窗口 / 任务栏图标（打包后 exe 自身也带图标，这里是同一张，保证开发模式也一致）
     icon: path.join(__dirname, "..", "renderer", "assets", "app-icon.png"),
     backgroundColor: "#1e1e2e",
@@ -122,6 +125,10 @@ function createWindow() {
     },
   });
   attachWindowDiagnostics(mainWindow);
+  mainWindow.on("page-title-updated", (event) => {
+    event.preventDefault();
+    mainWindow.setTitle(windowTitle);
+  });
 
   if (process.env.FGO_SMOKE === "1") {
     console.log("[smoke] BrowserWindow created");
