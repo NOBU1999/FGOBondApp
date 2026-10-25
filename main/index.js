@@ -109,6 +109,8 @@ function createWindow() {
     minWidth: 360,
     minHeight: 480,
     title: "FGO牵绊推荐器",
+    // 窗口 / 任务栏图标（打包后 exe 自身也带图标，这里是同一张，保证开发模式也一致）
+    icon: path.join(__dirname, "..", "renderer", "assets", "app-icon.png"),
     backgroundColor: "#1e1e2e",
     webPreferences: {
       preload: path.join(__dirname, "..", "preload.js"),
