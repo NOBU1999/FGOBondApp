@@ -63,6 +63,7 @@
       "customDir": "{{ version }}"
     },
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         {
           "target": "dir",
@@ -79,7 +80,11 @@
       },
       {
         "from": "data",
-        "to": "data"
+        "to": "data",
+        "filter": [
+          "**/*",
+          "!**/*.md"
+        ]
       },
       {
         "from": "db/fgo_data.seed.db",
