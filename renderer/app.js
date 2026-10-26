@@ -4493,14 +4493,38 @@ const App = {
         this.updateRunning = false;
       }
     },
-    exportJson(result) {
+    async exportJson(result) {
       // 导出"这一行当前显示"的阵容（若在同分下拉里选过某一支，就导出那一支）
       // ⇒ Cost 也得跟着是这一支的，否则导出 JSON 里的 costUsed 与 team 自相矛盾
       const payload = { ...result, team: this.displayedResultTeam(result), costUsed: this.resultCostUsed(result) };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const text = JSON.stringify(payload, null, 2);
+      const name = `FGO方案#${result.rank}.json`;
+      // ⚠️ 安卓 WebView 不处理 <a download>（原来点「导出JSON」没反应就是这个原因），
+      // 所以两条平台都走 saveTextFile：桌面弹保存框，安卓写进「文档」目录。
+      if (window.fgo && typeof window.fgo.saveTextFile === "function") {
+        try {
+          const r = await window.fgo.saveTextFile({ name, text });
+          if (r && r.ok && r.copied) {
+            alert("文件没能写进手机存储，已把内容复制到剪贴板：粘贴到任意文本里保存即可");
+            return;
+          }
+          if (r && r.ok) {
+            alert(`已导出：${r.path}`);
+            return;
+          }
+          if (r && r.canceled) return;
+          alert("导出失败：" + ((r && r.error) || "未知原因"));
+          return;
+        } catch (e) {
+          alert("导出失败：" + (e && e.message ? e.message : String(e)));
+          return;
+        }
+      }
+      // 老宿主（没有 saveTextFile）退回浏览器下载
+      const blob = new Blob([text], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `FGO方案#${result.rank}.json`;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(a.href);
     },

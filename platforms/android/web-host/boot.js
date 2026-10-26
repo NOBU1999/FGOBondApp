@@ -399,6 +399,48 @@
     window.open(target, "_blank");
     return { ok: true, url: target };
   };
+  // ---- 导出文本文件（导出 JSON / 反馈摘要） ----
+  //   安卓 WebView 不处理 <a download>，所以「点了没反应」——这里改成：
+  //   ① 写进系统的「文档」目录（文件管理器能看到）；② 没权限就落到应用数据目录；
+  //   ③ 都不行就复制到剪贴板，保证一定有反馈。
+  api.saveTextFile = async (payload) => {
+    const rawName = String((payload && payload.name) || "export.json");
+    const name = rawName.replace(/[\\/:*?"<>|\s]+/g, "_");
+    const text = String((payload && payload.text) ?? "");
+    const fs = getFilesystem();
+    if (fs) {
+      try {
+        const r = await fs.writeFile({
+          path: name,
+          data: text,
+          directory: "DOCUMENTS",
+          encoding: "utf8",
+          recursive: true,
+        });
+        return { ok: true, path: "文档/" + name, uri: (r && r.uri) || "" };
+      } catch (_) {
+        /* 没有存储权限时继续往下走 */
+      }
+      try {
+        const r = await fs.writeFile({
+          path: name,
+          data: text,
+          directory: "DATA",
+          encoding: "utf8",
+          recursive: true,
+        });
+        return { ok: true, path: "应用数据目录/" + name, uri: (r && r.uri) || "", fallback: true };
+      } catch (_) {
+        /* 继续往下走 */
+      }
+    }
+    try {
+      await api.copyText(text);
+      return { ok: true, copied: true, path: "剪贴板" };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) };
+    }
+  };
   api.copyText = async (text) => {
     const value = String(text ?? "");
     try {

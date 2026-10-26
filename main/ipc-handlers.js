@@ -268,6 +268,36 @@ function registerIpcHandlers() {
     stopActiveEngine();
     return { ok: true, graceful: false };
   });
+
+  // ---------------- 导出文本文件（导出 JSON / 反馈摘要） ----------------
+  // 走主进程的保存对话框：安卓 WebView 不支持 <a download>，两条路径要一致地"有反应"。
+  ipcMain.handle("file:save-text", async (event, payload) => {
+    const { dialog } = require("electron");
+    const safeName = String((payload && payload.name) || "export.json").replace(/[\\/:*?"<>|]/g, "_");
+    const text = String((payload && payload.text) ?? "");
+    let win = null;
+    try {
+      win = BrowserWindow.fromWebContents(event.sender);
+    } catch (_) {
+      win = null;
+    }
+    const res = await dialog.showSaveDialog(win || undefined, {
+      title: "导出",
+      defaultPath: path.join(app.getPath("downloads"), safeName),
+      filters: [
+        { name: "JSON", extensions: ["json"] },
+        { name: "文本", extensions: ["txt"] },
+      ],
+    });
+    if (!res || res.canceled || !res.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(res.filePath, text, "utf8");
+      diagLog(`导出文件：${res.filePath}`);
+      return { ok: true, path: res.filePath };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) };
+    }
+  });
 }
 
 module.exports = {

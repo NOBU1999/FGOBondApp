@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld("fgo", {
   clearDiagnosticLog: () => ipcRenderer.invoke("log:clear"),
   checkAppUpdate: () => ipcRenderer.invoke("app:check-update"),
   openExternal: (url) => ipcRenderer.invoke("app:open-external", toPlain(url)),
+  /** 导出文本文件（保存对话框）→ { ok, path } / { ok:false, canceled } */
+  saveTextFile: (payload) => ipcRenderer.invoke("file:save-text", toPlain(payload)),
 
   // 主进程推送事件
   onEngineProgress: (callback) => {

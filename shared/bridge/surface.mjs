@@ -25,6 +25,9 @@ export const PLATFORM_METHODS = Object.freeze([
   "clearDiagnosticLog",
   "checkAppUpdate",
   "openExternal",
+  // 把界面生成的文本存成文件（导出 JSON / 反馈摘要）。
+  // ⚠️ 安卓 WebView 不处理 <a download>，所以不能靠浏览器下载，必须走平台能力。
+  "saveTextFile",
 ]);
 
 /** 只做事件订阅：渲染侧本地实现（preload.js / boot.js），不走 IPC */
