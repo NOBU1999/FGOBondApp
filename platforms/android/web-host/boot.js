@@ -325,8 +325,21 @@
     return false;
   }
 
+  /**
+   * 当前版本号。安卓没有 version.json、也没有 Electron 的 app.getVersion()，
+   * 只能用打包时注入的 `window.__FGO_APP_VERSION`（形如 `0.3.1+261025`，尾巴是构建日期）。
+   * ⚠️ 2026-10-27 修：这里原来读的是 `api.info.version`，而 `api.info` 从来没被赋值过
+   * ⇒ 「检查更新」一直显示 V0.0.0。
+   */
+  function currentAppVersion() {
+    const raw = String((typeof window !== "undefined" && window.__FGO_APP_VERSION) || "").trim();
+    const v = parseVersion(raw);
+    if (v) return v.raw; // "0.3.1+261025" → "0.3.1"
+    return raw || "0.0.0";
+  }
+
   api.checkAppUpdate = async () => {
-    const current = String((api.info && api.info.version) || "0.0.0");
+    const current = currentAppVersion();
     const checks = [];
     let found = null;
     for (const source of UPDATE_SOURCES) {
