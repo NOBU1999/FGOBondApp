@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- 自适应图标的底色：取卡片边缘的主色（深枣红）。
+         原来用白底时，前景缩到安全区后会在圆形遮罩里露出一圈白边、四个角看起来像被切掉；
+         换成同色底后，卡片边缘与底色连成一片，任何遮罩形状都不会露出白圈。 -->
+    <color name="ic_launcher_background">#340703</color>
 </resources>
