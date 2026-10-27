@@ -84,10 +84,18 @@ function formatBondNumber(v) {
 
 // 本地已下载的牵绊礼装图（equipFace，JP 数据）
 const CRAFT_IMAGE_IDS = new Set([
-  9401970, 9403520, 9404310, 9405110, 9405710,
-  9405720, 9405730, 9407110, 9407480, 9407740,
-  9407850, 9408060, 9408220, 9408390, 9408590,
-  9408800, 9408990, 9409210, 9409320, 9409490,
+  9401970, 9403520, 9403990, 9404180, 9404310,
+  9404360, 9405110, 9405170, 9405710, 9405720,
+  9405730, 9406010, 9406200, 9406740, 9407110,
+  9407480, 9308100, 9308110, 9308120, 9308130,
+  9308140, 9308150, 9308160, 9407740, 9407850,
+  9408060, 9408220, 9408390, 9408590, 9408800,
+  9408810, 9408820, 9408830, 9408990, 9311310,
+  9311320, 9311330, 9311340, 9311350, 9311360,
+  9311370, 9311380, 9311390, 9311400, 9311410,
+  9311420, 9311430, 9311440, 9311450, 9311460,
+  9311470, 9311480, 9311490, 9311500, 9311510,
+  9409210, 9409320, 9409490,
 ]);
 
 const POSITION_LABELS = {
@@ -1904,6 +1912,17 @@ const App = {
     craftImagePath(c) {
       return c && c.id !== undefined ? this.craftImagePathId(c.id) : "";
     },
+    /** 同一件礼装在队伍里装了几件（含冠位第二礼装位）；>1 时界面上标 ×N */
+    craftUseCount(craftId, team) {
+      if (craftId === null || craftId === undefined) return 0;
+      const list = team || this.slots || [];
+      let n = 0;
+      for (const s of list) {
+        if (Number(s.craftId) === Number(craftId)) n += 1;
+        if (s.secondCraftId !== null && s.secondCraftId !== undefined && Number(s.secondCraftId) === Number(craftId)) n += 1;
+      }
+      return n;
+    },
     isGenericUniversal5Actual(c) {
       // 把普通（无助战加成）的 5% 通用牵绊礼装合并成上面的“通用5%”
       return (
@@ -3334,6 +3353,29 @@ const App = {
       }
       return active;
     },
+    /** 这件礼装对「这组特性」的从者是否**真的生效**；null = 不生效。
+     *  规则与引擎一致：universal 全队吃；trait 要某一组特性**全部**命中；supportBonus 算助战加成。 */
+    craftEffectOn(c, traits) {
+      if (!c) return null;
+      const ts = new Set(traits || []);
+      const pct = Math.round(Number(c.bonusValue || 0) * 100);
+      if (c.bonusType === "universal" && pct > 0) return { kind: "全队", pct, groups: [] };
+      if (c.bonusType === "trait") {
+        let groups = [];
+        try {
+          groups = JSON.parse(c.triggerTraitsJson || "[]");
+        } catch (_) {
+          groups = [];
+        }
+        const hit = groups.filter((g) => Array.isArray(g) && g.length && g.every((t) => ts.has(t)));
+        if (!hit.length) return null;
+        return { kind: "特性", pct, groups: hit };
+      }
+      const sb = Math.round(Number(c.supportBonus || 0) * 100);
+      if (sb > 0) return { kind: "助战", pct: sb, groups: [] };
+      return null;
+    },
+
     async openResultInfo(result, member, kind, craftIndex = 0) {
       if (kind === "craft") {
         const cid = craftIndex === 1 ? member.secondCraftId : member.craftId;
@@ -3343,18 +3385,47 @@ const App = {
           visible: true,
           mode: "craft",
           title: c.name || "礼装",
-          subtitle: `${c.rarity || 0}★ / ${craftIndex === 1 ? '冠位第二礼装位 · 计算时 Cost 0' : 'Cost ' + (c.cost || 0)}`,
+          subtitle:
+            `${c.rarity || 0}★ / ${craftIndex === 1 ? "冠位第二礼装位 · 计算时 Cost 0" : "Cost " + (c.cost || 0)}` +
+            (this.craftUseCount(c.id, result.team) > 1 ? ` · 队里装了 ×${this.craftUseCount(c.id, result.team)}` : ""),
           rows: [
             { label: "类型", value: c.craftType === "bond" ? "牵绊加成礼装" : "其他礼装" },
             { label: "效果", value: c.detail || c.name || "无特殊效果" },
             { label: "触发属性", value: this.traitGroupsText(c) },
           ],
+          related: [],
         };
+        // 生效对象 = 队伍里**真的吃到**这件礼装的人（不是"谁装备了它"）
+        const players = (result.team || []).filter((m) => !m.isSupport);
+        const hits = await Promise.all(
+          players.map(async (m) => {
+            try {
+              const traits = await window.fgo.getStageTraits(m.servantId, m.stage || "fourth", this.serverRegion);
+              const eff = this.craftEffectOn(c, traits || []);
+              if (!eff) return null;
+              return {
+                key: "s" + m.position + "-" + m.servantId,
+                pos: m.position,
+                type: "servant",
+                name: m.name || this.servantMap[m.servantId]?.name || "从者",
+                sub: `${this.positionLabel(m.position)} · ${eff.kind} +${eff.pct}%`,
+                img: this.avatarPath(m.servantId),
+              };
+            } catch (_) {
+              return null;
+            }
+          }),
+        );
+        this.resultInfo.related = hits.filter(Boolean);
         return;
       }
+
+      // 从者 → 看「哪些礼装对他生效」
       const sname = member.name || this.servantMap[member.servantId]?.name || "从者";
       const stageLabel = String(member.stage || "fourth").startsWith("costume_")
-        ? (this.costumeNames[String(member.stage.split("_")[1])] ? "灵衣：" + this.costumeNames[String(member.stage.split("_")[1])] : "灵衣")
+        ? this.costumeNames[String(member.stage.split("_")[1])]
+          ? "灵衣：" + this.costumeNames[String(member.stage.split("_")[1])]
+          : "灵衣"
         : this.stageLabel(member.stage || "fourth");
       this.resultInfo = {
         visible: true,
@@ -3362,14 +3433,42 @@ const App = {
         title: sname,
         subtitle: `${stageLabel}（推荐方案 #${result.rank}）`,
         rows: [],
+        related: [],
       };
+      let traits = [];
       try {
-        const traits = await window.fgo.getStageTraits(member.servantId, member.stage || "fourth", this.serverRegion);
-        const active = this.activeTraitKeys(result, member, traits || []);
-        this.resultInfo.rows = (traits || []).map((t) => ({ label: t, active: active.has(t) }));
+        traits = (await window.fgo.getStageTraits(member.servantId, member.stage || "fourth", this.serverRegion)) || [];
+        const active = this.activeTraitKeys(result, member, traits);
+        this.resultInfo.rows = traits.map((t) => ({ label: t, active: active.has(t) }));
       } catch (e) {
         this.resultInfo.rows = [{ label: "读取失败", active: false }];
       }
+      // 队伍里所有对该从者生效的礼装（含别人带的、也包括这件自己身上那件）
+      const seen = new Set();
+      const applied = [];
+      for (const m of result.team || []) {
+        for (const cid2 of [m.craftId, m.secondCraftId]) {
+          if (cid2 === null || cid2 === undefined) continue;
+          if (seen.has(Number(cid2))) continue;
+          seen.add(Number(cid2));
+          const c2 = this.craftById(cid2);
+          if (!c2) continue;
+          const eff = this.craftEffectOn(c2, traits);
+          if (!eff) continue;
+          const cond = eff.groups.length
+            ? `（${eff.groups[0].map((t) => this.traitLabel(t)).join(" + ")}）`
+            : "";
+          const usedN = this.craftUseCount(cid2, result.team);
+          applied.push({
+            key: "c" + cid2,
+            type: "craft",
+            name: c2.name || "礼装",
+            sub: `${eff.kind} +${eff.pct}%${cond}` + (usedN > 1 ? ` · 队里 ×${usedN}` : ""),
+            img: this.hasCraftImageId(cid2) ? this.craftImagePathId(cid2) : "",
+          });
+        }
+      }
+      this.resultInfo.related = applied;
     },
     closeResultInfo() {
       this.resultInfo.visible = false;
@@ -4222,6 +4321,7 @@ const App = {
         { key: "check", label: "检查更新", status: "pending", detail: "", percent: null, doneDetail: "已连接数据源" },
         { key: "servant_download", label: "下载从者数据", status: "pending", detail: "", percent: null, doneDetail: "下载完成" },
         { key: "equip_download", label: "下载礼装数据", status: "pending", detail: "", percent: null, doneDetail: "下载完成" },
+        { key: "cn_data", label: "简中服数据", status: "pending", detail: "", percent: null, doneDetail: "已更新" },
         { key: "servant_write", label: "写入从者/特性", status: "pending", detail: "", percent: null, doneDetail: "写入完成" },
         { key: "equip_write", label: "写入礼装数据", status: "pending", detail: "", percent: null, doneDetail: "写入完成" },
         { key: "costume", label: "更新灵衣名称", status: "pending", detail: "", percent: null, doneDetail: "全部完成" },
@@ -4269,6 +4369,10 @@ const App = {
         this.setUpdateItem("check", "running", "正在连接数据源...");
         return;
       }
+      if (msg.includes("网络：")) {
+        this.setUpdateItem("check", "running", msg.replace(/^.*网络：/, "网络："));
+        return;
+      }
       if (msg.includes("正在下载从者数据")) {
         markActiveDone();
         this.setUpdateItem("servant_download", "running", "开始下载...", null);
@@ -4282,6 +4386,11 @@ const App = {
       if (msg.includes("正在写入从者与特性数据")) {
         markActiveDone();
         this.setUpdateItem("servant_write", "running", "正在写入本地数据库...");
+        return;
+      }
+      // 简中服那份（从者 + 特性 / 礼装 id 差集）单独一步，别跟日服混在一起
+      if (msg.includes("正在写入简中服特性数据")) {
+        this.setUpdateItem("cn_data", "running", "正在写入简中服数据...");
         return;
       }
       if (msg.includes("正在写入礼装数据")) {
@@ -4319,13 +4428,28 @@ const App = {
         return;
       }
 
-      // 下载明细行：`nice_servant: 45% (30.0/66.0 MB, 0.19 MB/s, 约剩 172s)` / `nice_servant: done -> <路径>`
-      const dl = msg.match(/^(nice_servant|nice_equip|nice_event|basic_event_cn):\s*(.+)$/);
+      // 下载明细行：`nice_servant_jp: 45% (30.0/66.0 MB, ...)` / `nice_equip_cn: done -> <路径>`
+      // ⚠️ 标签带区服后缀：日服与简中服各下一份，"从者数据"那一步原来会被点亮两次（看着像重复下载）
+      const dl = msg.match(/^(nice_servant|nice_equip|nice_event|basic_event|basic_servant|basic_equip)(?:_(jp|cn|na|kr|tw))?:\s*(.+)$/);
       if (dl) {
-        const key =
-          dl[1] === "nice_servant" ? "servant_download" : dl[1] === "nice_equip" ? "equip_download" : "event";
-        const rest = dl[2].trim();
+        const kind = dl[1];
+        const tail = dl[2] || "";
+        const key = kind.startsWith("basic_event")
+          ? "event"
+          : tail === "cn"
+            ? "cn_data"
+            : kind === "nice_servant"
+              ? "servant_download"
+              : kind === "nice_equip"
+                ? "equip_download"
+                : "event";
+        const rest = dl[3].trim();
         if (rest.startsWith("done")) {
+          // 简中服那一步后面还有"写特性"，下完不能就算完成
+          if (tail === "cn") {
+            this.setUpdateItem(key, "running", "已下载，正在写入...");
+            return;
+          }
           this.markItemDone(key, "下载完成");
           return;
         }
@@ -5216,7 +5340,7 @@ const App = {
                   @contextmenu="openResultContext($event, r, m, 'craft', cm.index)"
                 >
                   <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
-                  <span class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
+                  <span v-else class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
                 </div>
                 <!-- 加成/牵绊文本移到格子外面单独一行；冠位从者有两个礼装格，只在**最后一个格子**下面显示一次
                      （格子是正方形且 overflow:hidden，塞在格内会被裁掉） -->
@@ -5942,6 +6066,27 @@ const App = {
             <div class="info-label">{{ row.label }}</div>
             <div class="info-value">{{ row.value }}</div>
           </div>
+        </div>
+        <div v-if="resultInfo.related && resultInfo.related.length" class="result-info-related">
+          <div class="info-label">
+            {{ resultInfo.mode === 'craft'
+              ? '生效对象：' + resultInfo.related.length + ' 人吃到这件礼装'
+              : '对这位从者生效的礼装：' + resultInfo.related.length + ' 件' }}
+          </div>
+          <div class="result-related-list">
+            <div v-for="it in resultInfo.related" :key="it.key" class="result-related-item" :title="it.title || it.name">
+              <img v-if="it.type === 'servant'" :src="it.img" class="related-avatar" alt="" />
+              <img v-else-if="it.img" :src="it.img" class="related-craft" alt="" />
+              <div v-else class="related-noimg">无图</div>
+              <div class="related-text">
+                <span class="related-name">{{ it.name }}</span>
+                <span v-if="it.sub" class="related-sub">{{ it.sub }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="resultInfo.mode === 'craft'" class="text-muted" style="margin-top:10px">
+          队里没有从者满足它的触发条件，这件礼装当前不生效。
         </div>
       </div>
     </div>
