@@ -60,7 +60,7 @@ ASAR_SYNC_FILES = [
     "renderer/style.css",
     "renderer/index.html",
     "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成
-    "renderer/assets/app-icon.png",  # 窗口图标 / favicon（servantface/ craftface/ 太大，不走这条路）
+    "renderer/assets/app-icon.png",  # 窗口图标 / favicon
     "preload.js",
     "shared/bridge/data-bridge.mjs",
     "shared/domain/meta.mjs",
@@ -82,6 +82,8 @@ def asar_sync_files() -> list:
     """
     files = [rel for rel in ASAR_SYNC_FILES if not rel.startswith("main/")]
     files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "main").glob("*.js"))
+    # 礼装卡面用 glob：以后补图不用再改这份清单（手写清单漏项踩过一次，见坑 106）
+    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "renderer" / "assets" / "craftface").glob("*.png"))
     return files
 
 # 直接放在 MyFGOApp 下的文件（不进 asar）

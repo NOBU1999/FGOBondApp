@@ -237,14 +237,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   user-select: none;
 }
 .cell-servant { height: auto; aspect-ratio: 1 / 1; }
-.cell-craft { height: auto; min-height: 92px; }
+/* 礼装格：**只显示卡面**（equipFace 是 150×68 的横版），名字 / Cost / 效果点开弹层看。
+   手机上原本就是这套，桌面（2026-10-27 用户要求）也对齐，宽屏一行 6 条卡面更直观。 */
+.cell-craft { height: auto; aspect-ratio: 150 / 68; min-height: 0; }
 .cell-craft-img {
-  width: 40px;
-  height: 40px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 150 / 68;
+  max-width: 100%;
   border-radius: 6px;
   object-fit: cover;
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
+/* 有图：格子里只留图 */
+.cell-craft:not(.no-img) .cell-name,
+.cell-craft:not(.no-img) .cell-meta,
+.cell-craft:not(.no-img) .cell-effect { display: none; }
+/* 没图（自定义礼装等）：只留名字，否则整格空白 */
+.cell-craft.no-img .cell-meta,
+.cell-craft.no-img .cell-effect { display: none; }
 .cell.empty { border: 2px dashed rgba(255,255,255,0.2); }
 .cell.disabled { opacity: 0.4; cursor: not-allowed; }
 .cell .placeholder { color: var(--muted); font-size: 12px; }
@@ -417,19 +428,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-align: center;
 }
 .mini-servant { height: auto; aspect-ratio: 1 / 1; }
+/* 结果卡的礼装格：与主面板一致，只贴横版卡面（equipFace 150:68）；没图的（自定义礼装）才显示名字 */
 .mini-craft {
   height: auto;
-  min-height: 52px;
+  aspect-ratio: 150 / 68;
+  min-height: 0;
   font-size: 10px;
   color: var(--muted);
-  padding: 4px 2px;
+  padding: 2px;
   flex-direction: column;
   gap: 1px;
   line-height: 1.2;
 }
 .mini-craft-img {
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 150 / 68;
   border-radius: 4px;
   object-fit: cover;
   flex: 0 0 auto;
@@ -1310,6 +1324,50 @@ label.team-config-check {
 .info-label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .info-value { font-size: 13px; white-space: pre-wrap; word-break: break-all; }
 
+/* 结果「查看信息 / 查看属性」：列出相关的从者 / 礼装（带图和名字） */
+.result-info-related { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.result-related-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.result-related-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px 4px 4px;
+  max-width: 100%;
+}
+.result-related-item .related-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.result-related-item .related-craft {
+  width: 88px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.result-related-item .related-noimg {
+  width: 88px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--panel2);
+  border: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.result-related-item .related-text { display: flex; flex-direction: column; min-width: 0; }
+.result-related-item .related-name { font-size: 13px; overflow-wrap: anywhere; }
+.result-related-item .related-sub { font-size: 11px; color: var(--muted); }
+
 /* 礼装长文本可读性（隐藏滚动条，超长省略） */
 .pick-detail {
   max-height: 54px;
@@ -1405,7 +1463,10 @@ label.team-config-check {
   box-shadow: inset 0 0 0 2px rgba(79, 195, 247, 0.65), 0 0 10px rgba(79, 195, 247, 0.35);
 }
 
-/* 礼装槽纵向容器：戴冠战第二礼装位 */
+/* 礼装槽纵向容器：戴冠战第二礼装位。
+   2026-10-27 起礼装格统一是 150:68 的横版卡面，所以这里不再用固定 min-height 撑高度
+   （原来 192/180px 是为了塞下"图 + 名字 + Cost + 效果"四行）。
+   冠位那列自然就是两条卡面叠着，比邻列高一条 —— 正好看得出它有两个礼装位。 */
 .craft-stack {
   display: flex;
   flex-direction: column;
@@ -1413,14 +1474,11 @@ label.team-config-check {
 }
 .craft-stack.crown-mode {
   justify-content: center;
-  min-height: 192px;
+  min-height: 0;
 }
 .craft-stack.crown-mode .cell-craft {
-  flex: 1 1 auto;
-  min-height: 86px;
-}
-.craft-stack.crown-mode:not(.has-second) .cell-craft {
-  min-height: 180px;
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 /* 结果迷你队伍：冠位标记与预计牵绊数 */
@@ -1730,8 +1788,10 @@ label.team-config-check {
   .topbar h1 { font-size: 18px; }
   .topbar button { margin-left: 0; }
 
-  /* 一级界面 / 结果方案板：保持一行 6 格（用户要求 6×1，不要 3×2 重排）；格子变窄，靠换行撑开 */
-  .board-area { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  /* 队伍区：手机上 6 列改 **3 列 × 2 行**（用户 2026-10-27 决定）。
+     6 列时每格只有 ~55px，占位字竖排、礼装文字被压扁；3 列后每格 ~116px，
+     前排（上）后排（下）各一行。结果区的迷你队伍板仍保持一行 6 格。 */
+  .board-area { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 8px; }
   .result-board { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 
   /* 方格必须"真方"：高度只跟宽度走，不被内容顶破。两个元凶：
@@ -1741,15 +1801,26 @@ label.team-config-check {
      做法：格子统一 aspect-ratio + min-height:0 + flex:0 0 auto；
           头像改为绝对定位铺满，不再参与高度计算。桌面（>640px）不受影响。 */
   .slot-col { min-height: 0; }
-  .cell-servant,
-  .cell-craft {
+  /* 队伍的"空格"复用了通用类 .empty（那条是给"加载中 / 空列表"用的 padding:30px），
+     手机上它把内容宽度吃光 → 占位字被挤成竖排、格子被撑到比列宽还大（实测 64px vs 55.7px）。
+     这里按普通格的内边距压回来。 */
+  .cell.empty { padding: 6px; }
+  .cell-servant {
     aspect-ratio: 1 / 1;
     height: auto;
     min-height: 0;
     flex: 0 0 auto;
     overflow: hidden;
   }
-  .cell-craft { padding: 4px; }
+  /* 礼装格：桌面已经是 150:68 横版（见文件上半部分），窄屏这里只补内边距与不可压缩 */
+  .cell-craft {
+    flex: 0 0 auto;
+    overflow: hidden;
+    padding: 4px;
+    justify-content: center;
+  }
+  /* 任何情况下都不许把文字块压扁，宁可裁掉底部 */
+  .cell-craft > * { flex: 0 0 auto; }
   .cell-servant .cell-avatar {
     position: absolute;
     top: 6px;
@@ -1760,12 +1831,6 @@ label.team-config-check {
     height: calc(100% - 12px);
     border-radius: 6px;
   }
-  /* 礼装格：**有图**时只显示礼装图（名字 / Cost / 效果点开弹层看，用户要求，窄屏才生效）；
-     **没图**（自定义礼装等）时必须显示名字，否则整格是空白 */
-  .cell-craft:not(.no-img) .cell-name,
-  .cell-craft:not(.no-img) .cell-meta,
-  .cell-craft:not(.no-img) .cell-effect { display: none; }
-  .cell-craft { justify-content: center; }
   .cell-craft.no-img .cell-name {
     font-size: 12px;
     line-height: 1.25;
@@ -1775,13 +1840,6 @@ label.team-config-check {
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
-  }
-  .cell-craft-img {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1 / 1;
-    max-width: 100%;
-    margin-bottom: 0;
   }
   .mini-servant,
   .mini-craft {
@@ -1799,7 +1857,6 @@ label.team-config-check {
     border-radius: 4px;
   }
   .mini-craft { padding: 3px 1px; }
-  .mini-craft-img { width: 26px; height: 26px; }
 
   /* 触控目标：按钮 / 输入框放大到手指能点 */
   button { min-height: 44px; padding: 10px 14px; font-size: 14px; }
@@ -1871,4 +1928,25 @@ label.team-config-check {
   .detail-craft-name,
   .craft-breakdown-item,
   .formula-line { overflow-wrap: anywhere; }
+
+  /* 使用说明：桌面是"左边目录 + 右边正文"，手机上正文只剩 ~165px（每行约 10 字），
+     而且目录每一项还吃了上面的 button 44px 最小高度 → 改成**顶部横向目录条 + 全宽正文**。 */
+  .manual-body { flex-direction: column; gap: 8px; margin-top: 36px; }
+  .manual-toc {
+    width: auto;
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 8px;
+  }
+  .manual-toc button { flex: 0 0 auto; white-space: nowrap; }
+  /* 横向目录条不要原生滚动条（安卓 WebView 上是一条很显眼的灰条），横向滑动即可 */
+  .manual-toc { scrollbar-width: none; }
+  .manual-toc::-webkit-scrollbar { display: none; }
+  .manual-content { padding-right: 0; }
 }
