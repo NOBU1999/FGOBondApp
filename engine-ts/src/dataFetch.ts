@@ -5,7 +5,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { bodyReadable, currentProxy, httpRequest, proxyLabel, readAll } from "./proxy.ts";
 import { pyDumps } from "./pyjson.ts";
 import {
   clearDataTables,
@@ -65,6 +67,8 @@ export const NICE_SERVANT_FILE = "nice_servant.json";
 export const NICE_EQUIP_FILE = "nice_equip.json";
 export const NICE_EVENT_FILE = "nice_event.json";
 export const BASIC_EVENT_FILE = "basic_event.json";
+export const BASIC_SERVANT_FILE = "basic_servant.json";
+export const BASIC_EQUIP_FILE = "basic_equip.json";
 
 export const SUPPORTED_REGIONS = new Set(["JP", "NA", "CN", "KR", "TW"]);
 export const DEFAULT_REGION = (process.env.FGO_REGION ?? "JP").toUpperCase();
@@ -135,15 +139,10 @@ function assertNet(): void {
 
 export async function fetchBytes(url: string, timeoutMs = HTTP_TIMEOUT_MS): Promise<Uint8Array> {
   assertNet();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const resp = await fetch(url, { headers: { "User-Agent": UA }, signal: ctrl.signal });
-    if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
-    return new Uint8Array(await resp.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
-  }
+  const r = await httpRequest(url, { headers: { "User-Agent": UA }, timeoutMs });
+  if (!r.ok) throw new HttpError(r.status, `HTTP ${r.status}`);
+  // 走了代理时由我们自己解压（fetch 那条路由 undici 自动解，这里按魔数判断两种情况都对）
+  return gunzipIfNeeded(await readAll(r.body));
 }
 
 export class HttpError extends Error {
@@ -171,29 +170,22 @@ export function gunzipIfNeeded(body: Uint8Array): Uint8Array {
 /** 请求一段原始 JSON 字节区间（Atlas 支持 Range；gzip 时每段独立解压） */
 export async function downloadRangeRaw(url: string, start: number, end: number): Promise<[Uint8Array, number]> {
   assertNet();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
-  try {
-    const resp = await fetch(url, {
-      headers: { "User-Agent": UA, Range: `bytes=${start}-${end}`, "Accept-Encoding": "gzip" },
-      signal: ctrl.signal,
-    });
-    if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
-    if (resp.status === 206) {
-      let totalRaw = 0;
-      const contentRange = resp.headers.get("content-range") ?? "";
-      if (contentRange.includes("/")) {
-        totalRaw = parseInt(contentRange.slice(contentRange.lastIndexOf("/") + 1), 10) || 0;
-      }
-      const raw = gunzipIfNeeded(new Uint8Array(await resp.arrayBuffer()));
-      return [raw, totalRaw];
+  const r = await httpRequest(url, {
+    headers: { "User-Agent": UA, Range: `bytes=${start}-${end}`, "Accept-Encoding": "gzip" },
+    timeoutMs: HTTP_TIMEOUT_MS,
+  });
+  if (!r.ok) throw new HttpError(r.status, `HTTP ${r.status}`);
+  const body = gunzipIfNeeded(await readAll(r.body));
+  if (r.status === 206) {
+    let totalRaw = 0;
+    const contentRange = r.headers["content-range"] ?? "";
+    if (contentRange.includes("/")) {
+      totalRaw = parseInt(contentRange.slice(contentRange.lastIndexOf("/") + 1), 10) || 0;
     }
-    // 服务器不支持 Range 时整包读取
-    const raw = gunzipIfNeeded(new Uint8Array(await resp.arrayBuffer()));
-    return [raw, raw.length];
-  } finally {
-    clearTimeout(timer);
+    return [body, totalRaw];
   }
+  // 服务器不支持 Range 时整包读取
+  return [body, body.length];
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -336,18 +328,12 @@ export async function getRemoteExportMeta(
   const r = regionOrDefault(region);
   const url = exportUrl(r, filename);
   assertNet();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
-  try {
-    const resp = await fetch(url, { method: "HEAD", headers: { "User-Agent": UA }, signal: ctrl.signal });
-    if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
-    return {
-      etag: normalizeEtag(resp.headers.get("etag")),
-      last_modified: resp.headers.get("last-modified") ?? "",
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  const resp = await httpRequest(url, { method: "HEAD", headers: { "User-Agent": UA }, timeoutMs: HTTP_TIMEOUT_MS });
+  if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
+  return {
+    etag: normalizeEtag(resp.headers["etag"]),
+    last_modified: resp.headers["last-modified"] ?? "",
+  };
 }
 
 const logStderr = (m: string): void => console.error(m);
@@ -371,11 +357,136 @@ export async function loadJsonCached(
   const url = exportUrl(region, filename);
   out(`[data_fetcher] downloading ${url}`);
   if (useCache) {
-    await downloadToCache(url, cachePath, label, null, out);
+    // 优先走压缩直传（体积约为 1/9）；失败再退回 2MB 分段（可续传但没压缩）
+    let ok = false;
+    try {
+      await downloadJsonGzip(url, cachePath, label, out);
+      ok = true;
+    } catch (exc: any) {
+      out(`[data_fetcher] ${label}: 压缩直传失败（${exc?.message ?? exc}），改用分段下载`);
+    }
+    if (!ok) await downloadToCache(url, cachePath, label, null, out);
     return JSON.parse(fs.readFileSync(cachePath, "utf8"));
   }
   const bytes = await fetchBytes(url);
   return JSON.parse(Buffer.from(bytes).toString("utf8"));
+}
+
+// ---------------------------------------------------------------------------
+// 大文件下载
+// ---------------------------------------------------------------------------
+/** 大 JSON 导出走 **gzip 单次流式下载**。
+ *
+ *  实测（2026-10-27，Atlas JP 导出）：从者包 69,257,176 字节 → 压缩后 7,487,794 字节（约 1/9），
+ *  耗时 40s → 7.6s。原来的 2MB 分段（Range）下载会让服务端一律回 identity，
+ *  压缩收益全丢 —— 这就是「更新数据」又慢又费流量的真正原因。
+ *  ⚠️ Range 与 gzip 不能同时用：一，旦带 Range 服务端就不再压缩。
+ *  代价是断了要从头再来，所以失败时由调用方退回分段下载（能续传的那条）。
+ */
+export async function downloadJsonGzip(
+  url: string,
+  dest: string,
+  label: string,
+  log: (msg: string) => void,
+): Promise<string> {
+  assertNet();
+  const part = dest.replace(/\.[^./\\]+$/, "") + ".part";
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  if (fs.existsSync(part)) fs.unlinkSync(part);
+
+  // 先问未压缩体积（identity 的 content-length = 解压后的字节数），用来算百分比
+  // ⚠️ HEAD 必须显式要 identity：Node 默认会带 gzip，服务端就回压缩体的长度（实测只有 20 字节），
+  //    百分比会瞬间 100% 且显示"共 0.0 MB"。
+  let total: number | null = null;
+  try {
+    const head = await httpRequest(url, {
+      method: "HEAD",
+      headers: { "User-Agent": UA, "Accept-Encoding": "identity" },
+      timeoutMs: 60 * 1000,
+    });
+    if (head.ok) {
+      const n = parseInt(head.headers["content-length"] ?? "", 10);
+      if (Number.isFinite(n) && n > 0) total = n;
+    }
+  } catch {
+    /* 拿不到就只报已下多少 */
+  }
+
+  const t0 = Date.now();
+  let downloaded = 0;
+  let lastPct = -1;
+  const report = (force = false): void => {
+    const elapsed = (Date.now() - t0) / 1000;
+    const speed = elapsed > 0 ? downloaded / elapsed / 1024 / 1024 : 0;
+    if (!total) {
+      if (!force && downloaded < 4 * 1024 * 1024) return;
+      log(`[data_fetcher] ${label}: 已下载 ${(downloaded / 1024 / 1024).toFixed(1)} MB（${speed.toFixed(2)} MB/s）`);
+      return;
+    }
+    const pct = Math.min(100, Math.trunc((downloaded * 100) / total));
+    if (!force && pct < lastPct + 2) return;
+    lastPct = pct;
+    const eta = downloaded > 0 && elapsed > 0 ? (total - downloaded) / (downloaded / elapsed) : 0;
+    log(
+      `[data_fetcher] ${label}: ${pct}% ` +
+        `(${(downloaded / 1024 / 1024).toFixed(1)}/${(total / 1024 / 1024).toFixed(1)} MB, ` +
+        `${speed.toFixed(2)} MB/s` +
+        (eta > 0 ? `, 约剩 ${eta.toFixed(0)}s` : "") +
+        ")",
+    );
+  };
+
+  try {
+    const resp = await httpRequest(url, {
+      headers: { "User-Agent": UA, "Accept-Encoding": "gzip" },
+      timeoutMs: 30 * 60 * 1000,
+    });
+    if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
+    log(
+      `[data_fetcher] ${label}: 开始下载` +
+        (total ? `，共 ${(total / 1024 / 1024).toFixed(1)} MB（压缩传输）` : "（压缩传输）"),
+    );
+    const fd = fs.openSync(part, "w");
+    try {
+      // 两种宿主行为不同：走 fetch 时 undici 已经解压好，走代理时拿到的是原始 gzip 字节。
+      // ⇒ 认第一块的头两字节（1f 8b）决定要不要自己解；别信 content-encoding（坑 40b 就是信头信的）。
+      const src = bodyReadable(resp.body);
+      const it = src[Symbol.asyncIterator]();
+      const first = await it.next();
+      const pipe = Readable.from(
+        (async function* () {
+          if (!first.done) yield first.value as Uint8Array;
+          for (;;) {
+            const n = await it.next();
+            if (n.done) return;
+            yield n.value as Uint8Array;
+          }
+        })(),
+      );
+      const firstChunk = first.done ? null : (first.value as Uint8Array);
+      const gz = !!firstChunk && firstChunk.length >= 2 && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b;
+      const out = gz ? pipe.pipe(zlib.createGunzip()) : pipe;
+      for await (const chunk of out) {
+        const buf = chunk as Uint8Array;
+        fs.writeSync(fd, buf);
+        downloaded += buf.length;
+        report();
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    report(true);
+    fs.renameSync(part, dest);
+    log(`[data_fetcher] ${label}: done -> ${dest}`);
+    return dest;
+  } catch (exc) {
+    try {
+      if (fs.existsSync(part)) fs.unlinkSync(part);
+    } catch {
+      /* 清不掉就算了，下次覆盖 */
+    }
+    throw exc;
+  }
 }
 
 export async function loadNiceServants(
@@ -387,7 +498,7 @@ export async function loadNiceServants(
   const r = regionOrDefault(region);
   const dir = cacheDir ?? dataCfg.rawCacheDir;
   fs.mkdirSync(dir, { recursive: true });
-  return loadJsonCached(r, NICE_SERVANT_FILE, dir, "nice_servant", useCache, log);
+  return loadJsonCached(r, NICE_SERVANT_FILE, dir, `nice_servant_${r.toLowerCase()}`, useCache, log);
 }
 
 export async function loadNiceEquips(
@@ -399,7 +510,20 @@ export async function loadNiceEquips(
   const r = regionOrDefault(region);
   const dir = cacheDir ?? dataCfg.rawCacheDir;
   fs.mkdirSync(dir, { recursive: true });
-  return loadJsonCached(r, NICE_EQUIP_FILE, dir, "nice_equip", useCache, log);
+  return loadJsonCached(r, NICE_EQUIP_FILE, dir, `nice_equip_${r.toLowerCase()}`, useCache, log);
+}
+
+/** 只需要 id / collectionNo / type 时用 basic 包（从者 ~0.5MB、礼装 ~0.8MB），别下整包。 */
+export async function loadBasicEntries(
+  region: string | null = null,
+  filename: string = BASIC_EQUIP_FILE,
+  useCache = true,
+  log?: (m: string) => void,
+): Promise<any[]> {
+  const r = regionOrDefault(region);
+  const dir = dataCfg.rawCacheDir;
+  fs.mkdirSync(dir, { recursive: true });
+  return loadJsonCached(r, filename, dir, `${filename.replace(/\.json$/, "")}_${r.toLowerCase()}`, useCache, log);
 }
 
 // ---------------------------------------------------------------------------
@@ -840,7 +964,8 @@ export async function buildDatabase(opts: BuildOptions = {}): Promise<Record<str
       cnUnavailableIds = [];
       setMeta(db, "cn_equip_etag", "");
     } else {
-      const cnEquips = await loadNiceEquips("CN", useCache, null, downloadLog ?? undefined);
+      // 简中服礼装只用 id 集合算"未实装"差集 → 用 basic 包（0.8MB），别再下 21MB 整包
+      const cnEquips = await loadBasicEntries("CN", BASIC_EQUIP_FILE, useCache, downloadLog ?? undefined);
       cnUnavailableIds = cnUnavailableBondCeIds(db, cnEquips);
       try {
         const cnMeta = await getRemoteExportMeta("CN", NICE_EQUIP_FILE);
@@ -939,27 +1064,21 @@ export function costumeNamePairs(db: any, onlyMissing: boolean): [number, number
 export async function fetchCostumeNames(sid: number, region: string): Promise<[Map<number, string>, number]> {
   const url = COSTUME_NAME_SOURCE.replace("{region}", region).replace("{id}", String(sid));
   assertNet();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30 * 1000);
-  try {
-    const resp = await fetch(url, { headers: { "User-Agent": "FGOBondApp local" }, signal: ctrl.signal });
-    if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
-    const buf = new Uint8Array(await resp.arrayBuffer());
-    const data = JSON.parse(Buffer.from(buf).toString("utf8"));
-    const idMap = (data?.mstSvtExtra?.costumeLimitSvtIdMap ?? {}) as Record<string, any>;
-    const names = new Map<number, string>();
-    for (const ent of Object.values(idMap)) {
-      if (!ent || typeof ent !== "object") continue;
-      const cid = ent["battleCharaId"];
-      let name = String(ent["name"] ?? ent["shortName"] ?? "").trim();
-      if (!cid || !name) continue;
-      name = name.replace(COSTUME_NAME_PREFIX, "").trim();
-      if (name) names.set(parseInt(String(cid), 10), name);
-    }
-    return [names, buf.length];
-  } finally {
-    clearTimeout(timer);
+  const resp = await httpRequest(url, { headers: { "User-Agent": "FGOBondApp local" }, timeoutMs: 30 * 1000 });
+  if (!resp.ok) throw new HttpError(resp.status, `HTTP ${resp.status}`);
+  const buf = gunzipIfNeeded(await readAll(resp.body));
+  const data = JSON.parse(Buffer.from(buf).toString("utf8"));
+  const idMap = (data?.mstSvtExtra?.costumeLimitSvtIdMap ?? {}) as Record<string, any>;
+  const names = new Map<number, string>();
+  for (const ent of Object.values(idMap)) {
+    if (!ent || typeof ent !== "object") continue;
+    const cid = ent["battleCharaId"];
+    let name = String(ent["name"] ?? ent["shortName"] ?? "").trim();
+    if (!cid || !name) continue;
+    name = name.replace(COSTUME_NAME_PREFIX, "").trim();
+    if (name) names.set(parseInt(String(cid), 10), name);
   }
+  return [names, buf.length];
 }
 
 export interface CostumeOptions {
@@ -993,39 +1112,51 @@ export async function refreshCostumeNames(opts: CostumeOptions = {}): Promise<Re
   let totalBytes = 0;
   let requests = 0;
 
+  // 并发 4：灵衣名是"每个从者一次单条请求"，串行时 116 个 ≈ 3 分钟（走代理每次还要一次握手），
+  // 实测并发 4 后整轮更新从 ~7 分钟降到 ~2.5 分钟。写库仍是主线程同步执行，不需要加锁。
+  const COSTUME_CONCURRENCY = 4;
   const fill = async (reg: string, translate: boolean, label: string): Promise<void> => {
     const todoServants = [...pending.keys()].filter((sid) => (pending.get(sid) ?? []).length > 0).sort((a, b) => a - b);
-    let idx = 0;
-    for (const sid of todoServants) {
-      idx += 1;
-      if (progress) progress(`正在${label}灵衣名称 ${idx}/${todoServants.length}...`);
-      requests += 1;
-      let names: Map<number, string>;
-      let nbytes: number;
-      try {
-        [names, nbytes] = await fetchCostumeNames(sid, reg);
-        totalBytes += nbytes;
-      } catch {
-        errors += 1;
-        continue;
-      }
-      const still: number[] = [];
-      for (const cid of pending.get(sid) ?? []) {
-        let name = names.get(cid) ?? "";
-        if (name && translate) {
-          const cnName = translateJpName(name, "costume_names");
-          // 译名表里没有对应中文 → 不留日文原名
-          name = cnName === name ? "" : cnName;
+    let next = 0;
+    let done = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const sid = todoServants[next];
+        next += 1;
+        if (sid === undefined) return;
+        requests += 1;
+        let names: Map<number, string>;
+        let nbytes: number;
+        try {
+          [names, nbytes] = await fetchCostumeNames(sid, reg);
+          totalBytes += nbytes;
+        } catch {
+          errors += 1;
+          done += 1;
+          continue;
         }
-        if (name) {
-          upsertCostumeName(db, sid, cid, name);
-          filled += 1;
-        } else {
-          still.push(cid);
+        const still: number[] = [];
+        for (const cid of pending.get(sid) ?? []) {
+          let name = names.get(cid) ?? "";
+          if (name && translate) {
+            const cnName = translateJpName(name, "costume_names");
+            // 译名表里没有对应中文 → 不留日文原名
+            name = cnName === name ? "" : cnName;
+          }
+          if (name) {
+            upsertCostumeName(db, sid, cid, name);
+            filled += 1;
+          } else {
+            still.push(cid);
+          }
         }
+        pending.set(sid, still);
+        done += 1;
+        if (progress && done % 5 === 0) progress(`正在${label}灵衣名称 ${done}/${todoServants.length}...`);
       }
-      pending.set(sid, still);
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(COSTUME_CONCURRENCY, todoServants.length) }, worker));
+    if (progress) progress(`正在${label}灵衣名称 ${todoServants.length}/${todoServants.length}...`);
   };
 
   await fill(nameRegion, false, "更新");
@@ -1112,6 +1243,8 @@ export async function updateDatabase(opts: UpdateOptions = {}): Promise<Record<s
   // 下载明细（每 2% 一行）走同一个 progress 通道：界面靠它画进度条，否则大文件下载期间界面纹丝不动
   const downloadLog = opts.downloadLog ?? (progress ? (m: string) => progress(m) : null);
   if (progress) progress("正在检查数据更新...");
+  // 让界面知道这趟走的是代理还是直连（用户的网络环境千差万别，出问题时第一眼看这个）
+  if (progress) progress(`网络：${proxyLabel(currentProxy())}`);
   const dbPath = opts.dbPath ?? dataCfg.dbPath;
   {
     const db = await connectWrite(dbPath, opts.sqlFactory);

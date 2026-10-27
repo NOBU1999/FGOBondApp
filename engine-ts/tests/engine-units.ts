@@ -41,7 +41,7 @@ import {
   repeatableCraftIds,
   usesPointsScoring,
 } from "../src/relaxed.ts";
-import { downloadRangeRaw, downloadToCache, gunzipIfNeeded, normalizeEtag } from "../src/dataFetch.ts";
+import { downloadJsonGzip, downloadRangeRaw, downloadToCache, gunzipIfNeeded, normalizeEtag } from "../src/dataFetch.ts";
 import type { DataContext } from "../src/calculator.ts";
 
 const APP_ROOT = process.env.FGO_APP_ROOT ?? path.resolve(import.meta.dirname, "../..");
@@ -660,6 +660,75 @@ check(
     require_(total === plain.length, `content-range 总长度解析错：应为 ${plain.length}，实际 ${total}`);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+check(
+  "download_json_gzip_streams_decompressed",
+  "2026-10-27：大 JSON 导出改走 gzip 直传（实测体积 1/9、耗时 1/2~1/4）。锁定「拿到的是解压后的原文」和「失败不留 .part、要抛错给调用方退回分段下载」",
+)(async () => {
+  const plain = Buffer.from(JSON.stringify([{ id: 7, name: "テスト", skills: [{ id: 1 }] }]), "utf8");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fgo-dlgzip-"));
+  const makeServer = (mode: "gzip" | "identity" | "boom") =>
+    http.createServer((req, res) => {
+      if (req.method === "HEAD") {
+        res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(plain.length) });
+        res.end();
+        return;
+      }
+      if (mode === "boom") {
+        res.writeHead(500);
+        res.end("nope");
+        return;
+      }
+      const body = mode === "gzip" ? zlib.gzipSync(plain) : plain;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Content-Length": String(body.length),
+      };
+      if (mode === "gzip") headers["Content-Encoding"] = "gzip";
+      res.writeHead(200, headers);
+      res.end(body);
+    });
+  try {
+    // ① 服务端照 Atlas 的样子给 gzip 体 → 落盘的必须是**解压后**的原文（fetch 已自动解压）
+    // ② 服务端忽略 Accept-Encoding 直接给明文 → 也必须原样落盘，不能又解一次
+    for (const mode of ["gzip", "identity"] as const) {
+      const server = makeServer(mode);
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+      try {
+        const port = (server.address() as any).port;
+        const dest = path.join(dir, `${mode}.json`);
+        await downloadJsonGzip(`http://127.0.0.1:${port}/x.json`, dest, "x", () => {});
+        const got = fs.readFileSync(dest);
+        require_(
+          Buffer.compare(got, plain) === 0,
+          `${mode}：落盘字节不对（${got.length} 字节，应为 ${plain.length} 字节）`,
+        );
+      } finally {
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    }
+    // ③ 服务端 500：必须抛错（调用方靠它退回分段下载），且不留 .part 垃圾
+    const boom = makeServer("boom");
+    await new Promise<void>((r) => boom.listen(0, "127.0.0.1", () => r()));
+    try {
+      const port = (boom.address() as any).port;
+      const dest = path.join(dir, "boom.json");
+      let threw = false;
+      try {
+        await downloadJsonGzip(`http://127.0.0.1:${port}/x.json`, dest, "x", () => {});
+      } catch {
+        threw = true;
+      }
+      require_(threw, "服务端 500 时没有抛错，调用方就不会退回分段下载");
+      require_(!fs.existsSync(dest), "失败后不该生成目标文件");
+      require_(!fs.existsSync(dest.replace(/\.json$/, ".part")), "失败后留下了 .part 临时文件");
+    } finally {
+      await new Promise<void>((r) => boom.close(() => r()));
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
