@@ -189,8 +189,10 @@ export function initDb(db: any, schemaVersion = SCHEMA_VERSION): void {
 }
 
 export function clearDataTables(db: any): void {
+  // ⚠️ 故意不清 `servant_costumes`：那张表只存"灵衣名"（servant_id, costume_id, name），
+  //    名字不在 Atlas 导出里，只能一条条去 raw 单从者接口取。以前每轮更新都清掉 →
+  //    每次都要重新请求 116 次（约 110 次多余请求/轮）；留下旧名字后只有**新增灵衣**才会补取。
   for (const t of [
-    "servant_costumes",
     "servant_costume_traits",
     "servant_costume_traits_cn",
     "servant_stage_traits",
