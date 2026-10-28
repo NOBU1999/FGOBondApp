@@ -5,9 +5,7 @@
 // sql.js 是内存库：调用方最后用 `exportDb(conn)` 落盘。
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
-
-const requireHere = createRequire(import.meta.url);
+import { getPlatform } from "./platform.ts";
 
 /** 与 Python `database.DDL` 逐字一致（注意 crafts 的两列注释与 NOT NULL） */
 export const DDL = `
@@ -145,14 +143,18 @@ export const STATIC_DATA_TABLES = [
 
 let SQL_MODULE: any = null;
 
-/** 初始化 sql.js（异步，只做一次）。定位与 `database.ts` 一致：靠应用根目录的 package.json。 */
+/** 初始化 sql.js（异步，只做一次）。
+ *
+ *  ⚠️ 必须走**平台层**，不能像以前那样直接 `require("sql.js")`：
+ *     打包版里没有 `node_modules`，那样写会让「检查更新 / 更新数据」一按下去就抛
+ *     `Cannot find module 'sql.js'`（v0.3.2 玩家报的就是这个，2026-10-28 在本机复现）。
+ *     读库那条路（`database.ts`）本来就走平台层，所以主界面一直是好的，
+ *     只有写库这条（更新数据）坏 —— 两条路必须共用同一个加载器。
+ *     平台层按 `dist\engine-ts\` → `resources\sqljs\` → `sqljs\`（随包备用副本）成对找
+ *     `sql-wasm.js` + `sql-wasm.wasm`，与 `node_modules` 无关。 */
 export async function initSql(appRoot?: string): Promise<any> {
   if (SQL_MODULE) return SQL_MODULE;
-  const root = appRoot ?? process.env.FGO_APP_ROOT ?? process.cwd();
-  const req = createRequire(path.join(root, "package.json"));
-  const initSqlJs = req("sql.js");
-  const wasmDir = path.dirname(req.resolve("sql.js/dist/sql-wasm.js"));
-  SQL_MODULE = await initSqlJs({ locateFile: (f: string) => path.join(wasmDir, f) });
+  SQL_MODULE = await getPlatform().loadSqlJs(appRoot ? { appRoot } : {});
   return SQL_MODULE;
 }
 
