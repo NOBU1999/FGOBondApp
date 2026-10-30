@@ -1841,9 +1841,15 @@ label.team-config-check {
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .mini-servant,
-  .mini-craft {
+  .mini-servant {
     aspect-ratio: 1 / 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* 结果卡的礼装格：**跟桌面同一格式**（150:68 卡面比例，用户 2026-10-28 要求）。
+     以前它和从者格一起被压成 1:1，横版卡面只占上半截、下面空一块，看着像没对齐。 */
+  .mini-craft {
+    aspect-ratio: 150 / 68;
     min-height: 0;
     overflow: hidden;
   }
@@ -1856,7 +1862,8 @@ label.team-config-check {
     height: calc(100% - 6px);
     border-radius: 4px;
   }
-  .mini-craft { padding: 3px 1px; }
+  /* 结果卡的礼装格已按桌面口径（150:68、内边距 2px、无图时名字单行省略），
+     这里不再单独覆盖 padding / 名字换行 —— 否则手机上又跟桌面不是一套。 */
 
   /* 触控目标：按钮 / 输入框放大到手指能点 */
   button { min-height: 44px; padding: 10px 14px; font-size: 14px; }
@@ -1873,13 +1880,8 @@ label.team-config-check {
   .text-muted { font-size: 12px; }
   .mini-mult,
   .cell-effect { font-size: 11px; }
-  .mini-craft-name {
-    font-size: 10px;
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-    line-height: 1.25;
-  }
+  /* 无卡面的自定义礼装：格子是 150:68 的扁条，名字只能单行省略（桌面也是这么处理的） */
+  .mini-craft.no-img .mini-craft-name { font-size: 10px; }
 
   /* 头像网格：窄屏**固定 6 列**（原来 minmax(84px) 手机上只排 2~4 列，太占屏、要多滚好几屏） */
   .box-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
