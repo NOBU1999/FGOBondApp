@@ -1747,7 +1747,9 @@ const App = {
     },
     slotCraftItems(slot) {
       const items = [{ index: 0, craftId: slot.craftId, craft: this.slotCraft(slot) }];
-      if (this.mode === "crown" && slot.isCrown) {
+      // ⚠️ 必须用 crownModeOn（戴冠战 **和柱子战**），不能写 mode === "crown" ——
+      //    2026-11-01 用户报"柱子战里给冠位从者固定位，看不到第二个礼装格"，就是这个条件漏了柱子战。
+      if (this.crownModeOn && slot.isCrown) {
         items.push({ index: 1, craftId: slot.secondCraftId, craft: this.craftById(slot.secondCraftId) });
       }
       return items;
@@ -4277,13 +4279,14 @@ const App = {
       let support = {};
       this.slots.forEach((slot, i) => {
         const pos = this.slotPosition(i);
-        if (this.mode === "crown" && slot.isCrown) crownPositions.push(pos);
+        // ⚠️ 用 crownModeOn（戴冠战 + 柱子战）；写成 mode === "crown" 会让柱子战一个冠位位都发不出去
+        if (this.crownModeOn && slot.isCrown) crownPositions.push(pos);
         if (slot.isSupport) {
           support = {
             position: pos,
             servantId: slot.servantId || null,
             craftId: slot.craftId === null ? null : slot.craftId,
-            secondCraftId: this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
+            secondCraftId: this.crownModeOn && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
           };
           return;
         }
@@ -4296,7 +4299,7 @@ const App = {
           const craft = this.craftById(slot.craftId);
           fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 0 });
         }
-        if (this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
+        if (this.crownModeOn && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
           const craft = this.craftById(slot.secondCraftId);
           fixedCrafts.push({ position: pos, craftId: slot.secondCraftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 1 });
         }
