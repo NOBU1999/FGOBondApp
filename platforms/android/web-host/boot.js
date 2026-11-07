@@ -36,6 +36,8 @@
     "importCapture",
     "getExclusions",
     "saveExclusions",
+    "getCrownServants",
+    "saveCrownServants",
     "listCustomCrafts",
     "saveCustomCrafts",
     "listUserTeams",
@@ -647,6 +649,7 @@
     "resetUserBox",
     "importCapture",
     "saveExclusions",
+    "saveCrownServants",
     "saveCustomCrafts",
     "saveUserTeam",
     "renameUserTeam",
@@ -764,9 +767,20 @@
     } catch (err) {
       pushDiag("warn", "补建 saved_results 失败：" + (err && err.message ? err.message : String(err)));
     }
+    // 冠位名单（终章柱子战）：同样靠随包种子库建表，老用户原地升级时本地库没有这张表
+    try {
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS main."user_crown_servants" (
+           account_id INTEGER NOT NULL DEFAULT 1,
+           servant_id INTEGER NOT NULL,
+           PRIMARY KEY (account_id, servant_id)
+         )`
+      );
+    } catch (err) {
+      pushDiag("warn", "补建 user_crown_servants 失败：" + (err && err.message ? err.message : String(err)));
+    }
     const additions = [
-      ["user_teams", "quality_mode", "TEXT DEFAULT 'balanced'"],
-      ["user_teams", "neighborhood", "TEXT DEFAULT 'standard'"],
+      ["user_teams", "quality_mode", "TEXT DEFAULT 'balanced'"],      ["user_teams", "neighborhood", "TEXT DEFAULT 'standard'"],
       ["user_teams", "search_order", "TEXT DEFAULT 'craft'"],
       ["user_teams", "support_position", "TEXT DEFAULT 'front_right'"],
       ["user_teams", "support_second_craft_id", "INTEGER"],
@@ -896,7 +910,7 @@
       const carried = carryUserTables(
         next,
         runtimeRoot,
-        ["accounts", "user_box", "user_exclusions", "user_teams", "custom_crafts"]
+        ["accounts", "user_box", "user_exclusions", "user_crown_servants", "user_teams", "custom_crafts"]
       );
       for (const key of USER_META_KEYS) {
         const value = readMetaValue(runtimeRoot, key);

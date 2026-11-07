@@ -198,6 +198,16 @@ export function createAccountsDomain({ sql, meta }) {
          SELECT ?, target_type, target_id FROM user_exclusions WHERE account_id = ?`,
         [to, from]
       );
+      // 冠位名单（终章柱子战）：账号复制时一起带走（表可能还没建，忽略即可）
+      try {
+        sql.run(
+          `INSERT OR IGNORE INTO user_crown_servants (account_id, servant_id)
+           SELECT ?, servant_id FROM user_crown_servants WHERE account_id = ?`,
+          [to, from]
+        );
+      } catch (_) {
+        /* 老库没有这张表 */
+      }
     });
   }
 
@@ -244,6 +254,12 @@ export function createAccountsDomain({ sql, meta }) {
     sql.tx(() => {
       sql.run("DELETE FROM user_box WHERE account_id = ?", [target]);
       sql.run("DELETE FROM user_exclusions WHERE account_id = ?", [target]);
+      // 冠位名单也要清：否则账号 id 被复用时，新账号会继承上一个人的名单
+      try {
+        sql.run("DELETE FROM user_crown_servants WHERE account_id = ?", [target]);
+      } catch (_) {
+        /* 老库没有这张表 */
+      }
       sql.run("DELETE FROM accounts WHERE id = ?", [target]);
     });
     const active = getActiveAccountId();

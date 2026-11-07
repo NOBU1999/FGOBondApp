@@ -154,6 +154,11 @@ function ensureSchema(db) {
       target_id INTEGER NOT NULL,
       UNIQUE(account_id, target_type, target_id)
     );
+    CREATE TABLE IF NOT EXISTS user_crown_servants (
+      account_id INTEGER NOT NULL DEFAULT 1,
+      servant_id INTEGER NOT NULL,
+      PRIMARY KEY (account_id, servant_id)
+    );
     CREATE TABLE IF NOT EXISTS custom_crafts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -404,6 +409,15 @@ function saveExclusions(db, exclusions, accountId) {
   return getDomain(db).exclusions.saveExclusions(exclusions, accountId);
 }
 
+// 冠位名单（终章柱子战）：只存 id 列表，合法性由界面保证
+function getCrownServants(db, accountId) {
+  return getDomain(db).crown.getCrownServants(accountId);
+}
+
+function saveCrownServants(db, servants, accountId) {
+  return getDomain(db).crown.saveCrownServants(servants, accountId);
+}
+
 // ---------------------------------------------------------------------------
 // meta / 设置（逻辑在 shared/domain/meta.mjs，这里只做转发）
 // ---------------------------------------------------------------------------
@@ -532,6 +546,8 @@ module.exports = {
   deleteUserTeamResult,
   getExclusions,
   saveExclusions,
+  getCrownServants,
+  saveCrownServants,
   getMetaValue,
   setMetaValue,
   getCnUnavailableBondCeIds,

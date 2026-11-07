@@ -134,6 +134,21 @@
       ]
     },
     {
+      "name": "crown.save（往返 + 去重 + 账号隔离）",
+      "method": "crown.saveCrownServants",
+      "args": [[100100, 100200, 100100, 0, null], 2],
+      "expect": [
+        { "path": "result.servants", "eq": [100100, 100200] },
+        { "path": "result.accountId", "eq": 2 }
+      ]
+    },
+    {
+      "name": "crown.get（另一个账号看不到）",
+      "method": "crown.getCrownServants",
+      "args": [1],
+      "expect": [{ "path": "result.servants.length", "eq": 0 }]
+    },
+    {
       "name": "customCrafts.save（字段归一化 + 解析 conditionGroups）",
       "method": "customCrafts.saveCustomCrafts",
       "args": [

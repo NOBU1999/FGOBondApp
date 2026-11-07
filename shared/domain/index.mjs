@@ -18,6 +18,7 @@ import { createMetaDomain } from "./meta.mjs";
 import { createAccountsDomain } from "./accounts.mjs";
 import { createBoxDomain } from "./box.mjs";
 import { createExclusionsDomain } from "./exclusions.mjs";
+import { createCrownDomain } from "./crown.mjs";
 import { createCustomCraftsDomain } from "./custom-crafts.mjs";
 import { createTeamsDomain } from "./teams.mjs";
 import { createStaticDataDomain } from "./static-data.mjs";
@@ -32,9 +33,11 @@ export function createDomain({ sql, codec }) {
   const accounts = createAccountsDomain({ sql, meta });
   const box = createBoxDomain({ sql, accounts, codec });
   const exclusions = createExclusionsDomain({ sql, accounts });
+  // 冠位名单（终章柱子战）：与排除名单同层次 —— 账号级、可导出、合法性由界面保证
+  const crown = createCrownDomain({ sql, accounts });
   const customCrafts = createCustomCraftsDomain({ sql });
   const teams = createTeamsDomain({ sql });
   const staticData = createStaticDataDomain({ sql });
 
-  return { meta, accounts, box, exclusions, customCrafts, teams, staticData };
+  return { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData };
 }

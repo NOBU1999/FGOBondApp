@@ -32,6 +32,8 @@ const DATA_METHODS = [
   "importCapture",
   "getExclusions",
   "saveExclusions",
+  "getCrownServants",
+  "saveCrownServants",
   "listCustomCrafts",
   "saveCustomCrafts",
   "listUserTeams",

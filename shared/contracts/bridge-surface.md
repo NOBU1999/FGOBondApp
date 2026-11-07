@@ -3,7 +3,7 @@
 > **契约版本：1**（2026-09-18 阶段 3 固化）。版本号只在本文件与 `engine-protocol.md` 里维护；
 > 破坏性变更（改名 / 改参数 / 改错误文案）→ 版本 +1，并同步改所有平台实现与 `renderer/`。
 > 事实来源：`preload.js`（当前唯一实现 = Electron 版）。
-> 界面调用的 33 个方法 = `renderer/app.js` 实测（另外 3 个定义了但界面没用）。
+> 界面调用的 42 个方法 = `renderer/app.js` 实测（另外几个定义了但界面没用）。
 
 ## 0. 怎么验证这份契约
 
@@ -36,7 +36,7 @@ npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不
 
 > 方法名与参数**不改**：界面代码不用动，这是阶段 1 能「发一次版本就验证」的前提。
 
-## 2. 方法清单（36 个）
+## 2. 方法清单（35 个数据方法 + 13 个平台能力 + 2 个订阅）
 
 ### 2.1 基础信息与设置（4）
 
@@ -60,7 +60,7 @@ npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不
 | `getCostumeNames` | – | 灵衣名对照表 | 🟢 | 只读本地 JSON |
 | `getEventBondBonuses` | – | 活动牵绊加成表 | 🟢 | |
 
-### 2.3 个人数据（11，按账号隔离）
+### 2.3 个人数据（17，按账号隔离）
 
 | 方法 | 参数 | 用途 | 归属 | 网页 / 安卓注意 |
 |---|---|---|---|---|
@@ -70,6 +70,8 @@ npm run test:contracts -- --suite bridge     # 桥接用例全部跑一遍（不
 | `importCapture` | `content, accountId` | 导入抓包文本，解析成 Box | 🟡 | 解析逻辑共用，落库走适配器 |
 | `getExclusions` | `accountId` | 读排除名单 | 🟡 | |
 | `saveExclusions` | `exclusions, accountId` | 存排除名单 | 🟡 | |
+| `getCrownServants` | `accountId` | 读冠位名单（终章柱子战） | 🟡 | 返回 `{servants: int[], accountId}`；**引擎不读它** |
+| `saveCrownServants` | `servants, accountId` | 存冠位名单（去重、只留正整数） | 🟡 | 合法性（各职阶 1 人）**由界面保证**，桥接层不硬拦 |
 | `listCustomCrafts` | – | 自定义礼装表 | 🟡 | |
 | `saveCustomCrafts` | `items` | 存自定义礼装 | 🟡 | |
 | `listUserTeams` | – | 已保存队伍（带 `hasResult` / `resultDataRevision` 摘要，**不含结果正文**） | 🟡 | |

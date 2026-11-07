@@ -201,7 +201,7 @@ async function runBridgeSuite() {
   database.ensureSchema(db);
 
   // 清空个人数据 + 自增序号，保证用例可重复、且绝不含真实用户数据
-  for (const table of ["user_box", "user_exclusions", "user_teams", "custom_crafts", "accounts"]) {
+  for (const table of ["user_box", "user_exclusions", "user_crown_servants", "user_teams", "custom_crafts", "accounts"]) {
     try {
       db.exec(`DELETE FROM "${table}"`);
     } catch (_) {
@@ -210,7 +210,7 @@ async function runBridgeSuite() {
   }
   try {
     db.exec(
-      "DELETE FROM sqlite_sequence WHERE name IN ('accounts','user_box','user_exclusions','user_teams','custom_crafts')"
+      "DELETE FROM sqlite_sequence WHERE name IN ('accounts','user_box','user_exclusions','user_crown_servants','user_teams','custom_crafts')"
     );
   } catch (_) {
     /* ignore */

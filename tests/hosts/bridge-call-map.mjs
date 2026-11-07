@@ -44,6 +44,10 @@ export const BRIDGE_CALL_ROUTES = {
   "exclusions.getExclusions": (b, a) => b.getExclusions(a[0]),
   "exclusions.saveExclusions": (b, a) => b.saveExclusions(a[0], a[1]),
 
+  // ---------------- 冠位名单（终章柱子战） ----------------
+  "crown.getCrownServants": (b, a) => b.getCrownServants(a[0]),
+  "crown.saveCrownServants": (b, a) => b.saveCrownServants(a[0], a[1]),
+
   // ---------------- 自定义礼装 ----------------
   "customCrafts.listCustomCrafts": (b) => b.listCustomCrafts(),
   "customCrafts.saveCustomCrafts": (b, a) => b.saveCustomCrafts(a[0]),

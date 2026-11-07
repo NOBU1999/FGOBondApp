@@ -14,7 +14,7 @@
  */
 
 export function createDataBridge({ domain, platform = {} }) {
-  const { meta, accounts, box, exclusions, customCrafts, teams, staticData } = domain;
+  const { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData } = domain;
 
   const P = {
     appRoot: platform.appRoot ?? null,
@@ -84,6 +84,11 @@ export function createDataBridge({ domain, platform = {} }) {
     getExclusions: (accountId) => exclusions.getExclusions(accountId),
     saveExclusions: (list, accountId) => exclusions.saveExclusions(list || {}, accountId),
 
+    // ---------------- 冠位名单（终章柱子战） ----------------
+    // 只是 id 列表：默认冠位 / 保送进池 / 一致性提示都由界面用，引擎不读它
+    getCrownServants: (accountId) => crown.getCrownServants(accountId),
+    saveCrownServants: (list, accountId) => crown.saveCrownServants(list || [], accountId),
+
     // ---------------- 自定义礼装 ----------------
     listCustomCrafts: () => customCrafts.listCustomCrafts(),
     saveCustomCrafts: (items) => customCrafts.saveCustomCrafts(items || []),
@@ -115,6 +120,7 @@ export const WRITE_METHODS = new Set([
   "resetUserBox",
   "importCapture",
   "saveExclusions",
+  "saveCrownServants",
   "saveCustomCrafts",
   "saveUserTeam",
   "renameUserTeam",
@@ -134,6 +140,7 @@ const STUB_DOMAIN = {
   accounts: {},
   box: {},
   exclusions: {},
+  crown: {},
   customCrafts: {},
   teams: {},
   staticData: {},
