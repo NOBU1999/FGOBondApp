@@ -315,8 +315,6 @@ const App = {
       customDraft: null,
       customTraitInputs: [],
       crownClass: "all",
-      // 终章柱子战：玛修主线加成 μ（0 / 0.2 / 0.45）。默认 0.2 = 按"带玛修"算
-      muBonus: 0.2,
       // 冠位名单（账号级）：默认冠位 + 保送进池 + 一致性提示，见 任务-终章柱子战牵绊加成.md §9.4
       crownServantIds: [],
       crownRosterVisible: false,
@@ -468,10 +466,14 @@ const App = {
     /**
      * 是否处于"有冠位"的模式：戴冠战 或 终章柱子战。
      * 这两种模式共享冠位第二礼装位、冠位名单、第二礼装位的 Cost 0 口径；
-     * 差别只在职阶筛选与 μ（柱子战不限职阶、默认带玛修主线加成）。
+     * 差别只在职阶筛选与玛修主线加成（柱子战不限职阶、按"队里有玛修"自动 +20%）。
      */
     crownModeOn() {
       return this.mode === "crown" || this.mode === "pillar";
+    },
+    /** 玛修（800100）当前是否在编成里（玩家位；助战位不算 —— 借来的玛修不给这个加成） */
+    mashInTeam() {
+      return (this.slots || []).some((s) => !s.isSupport && Number(s.servantId) === 800100);
     },
     /** 冠位名单里但当前 Box 没勾的从者（一致性提示用；只在柱状/冠位模式下有意义） */
     crownMissingFromBox() {
@@ -1083,8 +1085,9 @@ const App = {
     modeText() {
       if (this.mode === "crown") return `戴冠战(${this.crownClass})`;
       if (this.mode === "pillar") {
-        const mu = Number(this.muBonus || 0);
-        return `终章柱子战(玛修主线 +${Math.round(mu * 100)}%)`;
+        // +20% 是按"队里有玛修"自动给的，不需要用户选，所以这里只报状态
+        const has = typeof this.mashInTeam === "boolean" ? this.mashInTeam : false;
+        return `终章柱子战(${has ? "队里有玛修，+20% 已计入" : "队里没有玛修，不加成"})`;
       }
       return "普通";
     },
@@ -3278,6 +3281,15 @@ const App = {
     isCrownServant(id) {
       return (this.crownServantIds || []).some((x) => Number(x) === Number(id));
     },
+    /**
+     * 发请求时该从者的「光环（%）」怎么算（**方法，不是 computed**：要带参数）。
+     * 柱子战模式里玛修那 20% 由引擎按"队里有玛修"自动给 ⇒ 这里必须归零，否则会叠成 40%。
+     */
+    auraBonusForPayload(servantId, boxEntry, mode) {
+      const m = mode || this.mode;
+      if (m === "pillar" && Number(servantId) === 800100) return 0;
+      return Number((boxEntry && boxEntry.auraBonus) || 0) / 100;
+    },
     /** 该从者占的冠位名额（七个普通职阶各 1、EX1 一个、EX2 一个）；不在任何组里返回 null */
     crownSlotOf(servantClass) {
       const cls = String(servantClass || "");
@@ -3754,7 +3766,6 @@ const App = {
         mode: this.mode,
         crownClass: this.crownClass,
         crownPositions,
-        muBonus: Number(this.muBonus || 0),
         baseBond: Number(this.baseBond || 0),
         sortMode: this.sortMode === "points" ? "points" : "multiplier",
         fixedServants,
@@ -3841,7 +3852,6 @@ const App = {
         : "standard";
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
-      this.muBonus = preset.muBonus !== undefined && preset.muBonus !== null ? Number(preset.muBonus) : 0.2;
       this.baseBond = Number(preset.baseBond || 0);
       this.sortMode = preset.sortMode === "points" ? "points" : "multiplier";
       this.presetModalVisible = false;
@@ -4171,7 +4181,7 @@ const App = {
           bondSwitch1: f.switch1,
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
-          auraBonus: Number(b.auraBonus || 0) / 100,
+          auraBonus: this.auraBonusForPayload(s.id, b),
           // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
           costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
         };
@@ -4225,7 +4235,8 @@ const App = {
         crownPositions: this.crownModeOn ? crownPositions : [],
         // 冠位名单只做"保送进池"，不改变评分；普通模式不传（常规结果逐字节不变）
         crownServantIds: this.crownModeOn ? (this.crownServantIds || []).map(Number) : [],
-        mainStoryBondBonus: this.mode === "pillar" ? Number(this.muBonus || 0) : 0,
+        // 柱子战：+20% 由引擎按「队里有没有玛修」逐队判定（助战借来的不算），界面不再让用户选
+        mainStoryBondBonus: this.mode === "pillar" ? 0.2 : 0,
         baseBond: Number(this.baseBond || 0),
         sortMode: this.sortMode === "points" && Number(this.baseBond || 0) > 0 ? "points" : "multiplier",
         fixedServants,
@@ -4253,6 +4264,7 @@ const App = {
       };
     },
     buildPresetPayload(preset) {
+      const mode = preset.mode || this.mode;
       const box = this.ownedServants.map((s) => {
         const b = this.box[s.id];
         const f = this.bondFlagsFor(b);          // 按牵绊等级推导（规则见 bondFlagsFor）
@@ -4263,16 +4275,14 @@ const App = {
           bondSwitch1: f.switch1,
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
-          auraBonus: Number(b.auraBonus || 0) / 100,
+          auraBonus: this.auraBonusForPayload(s.id, b, mode),
           // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
           costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
         };
       });
-      const mode = preset.mode || this.mode;
       const crownClass = preset.crownClass || this.crownClass;
       const presetCrownMode = mode === "crown" || mode === "pillar";
       const crownPositions = presetCrownMode ? (preset.crownPositions || []) : [];
-      const presetMu = preset.muBonus !== undefined && preset.muBonus !== null ? Number(preset.muBonus) : Number(this.muBonus || 0);
       const support = {
         position: preset.supportPosition || "front_right",
         servantId: preset.supportId || null,
@@ -4293,7 +4303,7 @@ const App = {
         classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
         crownPositions,
         crownServantIds: presetCrownMode ? (this.crownServantIds || []).map(Number) : [],
-        mainStoryBondBonus: mode === "pillar" ? presetMu : 0,
+        mainStoryBondBonus: mode === "pillar" ? 0.2 : 0,
         baseBond: Number(preset.baseBond !== undefined ? preset.baseBond : this.baseBond || 0),
         sortMode: preset.sortMode === "points" ? "points" : "multiplier",
         fixedServants: preset.fixedServants || [],
@@ -5114,17 +5124,12 @@ const App = {
       </div>
     </div>
 
-    <!-- 终章柱子战：只有玛修主线加成 + 冠位名单两个旋钮（不限职阶、不设预算档） -->
+    <!-- 终章柱子战：玛修主线加成自动判 + 冠位名单（不限职阶、不设预算档） -->
     <div v-if="mode === 'pillar'" class="crown-filter panel pillar-panel">
       <div class="team-config-title">终章柱子战</div>
       <div class="pillar-row">
         <span class="pillar-label">玛修主线加成</span>
-        <button
-          v-for="opt in [{ v: 0, label: '不带玛修（+0%）' }, { v: 0.2, label: '带玛修（+20%）' }, { v: 0.45, label: '玛修 Lv15（+45%）' }]"
-          :key="opt.v"
-          :class="{ active: Number(muBonus) === opt.v }"
-          @click="muBonus = opt.v; results = []; currentPage = 1"
-        >{{ opt.label }}</button>
+        <span class="pillar-auto">队里有玛修时全队自动 +20%</span>
       </div>
       <div class="pillar-row">
         <span class="pillar-label">冠位名单</span>
@@ -6231,8 +6236,10 @@ const App = {
           </div>
           <div v-if="Number(servantDetail.servantId) === 800100" class="field">
             <label>玛修全队光环（%）</label>
-            <input type="number" min="0" step="0.01" :value="box[servantDetail.servantId].auraBonus" @change="setAura(servantDetail.servantId, $event.target.value)" />
-            <div class="text-muted" style="margin-top:2px">玛修在玩家队伍中时为全队提供该加成；作为助战时不生效。</div>
+            <input v-if="mode !== 'pillar'" type="number" min="0" step="0.01" :value="box[servantDetail.servantId].auraBonus" @change="setAura(servantDetail.servantId, $event.target.value)" />
+            <div class="text-muted" style="margin-top:2px">{{ mode === 'pillar'
+              ? '终章柱子战模式下这 20% 由程序按“队里有没有玛修”自动计入，这里不参与计算（免得叠加成 40%）。'
+              : '玛修在玩家队伍中时为全队提供该加成；作为助战时不生效。' }}</div>
           </div>
           <div v-if="Number(servantDetail.servantId) === 800100" class="field">
             <label>玛修的 Cost</label>

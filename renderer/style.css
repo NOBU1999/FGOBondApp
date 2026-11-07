@@ -1465,6 +1465,11 @@ label.team-config-check {
   background: rgba(122, 162, 247, 0.25);
   color: #fff;
 }
+/* 玛修主线的"自动判定"说明与当前状态（不再给按钮，只用一行字） */
+.pillar-panel .pillar-auto {
+  font-size: 13px;
+  color: var(--text);
+}
 .pillar-panel .pillar-warn {
   margin-top: 8px;
   padding: 6px 8px;
