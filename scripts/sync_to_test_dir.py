@@ -53,7 +53,8 @@ TEST_DIR = ROOT / "release" / "MyFGOApp"
 ASAR_NAME = "app.asar"
 
 # asar 归档里需要跟随开发区更新的文件（相对 app 根目录）
-# ⚠️ main/ 下的 .js 不用写在这里 —— 由 asar_sync_files() 自动收集（漏写会让测试包起不来）
+# ⚠️ main/ 与 shared/ 下的文件不用写在这里 —— 由 asar_sync_files() 自动收集
+#    （手写清单漏项的代价：测试包启动直接 "Cannot find module"，2026-10-08 / 2026-11-01 各踩一次）
 ASAR_SYNC_FILES = [
     "renderer/app.js",
     "renderer/bond-math.js",  # 牵绊计算的纯函数层（同分替补重算个体数值）
@@ -62,26 +63,21 @@ ASAR_SYNC_FILES = [
     "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成
     "renderer/assets/app-icon.png",  # 窗口图标 / favicon
     "preload.js",
-    "shared/bridge/data-bridge.mjs",
-    "shared/domain/meta.mjs",
-    "shared/domain/accounts.mjs",
-    "shared/domain/box.mjs",
-    "shared/domain/teams.mjs",
-    "shared/domain/exclusions.mjs",
-    "shared/domain/custom-crafts.mjs",
-    "shared/domain/static-data.mjs",
-    "shared/domain/index.mjs",
 ]
 
 
 def asar_sync_files() -> list:
-    """asar 里要跟随开发区更新的文件：上面那份清单 + main/ 下全部 .js。
+    """asar 里要跟随开发区更新的文件：上面那份清单 + main/ 全部 .js + shared/ 全部 .mjs。
 
     以前 main/ 也是手写清单，2026-10-08 加 main/render-compat.js 时忘了写 →
     测试包里缺文件，启动会直接 "Cannot find module"（真实踩过）。
+    shared/domain 同理：2026-11-01 加 crown.mjs 又差点漏（领域模块是逐个 import 的，
+    漏一个 = 整个桥接层起不来）。⇒ 这两个目录一律 glob，不要再手写。
     """
     files = [rel for rel in ASAR_SYNC_FILES if not rel.startswith("main/")]
     files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "main").glob("*.js"))
+    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "shared" / "domain").glob("*.mjs"))
+    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "shared" / "bridge").glob("*.mjs"))
     # 礼装卡面用 glob：以后补图不用再改这份清单（手写清单漏项踩过一次，见坑 106）
     files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "renderer" / "assets" / "craftface").glob("*.png"))
     return files
