@@ -151,6 +151,12 @@ export class CalculationRequest {
   mode = "normal";
   class_group: string | null = null;
   crown_positions = new Set<string>();
+  /**
+   * 冠位名单（终章柱子战 / 戴冠战）：名单内的从者**保送进候选池**。
+   * 语义是"替换"不是"追加" —— 池子上限不变（坑 34e：超一点就进抽样区，抽样即丢解）。
+   * 普通模式界面不传，所以常规结果不受影响。
+   */
+  crown_servant_ids = new Set<number>();
   base_bond = 0;
   sort_mode = SORT_MULTIPLIER;
   candidate_pool_size = 30;
@@ -286,6 +292,9 @@ export function parseRequest(data: AnyRec): CalculationRequest {
   req.class_group = data["classGroup"] ?? data["classFilter"] ?? "all";
   req.crown_positions = new Set<string>(
     (data["crownPositions"] ?? []).map((x: any) => String(x)),
+  );
+  req.crown_servant_ids = new Set<number>(
+    (data["crownServantIds"] ?? []).map((x: any) => asInt(x)),
   );
   req.base_bond = baseBond;
   req.sort_mode = sortMode;

@@ -83,6 +83,7 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `mode` | `"normal" \| "crown"` | `"normal"` | 冠位模式（柱子战 = `crown` + 不限职阶 + μ > 0） |
 | `classGroup` | `string`（别名 `classFilter`） | `null` | 限定职阶组；`all` / 空 = 不限 |
 | `crownPositions` | `string[]` | `[]` | 启用冠位第二礼装位的位置 |
+| `crownServantIds` | `int[]` | `[]` | **冠位名单**（终章柱子战 / 戴冠战）：名单内的从者**保送进候选池**。只能替换、不能追加（池子上限不变）；普通模式界面不传，老客户端不传即旧行为 |
 | `baseBond` | `float` | `0` | 基础牵绊值 |
 | `sortMode` | `"multiplier" \| "points"` | 见下 | **排序口径 = 搜索目标**（不只是展示顺序） |
 | `candidatePoolSize` | `int` | `30` | 候选从者池大小 |

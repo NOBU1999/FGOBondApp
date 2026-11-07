@@ -875,6 +875,59 @@ check(
   );
 });
 
+check(
+  "crown_servant_ids_forced_into_pool",
+  "冠位名单：crownServantIds 里的从者被保送进候选池（只替换、不追加），默认不传时 forced 里没有他们",
+  { needsCtx: true },
+)(async () => {
+  const ctx = await loadCtx();
+  const allIds = [...ctx.servants.values()].map((s) => s.id).sort((a, b) => a - b);
+  const rng = makeRng(20261101);
+  const boxIds = rng.sample(allIds, 12);
+  const roster = boxIds.slice(0, 3);
+  const base = {
+    box: boxIds.map((sid) => ({ id: sid, stage: "fourth", maxBond: false })),
+    mode: "crown",
+    crownPositions: ["front_left"],
+    costLimit: 116,
+    topN: 20,
+    timeoutMs: 1500,
+    craftPoolSize: 60,
+    sortMode: "multiplier",
+    strategy: "total_max",
+    baseBond: 0,
+  };
+  const seen: { normal?: any; crown?: any } = {};
+  const hooks = (key: "normal" | "crown"): SearchHooks => ({
+    onPool: (info) => {
+      seen[key] = info;
+    },
+  });
+  await searchTopTeams(ctx, parseRequest(base), null, null, hooks("normal"));
+  await searchTopTeams(ctx, parseRequest({ ...base, crownServantIds: roster }), null, null, hooks("crown"));
+  if (!seen.normal || !seen.crown) throw new Skip("两次搜索都没触发候选池构建（预算太小）");
+
+  const normal = seen.normal as { ids: number[]; cap: number; forced: number[] };
+  const crown = seen.crown as { ids: number[]; cap: number; forced: number[] };
+  require_(
+    !roster.some((sid) => normal.forced.includes(sid)),
+    `不传字段时不该有保送：forced=${JSON.stringify(normal.forced)}`,
+  );
+  require_(
+    roster.every((sid) => crown.forced.includes(sid)),
+    `名单内从者没被保送：名单 ${JSON.stringify(roster)}，forced ${JSON.stringify(crown.forced)}`,
+  );
+  require_(
+    roster.every((sid) => crown.ids.includes(sid)),
+    `名单内从者不在候选池里：${JSON.stringify(crown.ids)}`,
+  );
+  require_(
+    crown.ids.length <= crown.cap && crown.ids.length === normal.ids.length,
+    `池子被撑大了（应"只替换不追加"）：${normal.ids.length} → ${crown.ids.length}（cap ${crown.cap}）`,
+  );
+  console.log(`       · 池 ${crown.ids.length}（cap ${crown.cap}）／保送 ${JSON.stringify(roster)} 全在池内`);
+});
+
 function playersKeyOf(ids: number[]): string {
   return [...new Set(ids)].sort((a, b) => a - b).join(",");
 }

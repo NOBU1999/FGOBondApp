@@ -1378,6 +1378,11 @@ export async function searchTopTeams(
     addForced(req.target_servant_id);
   }
 
+  // ①-b 冠位名单（终章柱子战）：名单内的从者一律保送进池。
+  //      与上面同一把尺子：只挤掉 base 尾部，不扩大池子（"只能替换不能追加"）。
+  //      普通模式界面不传这个字段 ⇒ 常规结果逐字节不变。
+  for (const sid of req.crown_servant_ids) addForced(sid);
+
   // ② 活动加成这一维（这一维原来在选池里几乎没有权重，
   //    "全员活动加成"的整族阵容进不了池 ⇒ 会漏解）。
   //    开关只决定「门槛」与「配额大小」，任何情况下都不允许这一维拿到 0 个名额。
