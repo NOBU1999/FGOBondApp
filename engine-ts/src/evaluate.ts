@@ -1,5 +1,5 @@
 // P2c：`evaluate_team`（界面明细）+ Python 语义的 round()
-import { FRONT_POSITIONS, POSITIONS } from "./models.ts";
+import { FRONT_POSITIONS, MASH_SERVANT_ID, POSITIONS } from "./models.ts";
 import { DataContext, traitMaskOf } from "./calculator.ts";
 import {
   TeamConfig,
@@ -61,8 +61,10 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
   );
   const maxBondBonus = maxBondCount * 0.25;
   const activityBonus = team.activity_bonus || 0;
-  // 终章柱子战的玛修主线加成：只进"内层加法桶"，与礼装%/活动%/Lv15 同层（见 §9.2）
-  const mainStoryBondBonus = team.main_story_bond_bonus || 0;
+  // 终章柱子战的玛修主线加成：只进"内层加法桶"，与礼装%/活动%/Lv15 同层（见 §9.2）；
+  // **只有编成里真有玛修**时才给（助战借来的不算）
+  const mashInTeam = team.players.some((p) => Number(p.servant_id) === MASH_SERVANT_ID);
+  const mainStoryBondBonus = mashInTeam ? team.main_story_bond_bonus || 0 : 0;
   const auraBonus = pySum(team.players.map((p) => Number(p.aura_bonus || 0)));
   const craftView = new TeamCraftView(playerCrafts, supportCraft, supportSecondCraft);
   const effectCrafts = craftView.effect_crafts;

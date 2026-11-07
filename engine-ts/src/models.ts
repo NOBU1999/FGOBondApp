@@ -11,6 +11,9 @@ export type Position = (typeof POSITIONS)[number];
 
 export const FRONT_POSITIONS = new Set<string>(["front_left", "front_middle", "front_right"]);
 
+/** 玛修的从者 id：柱子战的「主线 +20%」只有她在编成里时才生效（助战借来的不算） */
+export const MASH_SERVANT_ID = 800100;
+
 export const CLASS_GROUPS: Record<string, Set<string>> = {
   saber: new Set(["saber"]),
   archer: new Set(["archer"]),
@@ -142,9 +145,11 @@ export class CalculationRequest {
   server_region = "jp";
   activity_bonus = 0;
   /**
-   * 终章柱子战的「玛修主线加成」（μ）：对每个自家位同加一个常数倍率（0 / 0.2 / 0.45）。
+   * 终章柱子战的「玛修主线加成」（μ）：**队里有玛修时**对每个自家位同加一个常数倍率（0 / 0.2 / 0.45）。
    * 位置与 Mooncell 公式一致 —— 与礼装% / 活动% / Lv15 的 25% **同层相加**，不是乘在前排加成上。
    * 默认 0 ⇒ 常规与戴冠战的口径逐字节不变（见 任务-终章柱子战牵绊加成.md §9.2）。
+   * ⚠️ 它只在**编成里真有玛修**时生效（助战借来的不算）：判定在 `calculateTeamMetrics` / `evaluateTeam`，
+   * 所以同一个请求里"带玛修的队"和"不带的队"分数不一样 —— 这正是游戏里的实际口径。
    */
   main_story_bond_bonus = 0;
   tea_bonus = 1;

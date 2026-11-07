@@ -78,7 +78,7 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `supportExcludedCraftIds` | `int[]` | `[]` | 助战排除的礼装 |
 | `serverRegion` | `"jp" \| "cn"` | `"jp"` | 数据区服 |
 | `activityBonus` | `float` | `0` | 活动加成 |
-| `mainStoryBondBonus` | `float` | `0` | **终章柱子战的玛修主线加成（μ）**：`0` / `0.2` / `0.45`。对每个自家位同加，位置与礼装% / 活动% / Lv15 的 25% **同层相加**（不乘在前排加成之外）。默认 0 ⇒ 常规与戴冠战行为逐字节不变 |
+| `mainStoryBondBonus` | `float` | `0` | **终章柱子战的玛修主线加成（μ）**：`0` / `0.2` / `0.45`。**只有编成里真有玛修时才生效**（助战借来的不算，引擎按从者 800100 判），生效时对每个自家位同加；位置与礼装% / 活动% / Lv15 的 25% **同层相加**（不乘在前排加成之外）。默认 0 ⇒ 常规与戴冠战行为逐字节不变 |
 | `teaBonus` | `float` | `1` | 午茶 / 助战加成档位 |
 | `mode` | `"normal" \| "crown"` | `"normal"` | 冠位模式（柱子战 = `crown` + 不限职阶 + μ > 0） |
 | `classGroup` | `string`（别名 `classFilter`） | `null` | 限定职阶组；`all` / 空 = 不限 |

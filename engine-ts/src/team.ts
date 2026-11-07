@@ -1,5 +1,5 @@
 // P2b：队伍表示与求值（逐条对齐旧实现的 calculator 425~920 行）
-import { FRONT_POSITIONS } from "./models.ts";
+import { FRONT_POSITIONS, MASH_SERVANT_ID } from "./models.ts";
 import { STAGES, STAGE_ORDER } from "./constants.ts";
 import { CraftInfo, DataContext, traitMaskOf, type ServantInfo } from "./calculator.ts";
 import { pySum } from "./pysum.ts";
@@ -419,7 +419,9 @@ export function calculateTeamMetrics(ctx: DataContext, team: TeamConfig): TeamMe
   );
   const maxBondBonus = maxBondCount * 0.25;
   const activityBonus = team.activity_bonus || 0;
-  const mainStoryBondBonus = team.main_story_bond_bonus || 0;
+  // 终章柱子战的玛修主线加成：**只有编成里真有玛修**时才给（助战借来的不算，与游戏一致）
+  const mashInTeam = team.players.some((p) => Number(p.servant_id) === MASH_SERVANT_ID);
+  const mainStoryBondBonus = mashInTeam ? team.main_story_bond_bonus || 0 : 0;
   const auraBonus = pySum(team.players.map((p) => Number(p.aura_bonus || 0)));
 
   const craftView = new TeamCraftView(playerCrafts, supportCraft, supportSecondCraft);
