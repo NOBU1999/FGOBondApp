@@ -1406,9 +1406,16 @@ const App = {
       const slots = this.altSlots(result, alt);
       const players = team.filter((m) => !m.isSupport);
       if (!slots.length || players.length !== slots.length) return team;
-      // 选中的这支和本行原本那支是同一套从者（顺序可能不同）⇒ 原样返回（别把礼装也换掉）
-      const altIds = slots.map((s) => Number(s.servantId));
-      if (players.every((m) => altIds.indexOf(Number(m.servantId)) >= 0)) return team;
+      // 选中的这支和本行**逐位都是同一个人** ⇒ 原样返回（同侧换位已由 altSlots 归一，
+      // 这里只是省掉一次无用的重建）。
+      // ⚠️ 判据必须是"逐位相同"，不能是"同一批从者"：2026-10-31 实测，同分替补里有一类
+      //    「本行前排的 A 去后排、后排的 D 来前排」的换位 —— 人数与人头都一样，
+      //    原来按集合判断就会直接原样返回，于是下拉里选了它、主面板纹丝不动（用户报的就是这个）。
+      const identical = players.every((m) => {
+        const s = slots.find((x) => String(x.position) === String(m.position));
+        return s && Number(s.servantId) === Number(m.servantId);
+      });
+      if (identical) return team;
       // 按**位置**取这一支的配置（引擎已经把 positions 给出来了，不再靠下标猜）
       const byPos = {};
       slots.forEach((s) => {
