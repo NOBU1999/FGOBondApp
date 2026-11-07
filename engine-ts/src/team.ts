@@ -139,6 +139,8 @@ export class TeamConfig {
   crown_positions: Set<string>;
   base_bond: number;
   activity_bonus: number;
+  /** 终章柱子战的玛修主线加成（μ）；默认 0 = 常规口径 */
+  main_story_bond_bonus: number;
 
   constructor(init: {
     players: PlacedMember[];
@@ -149,6 +151,7 @@ export class TeamConfig {
     crown_positions?: Set<string>;
     base_bond?: number;
     activity_bonus?: number;
+    main_story_bond_bonus?: number;
   }) {
     this.players = init.players;
     this.support_position = init.support_position ?? null;
@@ -158,6 +161,7 @@ export class TeamConfig {
     this.crown_positions = init.crown_positions ?? new Set();
     this.base_bond = init.base_bond ?? 0;
     this.activity_bonus = init.activity_bonus ?? 0;
+    this.main_story_bond_bonus = init.main_story_bond_bonus ?? 0;
   }
 }
 
@@ -326,6 +330,7 @@ export function calculateMemberMultiplier(opts: {
   playerCrafts: CraftInfo[];
   maxBondCount: number;
   activityBonus: number;
+  mainStoryBondBonus?: number;
   auraBonus?: number;
   supportCraft?: CraftInfo | null;
   supportSecondCraft?: CraftInfo | null;
@@ -355,7 +360,15 @@ export function calculateMemberMultiplier(opts: {
   const maxBondBonus = opts.maxBondCount * 0.25;
   return (
     (1 + front) *
-    (1 + uni + sc + tr + maxBondBonus + opts.activityBonus + (opts.auraBonus ?? 0) + opts.personalBonus)
+    (1 +
+      uni +
+      sc +
+      tr +
+      maxBondBonus +
+      opts.activityBonus +
+      (opts.auraBonus ?? 0) +
+      opts.personalBonus +
+      (opts.mainStoryBondBonus ?? 0))
   );
 }
 
@@ -406,6 +419,7 @@ export function calculateTeamMetrics(ctx: DataContext, team: TeamConfig): TeamMe
   );
   const maxBondBonus = maxBondCount * 0.25;
   const activityBonus = team.activity_bonus || 0;
+  const mainStoryBondBonus = team.main_story_bond_bonus || 0;
   const auraBonus = pySum(team.players.map((p) => Number(p.aura_bonus || 0)));
 
   const craftView = new TeamCraftView(playerCrafts, supportCraft, supportSecondCraft);
@@ -427,6 +441,7 @@ export function calculateTeamMetrics(ctx: DataContext, team: TeamConfig): TeamMe
         playerCrafts,
         maxBondCount,
         activityBonus,
+        mainStoryBondBonus,
         auraBonus,
         supportCraft,
         supportSecondCraft,

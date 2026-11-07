@@ -141,6 +141,12 @@ export class CalculationRequest {
   support_excluded_craft_ids = new Set<number>();
   server_region = "jp";
   activity_bonus = 0;
+  /**
+   * 终章柱子战的「玛修主线加成」（μ）：对每个自家位同加一个常数倍率（0 / 0.2 / 0.45）。
+   * 位置与 Mooncell 公式一致 —— 与礼装% / 活动% / Lv15 的 25% **同层相加**，不是乘在前排加成上。
+   * 默认 0 ⇒ 常规与戴冠战的口径逐字节不变（见 任务-终章柱子战牵绊加成.md §9.2）。
+   */
+  main_story_bond_bonus = 0;
   tea_bonus = 1;
   mode = "normal";
   class_group: string | null = null;
@@ -274,6 +280,7 @@ export function parseRequest(data: AnyRec): CalculationRequest {
   );
   req.server_region = String(data["serverRegion"] ?? "jp").toLowerCase();
   req.activity_bonus = asFloat(data["activityBonus"], 0);
+  req.main_story_bond_bonus = asFloat(data["mainStoryBondBonus"], 0);
   req.tea_bonus = asFloat(data["teaBonus"] ?? 1, 1) || 1;
   req.mode = String(data["mode"] ?? "normal").toLowerCase() || "normal";
   req.class_group = data["classGroup"] ?? data["classFilter"] ?? "all";

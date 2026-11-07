@@ -61,6 +61,8 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
   );
   const maxBondBonus = maxBondCount * 0.25;
   const activityBonus = team.activity_bonus || 0;
+  // 终章柱子战的玛修主线加成：只进"内层加法桶"，与礼装%/活动%/Lv15 同层（见 §9.2）
+  const mainStoryBondBonus = team.main_story_bond_bonus || 0;
   const auraBonus = pySum(team.players.map((p) => Number(p.aura_bonus || 0)));
   const craftView = new TeamCraftView(playerCrafts, supportCraft, supportSecondCraft);
   const effectCrafts = craftView.effect_crafts;
@@ -95,6 +97,7 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
         playerCrafts,
         maxBondCount,
         activityBonus,
+        mainStoryBondBonus,
         auraBonus,
         supportCraft,
         supportSecondCraft,
@@ -192,6 +195,7 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
         flatCraftBonus: pyRound(flatBonus, 2),
         maxBondBonus,
         activityBonus,
+        mainStoryBondBonus,
         auraBonus: pyRound(auraBonus, 4),
         personalBonus: personalBonusUsed,
         totalMultiplier: pyRound(multiplier, 6),
@@ -231,6 +235,7 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
         flatCraftBonus: 0,
         maxBondBonus: 0,
         activityBonus: 0,
+        mainStoryBondBonus: 0,
         auraBonus: 0,
         personalBonus: 0,
         totalMultiplier: 0,

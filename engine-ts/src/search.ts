@@ -740,6 +740,7 @@ export function relaxedScoreUpperBound(
     for (const p of players) if (p.counts_max_bond) maxBondCount += 1;
     targetInner += maxBondCount * 0.25;
     targetInner += req.activity_bonus || 0;
+    targetInner += req.main_story_bond_bonus || 0;
     targetInner += pySum(players.map((p) => Number(p.aura_bonus || 0)));
     targetInner += target.personal_bonus;
     const targetBase =
@@ -1567,6 +1568,7 @@ export async function searchTopTeams(
       crown_positions: team.crown_positions,
       base_bond: team.base_bond,
       activity_bonus: team.activity_bonus,
+      main_story_bond_bonus: team.main_story_bond_bonus,
     });
 
   /** 自由位从者做小规模全排列优化 */
@@ -1925,6 +1927,7 @@ export async function searchTopTeams(
             crown_positions: template.crown_positions,
             base_bond: template.base_bond,
             activity_bonus: template.activity_bonus,
+            main_story_bond_bonus: template.main_story_bond_bonus,
           });
           team = optimizeTeamStages(ctx, team);
 

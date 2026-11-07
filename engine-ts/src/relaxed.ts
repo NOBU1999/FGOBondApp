@@ -98,10 +98,12 @@ export function relaxedBaseScore(
 ): number {
   const [maxBondCount, auraTotal] = relaxedTeamConstants(players);
   const activity = req.activity_bonus || 0;
+  // 柱子战的玛修主线加成：与活动加成同样"对每个自家位同加"，必须进上界（否则上界偏低会误剪真队）
+  const mainStory = req.main_story_bond_bonus || 0;
   const weight = relaxedPercentWeight(req);
   const inners: number[] = [];
   for (const p of players) {
-    inners.push(1 + maxBondCount * 0.25 + activity + auraTotal + p.personal_bonus);
+    inners.push(1 + maxBondCount * 0.25 + activity + auraTotal + p.personal_bonus + mainStory);
   }
   return weight * relaxedMemberSum(players, inners);
 }

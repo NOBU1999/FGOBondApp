@@ -385,6 +385,7 @@ export function makeTeamConfig(
     crown_positions: bp.crown_positions,
     base_bond: req.base_bond,
     activity_bonus: req.activity_bonus,
+    main_story_bond_bonus: req.main_story_bond_bonus,
   });
 }
 

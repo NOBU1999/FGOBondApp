@@ -37,10 +37,14 @@ import {
 import { generateCraftCombinationsWithCost } from "../src/pool.ts";
 import {
   dpTopCraftCombinations,
+  relaxedBaseScore,
+  RelaxedPlayer,
   relaxedPercentWeight,
   repeatableCraftIds,
   usesPointsScoring,
 } from "../src/relaxed.ts";
+import { PlacedMember, TeamConfig } from "../src/team.ts";
+import { evaluateTeam } from "../src/evaluate.ts";
 import { downloadJsonGzip, downloadRangeRaw, downloadToCache, gunzipIfNeeded, normalizeEtag } from "../src/dataFetch.ts";
 import type { DataContext } from "../src/calculator.ts";
 
@@ -874,6 +878,56 @@ check(
 function playersKeyOf(ids: number[]): string {
   return [...new Set(ids)].sort((a, b) => a - b).join(",");
 }
+
+check(
+  "main_story_bond_bonus_inner_bucket",
+  "柱子战的玛修主线加成 μ：只进内层加法桶（每位恰好多 (1+前排)×μ）、默认 0 与不传逐字节一致、上界同步抬高",
+  { needsCtx: true },
+)(async () => {
+  const ctx = await loadCtx();
+  const ids = [...ctx.servants.keys()].sort((a, b) => a - b).slice(0, 2);
+  if (ids.length < 2) throw new Skip("静态库里从者太少");
+  const mkTeam = (mu?: number) =>
+    new TeamConfig({
+      players: [
+        new PlacedMember({ position: "front_left", servant_id: ids[0], stage: "fourth" }),
+        new PlacedMember({ position: "back_middle", servant_id: ids[1], stage: "fourth" }),
+      ],
+      ...(mu === undefined ? {} : { main_story_bond_bonus: mu }),
+    });
+  const total = (mu?: number): number => Number(evaluateTeam(ctx, mkTeam(mu)).totalMultiplier);
+
+  // ① 不传 / 传 0 必须完全一样（默认参数零行为差异）
+  require_(
+    total() === total(0),
+    `μ 缺省与 μ=0 不一致：${total()} vs ${total(0)}（常规口径被改动了）`,
+  );
+
+  // ② μ=0.2：每位恰好多 (1 + 前排系数) × 0.2 —— 前排多、后排少，说明它进的是"内层桶"而不是"外层乘子"
+  const frontDelta = total(0.2) - total(0);
+  const expectDelta = (1 + 0.2) * 0.2 + 1.0 * 0.2;
+  require_(
+    Math.abs(frontDelta - expectDelta) < 1e-9,
+    `μ=0.2 的总量增量应为 ${expectDelta.toFixed(6)}（前 1.44 + 后 1.2），实际 ${frontDelta.toFixed(6)}`,
+  );
+  require_(
+    Math.abs(total(0.45) - total(0) - ((1 + 0.2) * 0.45 + 1.0 * 0.45)) < 1e-9,
+    "μ=0.45 的增量也不对（应线性可加）",
+  );
+
+  // ③ 上界必须跟着同步抬高同样的量，否则 μ>0 时剪枝会拿偏低的界去误杀真队
+  const players = [
+    new RelaxedPlayer({ position: "front_left", servant_id: ids[0], front_factor: 1.2 }),
+    new RelaxedPlayer({ position: "back_middle", servant_id: ids[1], front_factor: 1.0 }),
+  ];
+  const req0 = parseReq();
+  const req20 = parseReq({ mainStoryBondBonus: 0.2 });
+  const ubDelta = relaxedBaseScore(ctx, req20, players) - relaxedBaseScore(ctx, req0, players);
+  require_(
+    Math.abs(ubDelta - expectDelta) < 1e-9,
+    `上界没跟着抬：应 +${expectDelta.toFixed(6)}，实际 +${ubDelta.toFixed(6)}（μ>0 时会误剪）`,
+  );
+});
 
 // ---------------- 确定性 RNG（**不是** Python 的 MT19937：形状序列与 Python 不同，
 // 判据是性质本身 —— 0 反例 + 可比组数下限） ----------------
