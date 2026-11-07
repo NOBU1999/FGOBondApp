@@ -1447,6 +1447,69 @@ label.team-config-check {
   color: #fff;
 }
 
+/* 终章柱子战面板（玛修主线加成 + 冠位名单） */
+.pillar-panel .pillar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pillar-panel .pillar-label {
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 84px;
+}
+.pillar-panel .pillar-row button.active {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.25);
+  color: #fff;
+}
+.pillar-panel .pillar-warn {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #ffcf80;
+  background: rgba(255, 176, 64, 0.12);
+  border: 1px solid rgba(255, 176, 64, 0.35);
+}
+
+/* 冠位名单弹窗：职阶角标 + 「不在 Box」标记 */
+.exclusion-cell .crown-slot-badge {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  max-width: calc(100% - 4px);
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+  color: #dbe4ff;
+  background: rgba(20, 24, 36, 0.78);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.exclusion-cell.crown-outside { opacity: 0.55; }
+.exclusion-cell .crown-outside-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+  color: #ffd0d0;
+  background: rgba(120, 24, 24, 0.82);
+}
+/* 冠位名单里"已选"用主题色，别跟「排除管理」的红色语义混在一起 */
+.crown-roster .exclusion-cell.exclusion-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 6px rgba(122, 162, 247, 0.5);
+}
+.crown-roster .exclusion-active .exclusion-check { background: var(--accent); }
+
 /* 冠位从者位：左上角蓝色八芒星 */
 .crown-star {
   position: absolute;

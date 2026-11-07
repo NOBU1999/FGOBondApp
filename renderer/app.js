@@ -315,6 +315,13 @@ const App = {
       customDraft: null,
       customTraitInputs: [],
       crownClass: "all",
+      // 终章柱子战：玛修主线加成 μ（0 / 0.2 / 0.45）。默认 0.2 = 按"带玛修"算
+      muBonus: 0.2,
+      // 冠位名单（账号级）：默认冠位 + 保送进池 + 一致性提示，见 任务-终章柱子战牵绊加成.md §9.4
+      crownServantIds: [],
+      crownRosterVisible: false,
+      crownRosterKeyword: "",
+      crownRosterError: "",
       baseBond: 0,
       // 排序口径（= 搜索目标）：默认按倍率；选了"按点数"且填了基础牵绊才按点数
       sortMode: "multiplier",
@@ -458,6 +465,26 @@ const App = {
     superOn() {
       return Number(this.superLevel) > 1;
     },
+    /**
+     * 是否处于"有冠位"的模式：戴冠战 或 终章柱子战。
+     * 这两种模式共享冠位第二礼装位、冠位名单、第二礼装位的 Cost 0 口径；
+     * 差别只在职阶筛选与 μ（柱子战不限职阶、默认带玛修主线加成）。
+     */
+    crownModeOn() {
+      return this.mode === "crown" || this.mode === "pillar";
+    },
+    /** 冠位名单里但当前 Box 没勾的从者（一致性提示用；只在柱状/冠位模式下有意义） */
+    crownMissingFromBox() {
+      const out = [];
+      for (const id of this.crownServantIds || []) {
+        const b = this.box && this.box[id];
+        if (!b || !b.checked) {
+          const s = this.servantMap && this.servantMap[id];
+          out.push({ id: Number(id), name: s ? s.name : String(id) });
+        }
+      }
+      return out;
+    },
     /** 使用说明的章节（内容来自 renderer/manual.js，由 使用说明.txt 生成） */
     manualSections() {
       return parseManual(typeof window !== "undefined" ? window.FGO_MANUAL_TEXT : "");
@@ -594,7 +621,7 @@ const App = {
       return this.slots.filter((s) => !s.isSupport && s.servantId === null).length;
     },
     crownCount() {
-      return this.mode === "crown" ? this.slots.filter((s) => s.isCrown).length : 0;
+      return this.crownModeOn ? this.slots.filter((s) => s.isCrown).length : 0;
     },
     activeVerificationTokens() {
       return this.verificationMode === "full" ? this.verificationTokensFull : this.verificationTokens;
@@ -702,7 +729,7 @@ const App = {
     // 系统原生下拉框（<select>）在 Electron 上偶发"弹不出来"→ 换成界面内浮层（见 installSelectShim）
     this.installSelectShim();
     try {
-      const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions, accountInfo] = await Promise.all([
+      const [info, servants, bondCrafts, allCrafts, customCrafts, userBox, presets, costumeNames, exclusions, accountInfo, crown] = await Promise.all([
         window.fgo.getAppInfo(),
         window.fgo.listServants(),
         window.fgo.listBondCrafts(),
@@ -713,6 +740,7 @@ const App = {
         window.fgo.getCostumeNames(),
         window.fgo.getExclusions(),
         window.fgo.listAccounts(),
+        window.fgo.getCrownServants(),
       ]);
       this.info = info;
       this.accounts = (accountInfo && accountInfo.accounts) || [];
@@ -725,6 +753,7 @@ const App = {
       this.costumeNames = costumeNames || {};
       this.excludedServants = (exclusions && exclusions.servants) || [];
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
+      this.crownServantIds = (crown && crown.servants) || [];
       this.servants = servants;
       this.bondCrafts = bondCrafts;
       this.customCrafts = customCrafts || [];
@@ -1049,6 +1078,15 @@ const App = {
     qualityModeText(mode) {
       const map = { fast: "快速", standard: "标准", balanced: "平衡", high: "高质量", extreme: "极限精算" };
       return map[mode] || mode || "";
+    },
+    /** 当前模式的文字名（反馈摘要 / 预设标签 / 界面提示共用一处） */
+    modeText() {
+      if (this.mode === "crown") return `戴冠战(${this.crownClass})`;
+      if (this.mode === "pillar") {
+        const mu = Number(this.muBonus || 0);
+        return `终章柱子战(玛修主线 +${Math.round(mu * 100)}%)`;
+      }
+      return "普通";
     },
     /**
      * 档位 → 时间预算（毫秒）。**唯一来源**：以前这份表在 buildPayload / buildPresetPayload
@@ -1543,7 +1581,7 @@ const App = {
       const full = this.resultSettings.feedbackMode === "full";
       const lines = [];
       lines.push(`FGO牵绊推荐器反馈摘要 v${this.info && this.info.version ? this.info.version : "?"}`);
-      lines.push(`服务器：${this.serverRegion === "cn" ? "简中服" : "日服"}｜模式：${this.mode === "crown" ? `戴冠战(${this.crownClass})` : "普通"}｜策略：${this.strategyText(this.strategy)}`);
+      lines.push(`服务器：${this.serverRegion === "cn" ? "简中服" : "日服"}｜模式：${this.modeText()}｜策略：${this.strategyText(this.strategy)}`);
       lines.push(`Cost上限：${this.costLimit}｜计算档位：${this.qualityModeText(this.qualityMode)}｜包含方案：${selected.map((r) => `#${r.rank}`).join("、")}`);
       if (this.info && (this.info.dataUpdatedAt || this.info.dataRegion)) {
         lines.push(`数据版本：${this.info.dataUpdatedAt || "未知"}｜数据区：${this.info.dataRegion || "JP"}`);
@@ -1577,6 +1615,7 @@ const App = {
         lines.push(`固定礼装：${fixedCraftTexts.join("、") || "无"}`);
         lines.push(`助战：${supportSlot && supportSlot.servantId ? (this.servantMap[supportSlot.servantId]?.name || supportSlot.servantId) : "自动"}${supportSlot && supportSlot.craftId ? `｜礼装：${this.craftById(supportSlot.craftId)?.name || supportSlot.craftId}` : ""}`);
         lines.push(`冠位位：${crownTexts.join("、") || "无"}`);
+        lines.push(`冠位名单：${(this.crownServantIds || []).length ? this.crownServantIds.map((id) => this.servantMap[id]?.name || id).join("、") : "无"}（${this.crownModeOn ? "参与保送" : "本模式不参与"}）`);
         lines.push(`排除从者：${excludedServants.length ? excludedServants.map((id) => this.servantMap[id]?.name || id).join("、") : "无"}`);
         lines.push(`排除礼装：${excludedCrafts.length ? excludedCrafts.map((id) => this.craftById(id)?.name || id).join("、") : "无"}`);
         lines.push(`助战排除礼装：${supportExcluded.length ? supportExcluded.map((id) => this.craftById(id)?.name || id).join("、") : "无"}`);
@@ -2604,13 +2643,15 @@ const App = {
       }
     },
     async loadActiveAccountData() {
-      const [userBox, exclusions] = await Promise.all([
+      const [userBox, exclusions, crown] = await Promise.all([
         window.fgo.getUserBox(this.activeAccountId),
         window.fgo.getExclusions(this.activeAccountId),
+        window.fgo.getCrownServants(this.activeAccountId),
       ]);
       this.applyBoxRows(userBox);
       this.excludedServants = (exclusions && exclusions.servants) || [];
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
+      this.crownServantIds = (crown && crown.servants) || [];
     },
     async createAccount() {
       if (this.accountBusy) return;
@@ -2983,7 +3024,7 @@ const App = {
       this.applyBoxRows(userBox);
     },
     async reloadAllData() {
-      const [info, servants, bondCrafts, allCrafts, customCrafts, costumeNames, exclusions, eventBonuses] = await Promise.all([
+      const [info, servants, bondCrafts, allCrafts, customCrafts, costumeNames, exclusions, eventBonuses, crown] = await Promise.all([
         window.fgo.getAppInfo(),
         window.fgo.listServants(),
         window.fgo.listBondCrafts(),
@@ -2992,6 +3033,7 @@ const App = {
         window.fgo.getCostumeNames(),
         window.fgo.getExclusions(this.activeAccountId),
         window.fgo.getEventBondBonuses(),
+        window.fgo.getCrownServants(this.activeAccountId),
       ]);
       this.info = info || this.info;
       this.serverRegion = (info && info.serverRegion) || this.serverRegion || "jp";
@@ -3007,6 +3049,7 @@ const App = {
       this.costumeNames = costumeNames || {};
       this.excludedServants = (exclusions && exclusions.servants) || [];
       this.excludedCrafts = (exclusions && exclusions.crafts) || [];
+      this.crownServantIds = (crown && crown.servants) || [];
       this.eventBondBonuses = eventBonuses || [];
       await this.reloadBoxFromServer();
       this.refreshAccounts();
@@ -3136,6 +3179,10 @@ const App = {
       const slot = this.slots[slotIndex];
       slot.servantId = servantId;
       slot.stage = null;
+      // 冠位名单里的人放到某个位置 ⇒ 该位置**默认勾冠位**（右键仍可取消）
+      if (this.crownModeOn && !slot.isSupport && this.isCrownServant(servantId)) {
+        slot.isCrown = true;
+      }
       // 用户主动填写 => 固定；如果当前不是助战，就作为固定从者
       this.closeOverlay();
     },
@@ -3197,14 +3244,113 @@ const App = {
     switchMode(mode) {
       if (this.mode === mode) return;
       this.mode = mode;
-      if (mode !== "crown") {
-        // 普通模式不展示/不计算第二礼装位，但不清除冠位标记，便于切回后恢复
-        this.results = [];
-      } else {
-        this.crownClass = this.crownClass || "all";
-        this.results = [];
-      }
+      this.results = [];
       this.currentPage = 1;
+      if (mode === "crown") this.crownClass = this.crownClass || "all";
+      // 冠位类模式：名单里的从者按位置补默认冠位（右键已取消的会被重新勾上，属预期——切模式即重置一次）
+      if (this.crownModeOn) this.applyRosterCrowns();
+    },
+    /** 把冠位名单里的人所在的位置补成"冠位位"（不动助战位、不动空格） */
+    applyRosterCrowns() {
+      const roster = new Set((this.crownServantIds || []).map(Number));
+      if (!roster.size) return;
+      let changed = 0;
+      this.slots.forEach((slot) => {
+        if (!slot.servantId || slot.isSupport || slot.isCrown) return;
+        if (roster.has(Number(slot.servantId))) {
+          slot.isCrown = true;
+          changed += 1;
+        }
+      });
+      if (changed) this.crownRosterError = "";
+    },
+    // ---------- 冠位名单（终章柱子战） ----------
+    openCrownRoster() {
+      this.crownRosterKeyword = "";
+      this.crownRosterError = "";
+      this.crownRosterVisible = true;
+    },
+    closeCrownRoster() {
+      this.crownRosterVisible = false;
+      this.crownRosterError = "";
+    },
+    /** 该从者是否在冠位名单里（判定用） */
+    isCrownServant(id) {
+      return (this.crownServantIds || []).some((x) => Number(x) === Number(id));
+    },
+    /** 该从者占的冠位名额（七个普通职阶各 1、EX1 一个、EX2 一个）；不在任何组里返回 null */
+    crownSlotOf(servantClass) {
+      const cls = String(servantClass || "");
+      for (const key of ["saber", "archer", "lancer", "rider", "caster", "assassin", "berserker", "ex1", "ex2"]) {
+        const groups = CROWN_CLASS_GROUPS[key] || [];
+        if (groups.some((g) => g.toLowerCase() === cls.toLowerCase())) return key;
+      }
+      return null;
+    },
+    crownSlotLabel(key) {
+      const found = CROWN_CLASS_FILTERS.find((o) => o.value === key);
+      return found ? found.label : key;
+    },
+    /** 已占该冠位名额的从者（排除自己） */
+    crownOccupantOfSlot(key, exceptId) {
+      for (const sid of this.crownServantIds || []) {
+        if (Number(sid) === Number(exceptId)) continue;
+        const s = this.servantMap && this.servantMap[sid];
+        if (s && this.crownSlotOf(s.class) === key) return s;
+      }
+      return null;
+    },
+    /** 冠位名单弹窗里的列表：支持关键字；红标 = 不在当前 Box */
+    crownRosterRows() {
+      const kw = String(this.crownRosterKeyword || "").trim().toLowerCase();
+      const order = { saber: 0, archer: 1, lancer: 2, rider: 3, caster: 4, assassin: 5, berserker: 6, ex1: 7, ex2: 8 };
+      return (this.servants || [])
+        .map((s) => {
+          const slot = this.crownSlotOf(s.class);
+          const checked = (this.crownServantIds || []).some((x) => Number(x) === Number(s.id));
+          const inBox = !!(this.box && this.box[s.id] && this.box[s.id].checked);
+          return { ...s, crownSlot: slot, crownSlotText: slot ? this.crownSlotLabel(slot) : "", checked, inBox };
+        })
+        .filter((s) => (kw ? String(s.name || "").toLowerCase().includes(kw) || String(s.id).includes(kw) : true))
+        .sort(
+          (a, b) =>
+            (order[a.crownSlot] ?? 99) - (order[b.crownSlot] ?? 99) ||
+            Number(b.checked) - Number(a.checked) ||
+            (a.collectionNo || 0) - (b.collectionNo || 0),
+        );
+    },
+    async persistCrownRoster() {
+      if (this.accountBusy) return;
+      await window.fgo.saveCrownServants(
+        plainClone((this.crownServantIds || []).map(Number)),
+        this.activeAccountId,
+      );
+    },
+    async toggleCrownServant(servantId) {
+      const id = Number(servantId);
+      const s = this.servantMap && this.servantMap[id];
+      if (!s) return;
+      this.crownRosterError = "";
+      const has = (this.crownServantIds || []).some((x) => Number(x) === id);
+      if (has) {
+        this.crownServantIds = this.crownServantIds.filter((x) => Number(x) !== id);
+        await this.persistCrownRoster();
+        return;
+      }
+      // 校验在界面（引擎不看这份名单）：同一冠位名额只能有一位（EX1 就是玛修那个名额）
+      const slot = this.crownSlotOf(s.class);
+      if (!slot) {
+        this.crownRosterError = `${s.name} 的职阶不在冠位名额里`;
+        return;
+      }
+      const occupant = this.crownOccupantOfSlot(slot, id);
+      if (occupant) {
+        this.crownRosterError = `该职阶已有冠位：${occupant.name}（先把 TA 取消）`;
+        return;
+      }
+      this.crownServantIds = [...(this.crownServantIds || []), id];
+      await this.persistCrownRoster();
+      this.applyRosterCrowns();
     },
     toggleSupport(i) {
       // 助战只允许一个
@@ -3556,6 +3702,7 @@ const App = {
       if (!preset) return "";
       const parts = [];
       if (preset.mode === "crown") parts.push("戴冠战");
+      if (preset.mode === "pillar") parts.push("柱子战");
       const n = (preset.fixedServants || []).length;
       if (n > 0) parts.push("固定 " + n);
       return parts.join(" · ");
@@ -3578,13 +3725,13 @@ const App = {
       let support = { servantId: null, craftId: null, secondCraftId: null };
       this.slots.forEach((slot, i) => {
         const pos = this.slotPosition(i);
-        if (this.mode === "crown" && slot.isCrown) crownPositions.push(pos);
+        if (this.crownModeOn && slot.isCrown) crownPositions.push(pos);
         if (slot.isSupport) {
           supportPosition = pos;
           support = {
             servantId: slot.servantId !== null ? slot.servantId : null,
             craftId: slot.craftId !== null && slot.craftId !== undefined ? slot.craftId : null,
-            secondCraftId: this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
+            secondCraftId: this.crownModeOn && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined ? slot.secondCraftId : null,
           };
           return;
         }
@@ -3597,7 +3744,7 @@ const App = {
           const craft = this.craftById(slot.craftId);
           fixedCrafts.push({ position: pos, craftId: slot.craftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 0 });
         }
-        if (this.mode === "crown" && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
+        if (this.crownModeOn && slot.isCrown && slot.secondCraftId !== null && slot.secondCraftId !== undefined) {
           const craft = this.craftById(slot.secondCraftId);
           fixedCrafts.push({ position: pos, craftId: slot.secondCraftId, type: craft && craft.craftType === "bond" ? "bond" : "other", slot: 1 });
         }
@@ -3607,6 +3754,7 @@ const App = {
         mode: this.mode,
         crownClass: this.crownClass,
         crownPositions,
+        muBonus: Number(this.muBonus || 0),
         baseBond: Number(this.baseBond || 0),
         sortMode: this.sortMode === "points" ? "points" : "multiplier",
         fixedServants,
@@ -3693,6 +3841,7 @@ const App = {
         : "standard";
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
+      this.muBonus = preset.muBonus !== undefined && preset.muBonus !== null ? Number(preset.muBonus) : 0.2;
       this.baseBond = Number(preset.baseBond || 0);
       this.sortMode = preset.sortMode === "points" ? "points" : "multiplier";
       this.presetModalVisible = false;
@@ -4068,10 +4217,15 @@ const App = {
       const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
       return {
         box,
-        mode: this.mode,
+        // 引擎只认两种 mode：柱子战与戴冠战在引擎里是同一条路径（都启用冠位第二礼装位），
+        // 差别在 classGroup（柱子战不限职阶）与 mainStoryBondBonus（μ）
+        mode: this.crownModeOn ? "crown" : "normal",
         serverRegion: this.serverRegion,
         classGroup: this.mode === "crown" && this.crownClass && this.crownClass !== "all" ? this.crownClass : null,
-        crownPositions: this.mode === "crown" ? crownPositions : [],
+        crownPositions: this.crownModeOn ? crownPositions : [],
+        // 冠位名单只做"保送进池"，不改变评分；普通模式不传（常规结果逐字节不变）
+        crownServantIds: this.crownModeOn ? (this.crownServantIds || []).map(Number) : [],
+        mainStoryBondBonus: this.mode === "pillar" ? Number(this.muBonus || 0) : 0,
         baseBond: Number(this.baseBond || 0),
         sortMode: this.sortMode === "points" && Number(this.baseBond || 0) > 0 ? "points" : "multiplier",
         fixedServants,
@@ -4116,12 +4270,14 @@ const App = {
       });
       const mode = preset.mode || this.mode;
       const crownClass = preset.crownClass || this.crownClass;
-      const crownPositions = mode === "crown" ? (preset.crownPositions || []) : [];
+      const presetCrownMode = mode === "crown" || mode === "pillar";
+      const crownPositions = presetCrownMode ? (preset.crownPositions || []) : [];
+      const presetMu = preset.muBonus !== undefined && preset.muBonus !== null ? Number(preset.muBonus) : Number(this.muBonus || 0);
       const support = {
         position: preset.supportPosition || "front_right",
         servantId: preset.supportId || null,
         craftId: preset.supportCraftId !== undefined && preset.supportCraftId !== null ? preset.supportCraftId : null,
-        secondCraftId: mode === "crown" && preset.supportSecondCraftId !== undefined && preset.supportSecondCraftId !== null ? preset.supportSecondCraftId : null,
+        secondCraftId: presetCrownMode && preset.supportSecondCraftId !== undefined && preset.supportSecondCraftId !== null ? preset.supportSecondCraftId : null,
       };
       const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
       const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
@@ -4132,10 +4288,12 @@ const App = {
       const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
       return {
         box,
-        mode,
+        mode: presetCrownMode ? "crown" : "normal",
         serverRegion: this.serverRegion,
         classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
         crownPositions,
+        crownServantIds: presetCrownMode ? (this.crownServantIds || []).map(Number) : [],
+        mainStoryBondBonus: mode === "pillar" ? presetMu : 0,
         baseBond: Number(preset.baseBond !== undefined ? preset.baseBond : this.baseBond || 0),
         sortMode: preset.sortMode === "points" ? "points" : "multiplier",
         fixedServants: preset.fixedServants || [],
@@ -4924,6 +5082,7 @@ const App = {
     <div class="mode-switch">
       <button :class="{ active: mode === 'normal' }" @click="switchMode('normal')">普通战斗</button>
       <button :class="{ active: mode === 'crown' }" @click="switchMode('crown')">戴冠战模式</button>
+      <button :class="{ active: mode === 'pillar' }" @click="switchMode('pillar')">终章柱子战</button>
     </div>
 
     <!-- 服务器选择 -->
@@ -4945,6 +5104,40 @@ const App = {
         >{{ opt.label }}</button>
       </div>
       <div class="text-muted" style="margin-top:6px">选定职阶后，只有该职阶从者参与计算；冠位从者位通过右键菜单设置。</div>
+      <div class="pillar-row">
+        <span class="pillar-label">冠位名单</span>
+        <button class="secondary" @click="openCrownRoster">管理冠位名单（{{ (crownServantIds || []).length }}）</button>
+        <span class="text-muted">名单里的人放进位置时自动勾冠位，并保送进候选池</span>
+      </div>
+      <div v-if="crownMissingFromBox.length" class="pillar-warn">
+        ⚠️ 冠位名单里有 {{ crownMissingFromBox.length }} 位不在当前 Box：{{ crownMissingFromBox.map((x) => x.name).join("、") }}
+      </div>
+    </div>
+
+    <!-- 终章柱子战：只有玛修主线加成 + 冠位名单两个旋钮（不限职阶、不设预算档） -->
+    <div v-if="mode === 'pillar'" class="crown-filter panel pillar-panel">
+      <div class="team-config-title">终章柱子战</div>
+      <div class="pillar-row">
+        <span class="pillar-label">玛修主线加成</span>
+        <button
+          v-for="opt in [{ v: 0, label: '不带玛修（+0%）' }, { v: 0.2, label: '带玛修（+20%）' }, { v: 0.45, label: '玛修 Lv15（+45%）' }]"
+          :key="opt.v"
+          :class="{ active: Number(muBonus) === opt.v }"
+          @click="muBonus = opt.v; results = []; currentPage = 1"
+        >{{ opt.label }}</button>
+      </div>
+      <div class="pillar-row">
+        <span class="pillar-label">冠位名单</span>
+        <button class="secondary" @click="openCrownRoster">管理冠位名单（{{ (crownServantIds || []).length }}）</button>
+        <span class="text-muted">名单里的人放进位置时自动勾冠位，并保送进候选池</span>
+      </div>
+      <div class="text-muted" style="margin-top:6px">
+        不限职阶；冠位从者位多一个礼装位（只算主礼装位的 Cost）。
+        <template v-if="!(Number(baseBond) > 0)">基础牵绊还没填（在下面「队伍配置」里填），现在只按倍率排序；该难度越难基础值越高。</template>
+      </div>
+      <div v-if="crownMissingFromBox.length" class="pillar-warn">
+        ⚠️ 冠位名单里有 {{ crownMissingFromBox.length }} 位不在当前 Box：{{ crownMissingFromBox.map((x) => x.name).join("、") }}
+      </div>
     </div>
 
     <div v-if="error" class="panel error">{{ error }}</div>
@@ -4952,7 +5145,7 @@ const App = {
     <template v-else>
       <!-- 6 槽位主区域 -->
       <div class="board-area">
-        <div v-for="(slot, i) in slots" :key="i" class="slot-col" :class="{ 'slot-support': slot.isSupport, 'slot-crown': mode === 'crown' && slot.isCrown }">
+        <div v-for="(slot, i) in slots" :key="i" class="slot-col" :class="{ 'slot-support': slot.isSupport, 'slot-crown': crownModeOn && slot.isCrown }">
           <div
             class="cell cell-servant"
             :class="{ empty: !slot.servantId, support: slot.isSupport, 'drag-over': dragOverSlot === i && dragState.type === 'servant' }"
@@ -4982,10 +5175,10 @@ const App = {
             <template v-else>
               <span class="placeholder">{{ slot.isSupport ? '助战从者' : '从者' }}</span>
             </template>
-            <div v-if="mode === 'crown' && slot.isCrown" class="crown-star" title="冠位从者位（允许两个加成礼装）">✴</div>
+            <div v-if="crownModeOn && slot.isCrown" class="crown-star" title="冠位从者位（允许两个加成礼装）">✴</div>
           </div>
 
-          <div class="craft-stack" :class="{ 'crown-mode': mode === 'crown', 'has-second': mode === 'crown' && slot.isCrown }">
+          <div class="craft-stack" :class="{ 'crown-mode': crownModeOn, 'has-second': crownModeOn && slot.isCrown }">
             <div
               v-for="cs in slotCraftItems(slot)"
               :key="cs.index"
@@ -5025,7 +5218,7 @@ const App = {
       <!-- 底部信息/操作 -->
       <div class="bottom-bar panel">
         <div class="text-muted">
-          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}<span v-if="mode === 'crown'"> | 冠位 {{ crownCount }}</span>
+          Cost {{ costUsed }}/{{ costLimit }} | 固定 {{ fixedCount }} | 自由 {{ freeCount }} | 助战 {{ supportCount }}<span v-if="crownModeOn"> | 冠位 {{ crownCount }}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           <button class="secondary" @click="resetTeam">清空队伍</button>
@@ -5761,6 +5954,42 @@ const App = {
       </div>
     </div>
 
+    <!-- 冠位名单（终章柱子战）：名单决定默认冠位 + 保送进池 + 一致性提示 -->
+    <div v-if="crownRosterVisible" class="modal-mask" @click.self="closeCrownRoster">
+      <div class="modal-panel box-modal exclusion-modal">
+        <div class="overlay-head">
+          <h2>冠位名单（每个职阶 1 位、最多 9 位）</h2>
+          <button class="secondary" @click="closeCrownRoster">✕</button>
+        </div>
+        <div class="filters">
+          <input v-model="crownRosterKeyword" placeholder="搜索从者" />
+          <span class="text-muted">已选 {{ (crownServantIds || []).length }}/9</span>
+        </div>
+        <div class="text-muted" style="margin:4px 0 8px">
+          名单里的人放进队伍位置时自动勾成冠位（右键仍可取消），并保送进候选池。
+          标「不在 Box」的 = 名单里有、当前 Box 没勾（不影响计算，只是提示）。
+        </div>
+        <div v-if="crownRosterError" class="panel error" style="margin:6px 0">{{ crownRosterError }}</div>
+        <div class="exclusion-grid crown-roster">
+          <div
+            v-for="s in crownRosterRows()"
+            :key="s.id"
+            class="box-cell exclusion-cell"
+            :class="{ 'exclusion-active': s.checked, 'crown-outside': !s.inBox }"
+            @click="toggleCrownServant(s.id)"
+            :title="s.name + '｜' + (s.crownSlotText || '无冠位名额') + (s.inBox ? '' : '｜不在 Box')"
+          >
+            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" draggable="false" @error="markAvatarBroken(s.id)" />
+            <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
+            <div class="crown-slot-badge">{{ s.crownSlotText }}</div>
+            <div v-if="!s.inBox" class="crown-outside-badge">不在 Box</div>
+            <div class="exclusion-check">{{ s.checked ? '✓' : '' }}</div>
+          </div>
+          <div v-if="!crownRosterRows().length" class="empty">没有可选的从者</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 队伍配置弹窗 -->
     <div v-if="teamModalVisible" class="modal-mask" @click.self="teamModalVisible = false">
       <div class="modal-panel small">
@@ -6153,7 +6382,7 @@ const App = {
           </div>
           <label class="settings-row">
             <input type="checkbox" v-model="newAccountCopyFromCurrent" />
-            <span>复制当前账号「{{ activeAccountName() }}」的 Box 与排除列表</span>
+            <span>复制当前账号「{{ activeAccountName() }}」的 Box、排除列表与冠位名单</span>
           </label>
           <button :disabled="accountBusy" @click="createAccount">＋ 新建账号</button>
         </div>
@@ -6377,7 +6606,7 @@ const App = {
       <template v-else>
         <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxDetail">⚙️ 从者设置</div>
         <div v-if="contextMenu.target === 'servant' && contextMenu.slotIndex !== null && slots[contextMenu.slotIndex].servantId !== null" class="ctx-item" @click="ctxServantAttr">🔍 从者属性</div>
-        <div v-if="mode === 'crown' && contextMenu.target === 'servant' && contextMenu.slotIndex !== null" class="ctx-item" @click="ctxCrown">
+        <div v-if="crownModeOn && contextMenu.target === 'servant' && contextMenu.slotIndex !== null" class="ctx-item" @click="ctxCrown">
           {{ slots[contextMenu.slotIndex].isCrown ? '✴️ 取消冠位从者位' : '✴️ 设为冠位从者位' }}
         </div>
         <div class="ctx-item" @click="ctxSupport">
