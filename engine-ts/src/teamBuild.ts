@@ -62,6 +62,8 @@ export class Blueprint {
   fixed_other_craft_ids: number[];
   fixed_servant_ids: Set<number>;
   crown_positions: Set<string>;
+  /** 「名单成员自动算冠位」用的名单（空集 ⇒ 关闭，行为与旧版逐字节相同） */
+  crown_servant_ids: Set<number>;
 
   constructor(init: Partial<Blueprint> = {}) {
     this.support_position = init.support_position ?? "back_right";
@@ -77,7 +79,85 @@ export class Blueprint {
     this.fixed_other_craft_ids = init.fixed_other_craft_ids ?? [];
     this.fixed_servant_ids = init.fixed_servant_ids ?? new Set();
     this.crown_positions = init.crown_positions ?? new Set();
+    this.crown_servant_ids = init.crown_servant_ids ?? new Set();
   }
+}
+
+/**
+ * 从一份蓝图派生出"这支队伍多出来的冠位位"版本（2026-11-01，名单成员自动算冠位）。
+ *
+ * 为什么要派生而不是就地改：蓝图是整趟搜索共用的常量（槽数是常量这个假设支撑着组合表生成、
+ * 上界、DP 缓存），每支队伍的额外冠位位不同 ⇒ 只能按"多出来的那几位在哪儿"派生一份小的。
+ * 位置组合最多 2^(自由位数) 种（典型 4~8 种），调用方按位置集合做缓存即可。
+ *
+ * 规则：冠位位 = 静态冠位位 ∪ extra；每个冠位位比普通位多一个**第二礼装槽（Cost 记 0）**。
+ */
+export function blueprintWithCrowns(bp: Blueprint, extraPositions: Set<string>): Blueprint {
+  if (extraPositions.size === 0) return bp;
+  const isCrown = (pos: string): boolean => bp.crown_positions.has(pos) || extraPositions.has(pos);
+  const fixedByKey = new Map<string, CraftSlot>();
+  for (const cs of bp.player_craft_slots) {
+    if (cs.fixed_craft_id !== null) fixedByKey.set(`${cs.position}#${cs.index}`, cs);
+  }
+  const playerSlots = bp.player_slots.map(
+    (s) => new PlayerSlot({ ...s, is_crown: isCrown(s.position) }),
+  );
+  const fixedPlayerMembers = bp.fixed_player_members.map((p) => {
+    if (!isCrown(p.position) || p.is_crown) return p;
+    const c = new PlacedMember({ ...(p as any) });
+    c.is_crown = true;
+    return c;
+  });
+  // 槽位顺序与原蓝图保持同一口径：先冠位位、再按位置顺序；每个位置先主槽再第二槽
+  const ordered = [...playerSlots].sort((a, b) => {
+    const ca = a.is_crown ? 0 : 1;
+    const cb = b.is_crown ? 0 : 1;
+    if (ca !== cb) return ca - cb;
+    return POSITIONS.indexOf(a.position as any) - POSITIONS.indexOf(b.position as any);
+  });
+  const playerCraftSlots: CraftSlot[] = [];
+  for (const slot of ordered) {
+    playerCraftSlots.push(
+      new CraftSlot({
+        position: slot.position,
+        index: 0,
+        fixed_craft_id: slot.fixed_craft_id,
+        fixed_craft_type: slot.fixed_craft_type,
+      }),
+    );
+    if (slot.is_crown) {
+      const fixed = fixedByKey.get(`${slot.position}#1`);
+      playerCraftSlots.push(
+        new CraftSlot({
+          position: slot.position,
+          index: 1,
+          fixed_craft_id: fixed ? fixed.fixed_craft_id : null,
+          fixed_craft_type: fixed ? fixed.fixed_craft_type : null,
+        }),
+      );
+    }
+  }
+  const freeBondPositions = playerCraftSlots
+    .filter((cs) => cs.fixed_craft_id === null)
+    .map((cs) => cs.position);
+  const crownPositions = new Set<string>(bp.crown_positions);
+  for (const pos of extraPositions) crownPositions.add(pos);
+  return new Blueprint({
+    support_position: bp.support_position,
+    support_servant_id: bp.support_servant_id,
+    support_craft_id: bp.support_craft_id,
+    support_second_craft_id: bp.support_second_craft_id,
+    player_slots: playerSlots,
+    fixed_player_members: fixedPlayerMembers,
+    free_servant_positions: bp.free_servant_positions,
+    player_craft_slots: playerCraftSlots,
+    free_bond_positions: freeBondPositions,
+    fixed_bond_craft_ids: bp.fixed_bond_craft_ids,
+    fixed_other_craft_ids: bp.fixed_other_craft_ids,
+    fixed_servant_ids: bp.fixed_servant_ids,
+    crown_positions: crownPositions,
+    crown_servant_ids: bp.crown_servant_ids,
+  });
 }
 
 export function boxMap(req: CalculationRequest): Map<number, BoxServant> {

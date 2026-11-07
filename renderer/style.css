@@ -1494,8 +1494,22 @@ label.team-config-check {
   border: 1px solid rgba(255, 176, 64, 0.35);
 }
 
-/* 结果卡里的提示：这支含冠位从者、但那个位置没按冠位算（点一下按冠位重算） */
-.crown-gap-hint {
+/* 冠位名单弹窗里那条「名单成员自动算冠位」开关 */
+.crown-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(122, 162, 247, 0.08);
+  border: 1px solid rgba(122, 162, 247, 0.25);
+  cursor: pointer;
+}
+
+/* 结果卡里的提示：这支含冠位从者、但那个位置没按冠位算（点一下按冠位重算） */.crown-gap-hint {
   display: flex;
   align-items: center;
   gap: 8px;

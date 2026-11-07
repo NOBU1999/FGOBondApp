@@ -379,21 +379,28 @@ export function reduceCandidateIds(
 // ---------------------------------------------------------------------------
 // 礼装组合
 // ---------------------------------------------------------------------------
-function combinationsWithReplacement(ids: number[], size: number): number[][] {
-  const out: number[][] = [];
+/**
+ * 可重复组合的**惰性**枚举（原来是"先把全部组合建成数组再返回"）。
+ * 2026-11-01 改：槽数一多，组合总数是 C(池+槽-1, 槽) —— 8 槽就 73 万条、6 槽配 60 张池子能到 9000 万条，
+ * 旧写法会直接把内存打爆（探针实测 6GB 崩）。改成生成器后，调用方在 `maxTotal` 处停下即可。
+ * ⚠️ 产出顺序与旧实现**逐条一致**（同序 odometer），所以结果不受影响。
+ */
+function* combinationsWithReplacement(ids: number[], size: number): Generator<number[]> {
   const n = ids.length;
-  if (size === 0) return [[]];
-  if (n === 0) return out;
+  if (size === 0) {
+    yield [];
+    return;
+  }
+  if (n === 0) return;
   const idx = new Array(size).fill(0);
   while (true) {
-    out.push(idx.map((i: number) => ids[i]));
+    yield idx.map((i: number) => ids[i]);
     let i = size - 1;
     while (i >= 0 && idx[i] === n - 1) i--;
     if (i < 0) break;
     const v = idx[i] + 1;
     for (let j = i; j < size; j++) idx[j] = v;
   }
-  return out;
 }
 
 export function generateCraftCombinationsWithCost(

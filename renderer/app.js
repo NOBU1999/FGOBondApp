@@ -317,6 +317,14 @@ const App = {
       crownClass: "all",
       // 冠位名单（账号级）：默认冠位 + 保送进池 + 一致性提示，见 任务-终章柱子战牵绊加成.md §9.4
       crownServantIds: [],
+      // 名单成员被程序自动挑进队伍时也算冠位（2026-11-01，见任务文档 §10.11）。默认开，可关。
+      crownAutoServants: (() => {
+        try {
+          return localStorage.getItem("fgoBondApp.crownAutoServants") !== "0";
+        } catch (_) {
+          return true;
+        }
+      })(),
       crownRosterVisible: false,
       crownRosterKeyword: "",
       crownRosterError: "",
@@ -3347,6 +3355,19 @@ const App = {
       return (this.crownServantIds || []).some((x) => Number(x) === Number(id));
     },
     /**
+     * 「名单成员自动算冠位」开关（2026-11-01）：开着时，程序自己挑进队伍的名单成员也吃第二个礼装位。
+     * 见 任务-终章柱子战牵绊加成.md §10.11（验证数据在 §10.10）。
+     */
+    toggleCrownAuto() {
+      this.crownAutoServants = !this.crownAutoServants;
+      try {
+        localStorage.setItem("fgoBondApp.crownAutoServants", this.crownAutoServants ? "1" : "0");
+      } catch (_) {
+        // 本地存储不可用时忽略
+      }
+      this.results = [];
+    },
+    /**
      * 发请求时该从者的「光环（%）」怎么算（**方法，不是 computed**：要带参数）。
      * 柱子战模式里玛修那 20% 由引擎按"队里有玛修"自动给 ⇒ 这里必须归零，否则会叠成 40%。
      */
@@ -4323,6 +4344,8 @@ const App = {
         crownPositions: this.crownModeOn ? crownPositions : [],
         // 冠位名单只做"保送进池"，不改变评分；普通模式不传（常规结果逐字节不变）
         crownServantIds: this.crownModeOn ? (this.crownServantIds || []).map(Number) : [],
+        // 名单成员被程序自己挑进队伍时也算冠位（多一个 Cost 0 的礼装位）；关掉 = 旧行为
+        crownAutoServants: !!(this.crownModeOn && this.crownAutoServants),
         // 柱子战：+20% 由引擎按「队里有没有玛修」逐队判定（助战借来的不算），界面不再让用户选
         mainStoryBondBonus: this.mode === "pillar" ? 0.2 : 0,
         baseBond: Number(this.baseBond || 0),
@@ -4391,6 +4414,7 @@ const App = {
         classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
         crownPositions,
         crownServantIds: presetCrownMode ? (this.crownServantIds || []).map(Number) : [],
+        crownAutoServants: !!(presetCrownMode && this.crownAutoServants),
         mainStoryBondBonus: mode === "pillar" ? 0.2 : 0,
         baseBond: Number(preset.baseBond !== undefined ? preset.baseBond : this.baseBond || 0),
         sortMode: preset.sortMode === "points" ? "points" : "multiplier",
@@ -6065,6 +6089,10 @@ const App = {
         <div class="text-muted" style="margin:4px 0 8px">
           只列你 Box 里已勾选的从者，按职阶分组。名单里的人放进队伍位置时自动勾成冠位（右键仍可取消），并保送进候选池。
         </div>
+        <label class="crown-auto-row" :title="'开着：程序自己挑进队伍的名单成员也算冠位（多一个不占 Cost 的礼装位）。' + '关掉：只有你手动勾成冠位的位置才算。'">
+          <input type="checkbox" :checked="crownAutoServants" @change="toggleCrownAuto" />
+          名单里的从者被程序自动挑中时，也算冠位（多一个礼装位，不占 Cost）
+        </label>
         <div v-if="crownRosterError" class="panel error" style="margin:6px 0">{{ crownRosterError }}</div>
         <div class="crown-roster">
           <div v-for="g in crownRosterGroups()" :key="g.key" class="crown-group">

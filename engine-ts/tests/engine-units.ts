@@ -929,6 +929,77 @@ check(
   console.log(`       · 池 ${crown.ids.length}（cap ${crown.cap}）／保送 ${JSON.stringify(roster)} 全在池内`);
 });
 
+check(
+  "crown_auto_servants_per_team",
+  "名单成员自动算冠位：**关**时只有静态冠位位；**开**时自由位挑中的名单成员也吃第二个礼装位（第二槽 Cost 记 0），得分不低于关",
+  { needsCtx: true },
+)(async () => {
+  const ctx = await loadCtx();
+  const allIds = [...ctx.servants.values()].map((s) => s.id).sort((a, b) => a - b);
+  const rng = makeRng(20261101);
+  const boxIds = rng.sample(allIds, 14);
+  const roster = boxIds.slice(0, 3);
+  const base = {
+    box: boxIds.map((sid) => ({ id: sid, stage: "fourth", maxBond: false })),
+    mode: "crown",
+    crownPositions: ["front_left"],
+    fixedServants: [{ position: "front_left", servantId: roster[0] }],
+    crownServantIds: roster,
+    costLimit: 116,
+    topN: 12,
+    timeoutMs: 3000,
+    craftPoolSize: 60,
+    sortMode: "multiplier",
+    strategy: "total_max",
+    baseBond: 0,
+  } as any;
+  const runOnce = async (auto: boolean) => {
+    const p: any = { ...base };
+    if (auto) p.crownAutoServants = true;
+    const res = await searchTopTeams(ctx, parseRequest(p), null, null);
+    return (res.top20 ?? []) as any[];
+  };
+  const off = await runOnce(false);
+  const on = await runOnce(true);
+  if (!off.length || !on.length) throw new Skip("搜索没出结果（预算太小）");
+  const rosterSet = new Set(roster.map(Number));
+  const crownsOf = (row: any): string[] =>
+    (row.team ?? []).filter((m: any) => !m.isSupport && m.isCrown).map((m: any) => m.position);
+
+  for (const row of off) {
+    const bad = crownsOf(row).filter((pos: string) => pos !== "front_left");
+    require_(
+      bad.length === 0,
+      `关掉时不该有额外的冠位位，实际多出 ${JSON.stringify(bad)}`,
+    );
+  }
+  let autoSeen = 0;
+  for (const row of on) {
+    for (const m of row.team ?? []) {
+      if (m.isSupport) continue;
+      if (!rosterSet.has(Number(m.servantId))) continue;
+      require_(
+        m.isCrown === true,
+        `名单成员 ${m.servantId} 在 ${m.position} 却没被算成冠位`,
+      );
+      if (m.position !== "front_left") {
+        autoSeen += 1;
+        require_(
+          m.secondCraftId !== null && m.secondCraftId !== undefined,
+          `自动冠位位 ${m.position} 没有第二个礼装（${JSON.stringify(m.secondCraftId)}）`,
+        );
+      }
+    }
+  }
+  if (autoSeen === 0) throw new Skip("这组形状里自由位没挑到名单成员（等于没测到自动冠位）");
+  const topOff = Number(off[0].totalMultiplier || 0);
+  const topOn = Number(on[0].totalMultiplier || 0);
+  require_(topOn >= topOff - 1e-9, `开关打开后 top1 反而变低：${topOff} → ${topOn}`);
+  console.log(
+    `       · 关 top1 ${topOff.toFixed(3)} ｜ 开 top1 ${topOn.toFixed(3)} ｜ 自动冠位命中 ${autoSeen} 处`,
+  );
+});
+
 function playersKeyOf(ids: number[]): string {
   return [...new Set(ids)].sort((a, b) => a - b).join(",");
 }

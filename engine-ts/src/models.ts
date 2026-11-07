@@ -162,6 +162,12 @@ export class CalculationRequest {
    * 普通模式界面不传，所以常规结果不受影响。
    */
   crown_servant_ids = new Set<number>();
+  /**
+   * 「名单成员自动算冠位」（2026-11-01）：为 true 时，**程序自己挑进队伍**的名单成员也吃第二个礼装位
+   * （引擎按每支队伍的编成逐队判定）。默认 false ⇒ 与旧行为逐字节相同。
+   * ⚠️ 它只扩大"槽数"，不改任何评分公式：槽数 = 静态冠位位 + 自由位里挑中的名单成员数。
+   */
+  crown_auto_servants = false;
   base_bond = 0;
   sort_mode = SORT_MULTIPLIER;
   candidate_pool_size = 30;
@@ -301,6 +307,7 @@ export function parseRequest(data: AnyRec): CalculationRequest {
   req.crown_servant_ids = new Set<number>(
     (data["crownServantIds"] ?? []).map((x: any) => asInt(x)),
   );
+  req.crown_auto_servants = asBool(data["crownAutoServants"], false);
   req.base_bond = baseBond;
   req.sort_mode = sortMode;
   req.top_n = asInt(data["topN"] ?? 20, 20) || 20;

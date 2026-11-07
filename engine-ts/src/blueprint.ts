@@ -73,6 +73,18 @@ export function prepareBlueprint(req: CalculationRequest, ctx: DataContext): Blu
   }
   if (unspecified.length > 0) throw new Error("固定从者位置不足");
 
+  // 「名单成员自动算冠位」：**固定位**上的名单成员一律算冠位（静态，整趟不变）。
+  // 自由位由程序挑人，那一部分在 search.ts 里逐队派生（blueprintWithCrowns）。
+  const crownPositions = new Set<string>(req.crown_positions);
+  if (req.crown_auto_servants) {
+    for (const [pos, slot] of rawSlots) {
+      if (slot.fixed_servant_id !== null && req.crown_servant_ids.has(Number(slot.fixed_servant_id))) {
+        slot.is_crown = true;
+        crownPositions.add(pos);
+      }
+    }
+  }
+
   const usedCraftSlots = new Set<string>();
   const fixedBondIds: number[] = [];
   const fixedOtherIds: number[] = [];
@@ -219,6 +231,7 @@ export function prepareBlueprint(req: CalculationRequest, ctx: DataContext): Blu
     fixed_bond_craft_ids: fixedBondIds,
     fixed_other_craft_ids: fixedOtherIds,
     fixed_servant_ids: fixedServantIds,
-    crown_positions: new Set(req.crown_positions),
+    crown_positions: crownPositions,
+    crown_servant_ids: req.crown_auto_servants ? new Set(req.crown_servant_ids) : new Set(),
   });
 }

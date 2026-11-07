@@ -51,6 +51,7 @@ import {
 import {
   Blueprint,
   GENERIC_BOND_CRAFT_IDS,
+  blueprintWithCrowns,
   boxMap,
   clusterBonus,
   fillRemainingCraftSlots,
@@ -1482,6 +1483,48 @@ export async function searchTopTeams(
     defaultCraftComboLimit(req),
     freeBondZeroCost,
   );
+  // ---------- 名单成员自动算冠位（2026-11-01）----------
+  // 自由位由程序挑人，挑中的若是名单成员，那个位置要多一个**第二礼装槽（Cost 记 0）**。
+  // 槽数因此变成"每队不同" ⇒ 按档预生成组合表（最多 自由位数+1 张），每队查自己那一档；
+  // 蓝图也按"多出来的冠位位在哪"派生（位置组合 ≤ 2^自由位数，典型个位数）。
+  // 名单为空（默认）⇒ 只会有 z=0 一张表、蓝图永不派生 ⇒ 与旧行为逐字节相同。
+  const autoCrown = bp.crown_servant_ids.size > 0;
+  const combosByZ = new Map<number, [number, number[]][]>();
+  combosByZ.set(0, craftCombosWithCost);
+  const bpCrownCache = new Map<string, Blueprint>();
+  const bpForCrowns = (extra: Set<string>): Blueprint => {
+    if (!autoCrown || extra.size === 0) return bp;
+    const key = [...extra].sort().join(",");
+    let made = bpCrownCache.get(key);
+    if (made === undefined) {
+      made = blueprintWithCrowns(bp, extra);
+      bpCrownCache.set(key, made);
+    }
+    return made;
+  };
+  /** 自由位里挑中的名单成员所在的位置（= 这一队多出来的冠位位） */
+  const extraCrownsOf = (mapping: Map<string, number>): Set<string> => {
+    const out = new Set<string>();
+    if (!autoCrown) return out;
+    for (const [pos, sid] of mapping) {
+      if (bp.crown_positions.has(pos)) continue;
+      if (bp.crown_servant_ids.has(Number(sid))) out.add(pos);
+    }
+    return out;
+  };
+  const zeroMaskOf = (b: Blueprint): boolean[] =>
+    b.player_craft_slots.filter((cs) => cs.fixed_craft_id === null).map((cs) => cs.index === 1);
+  const combosForZ = (z: number): [number, number[]][] => {
+    if (z <= 0) return craftCombosWithCost;
+    const hit = combosByZ.get(z);
+    if (hit !== undefined) return hit;
+    const slots = freeSlotsCount + z;
+    const mask = new Array(slots).fill(false);
+    for (let i = 0; i < z; i += 1) mask[i] = true; // 只要"数量"对，顺序无关（cost 只数零费槽个数）
+    const table = generateCraftCombinationsWithCost(ctx, craftPool, slots, defaultCraftComboLimit(req), mask);
+    combosByZ.set(z, table);
+    return table;
+  };
 
   const supportServantId = bp.support_servant_id;
   const supportCraftOpts = supportCraftOptions(ctx, req);
@@ -1576,6 +1619,63 @@ export async function searchTopTeams(
       main_story_bond_bonus: team.main_story_bond_bonus,
     });
 
+  /**
+   * 名单成员自动算冠位时：把"自由位上的礼装"按**这支队伍自己的槽位结构**重新摆一遍。
+   * 换位会让冠位位跟着人移动（名单成员在哪，第二个 0 Cost 槽就在哪），
+   * 所以礼装的多重集不变、但槽→位置的映射要按新结构重排（与 makeTeamConfig 同一口径：
+   * 先摆第二礼装位、再按位置顺序，礼装按 Cost 从大到小）。
+   */
+  const reassignFreeCraftsForCrowns = (team: TeamConfig): TeamConfig => {
+    const extra = new Set<string>();
+    for (const p of team.players) {
+      if (bp.crown_positions.has(p.position)) continue;
+      if (bp.crown_servant_ids.has(Number(p.servant_id))) extra.add(p.position);
+    }
+    const bpT = extra.size ? bpForCrowns(extra) : bp;
+    const freeSlots = bpT.player_craft_slots.filter((cs) => cs.fixed_craft_id === null);
+    const ordered = [...freeSlots].sort(
+      (a, b) =>
+        (a.index === 1 ? 0 : 1) - (b.index === 1 ? 0 : 1) ||
+        POSITIONS.indexOf(a.position as any) - POSITIONS.indexOf(b.position as any),
+    );
+    const freePos = new Set(bp.free_servant_positions);
+    const crafts: number[] = [];
+    for (const p of team.players) {
+      if (!freePos.has(p.position)) continue;
+      if (p.craft_id !== null && p.craft_id !== undefined) crafts.push(p.craft_id);
+      if (p.second_craft_id !== null && p.second_craft_id !== undefined) crafts.push(p.second_craft_id);
+    }
+    const sorted = crafts.sort((a, b) => (ctx.crafts.get(b)?.cost ?? 0) - (ctx.crafts.get(a)?.cost ?? 0));
+    const players = team.players.map((p) => clonePlayer(p));
+    for (const p of players) {
+      if (!freePos.has(p.position)) continue;
+      p.craft_id = null;
+      p.second_craft_id = null;
+      p.is_crown = bp.crown_positions.has(p.position) || bp.crown_servant_ids.has(Number(p.servant_id));
+    }
+    const byPos = new Map<string, PlacedMember>();
+    for (const p of players) byPos.set(p.position, p);
+    const n = Math.min(ordered.length, sorted.length);
+    for (let i = 0; i < n; i += 1) {
+      const cs = ordered[i];
+      const player = byPos.get(cs.position);
+      if (!player) continue;
+      if (cs.index === 0) player.craft_id = sorted[i];
+      else player.second_craft_id = sorted[i];
+    }
+    return new TeamConfig({
+      players,
+      support_position: team.support_position,
+      support_servant_id: team.support_servant_id,
+      support_craft_id: team.support_craft_id,
+      support_second_craft_id: team.support_second_craft_id,
+      crown_positions: bpT.crown_positions,
+      base_bond: team.base_bond,
+      activity_bonus: team.activity_bonus,
+      main_story_bond_bonus: team.main_story_bond_bonus,
+    });
+  };
+
   /** 自由位从者做小规模全排列优化 */
   const optimizeFreePositions = (team: TeamConfig): TeamConfig => {
     const freePositions = [...bp.free_servant_positions].sort(
@@ -1614,13 +1714,15 @@ export async function searchTopTeams(
             bond_switch2: bs ? bs.bond_switch2 : false,
             craft_id: slot.craft_id,
             second_craft_id: slot.second_craft_id,
-            is_crown: slot.is_crown,
+            is_crown: bp.crown_positions.has(pos) || (autoCrown && bp.crown_servant_ids.has(Number(sid))),
             fixed: false,
             stage_locked: false,
           }),
         );
       }
-      return cloneTeam(team, players);
+      const made = cloneTeam(team, players);
+      // 换位后冠位跟着人走 ⇒ 礼装要按新槽位结构重摆（默认关时原样返回）
+      return autoCrown ? reassignFreeCraftsForCrowns(made) : made;
     };
 
     let bestTeam = team;
@@ -1642,7 +1744,17 @@ export async function searchTopTeams(
   /** 礼装组合的后置 1-换局部搜索 */
   const craftLocalSearch = (team: TeamConfig): TeamConfig => {
     if (craftPool.length === 0 || team.players.length === 0) return team;
-    const freeSlots = bp.player_craft_slots.filter((cs) => cs.fixed_craft_id === null);
+    // 冠位跟着人走：先按**这支队伍自己的**冠位位派生蓝图（默认关时就是 bp 本身）
+    let bpT = bp;
+    if (autoCrown) {
+      const extra = new Set<string>();
+      for (const p of team.players) {
+        if (bp.crown_positions.has(p.position)) continue;
+        if (bp.crown_servant_ids.has(Number(p.servant_id))) extra.add(p.position);
+      }
+      if (extra.size) bpT = bpForCrowns(extra);
+    }
+    const freeSlots = bpT.player_craft_slots.filter((cs) => cs.fixed_craft_id === null);
     if (freeSlots.length === 0) return team;
 
     const buildWith = (position: string, index: number, cid: number): TeamConfig => {
@@ -1740,6 +1852,12 @@ export async function searchTopTeams(
     }
 
     const mapping = greedyMapping(ctx, box, extras, bp.free_servant_positions);
+    // 这一队自由位里挑中的名单成员 ⇒ 那几位多一个 0 Cost 礼装槽（默认关 ⇒ extraCrowns 恒空、bpT === bp）
+    const extraCrowns = extraCrownsOf(mapping);
+    const bpT = extraCrowns.size ? bpForCrowns(extraCrowns) : bp;
+    const teamFreeSlots = bpT.free_bond_positions.length;
+    const teamZeroCost = bpT === bp ? freeBondZeroCost : zeroMaskOf(bpT);
+    if (originalCraftCombos === null) craftCombos = combosForZ(extraCrowns.size);
 
     let servantCost = 0;
     for (const sid of usedPlayers) {
@@ -1775,7 +1893,7 @@ export async function searchTopTeams(
         mapping,
         craftPool,
         ceBudget,
-        freeBondZeroCost,
+        teamZeroCost,
         12,
         dpCache,
       );
@@ -1786,10 +1904,10 @@ export async function searchTopTeams(
         const exact = exactBestCraftScore(
           ctx,
           craftPool,
-          freeSlotsCount,
+          teamFreeSlots,
           ceBudget,
           repeatableIds,
-          freeBondZeroCost,
+          teamZeroCost,
           craftScores,
         );
         const ubFn = hooks?.upperBound ?? relaxedScoreUpperBound;
@@ -1802,9 +1920,9 @@ export async function searchTopTeams(
           supportTopOptions,
           supportSecondOptions,
           craftPool,
-          freeSlotsCount,
+          teamFreeSlots,
           ceBudget,
-          freeBondZeroCost,
+          teamZeroCost,
           bp.fixed_bond_craft_ids,
           exact,
         );
@@ -1820,9 +1938,9 @@ export async function searchTopTeams(
             supportTopOptions,
             supportSecondOptions,
             craftPool,
-            freeSlotsCount,
+            teamFreeSlots,
             ceBudget,
-            freeBondZeroCost,
+            teamZeroCost,
             bp.fixed_bond_craft_ids,
             exact,
             true,
@@ -1831,9 +1949,9 @@ export async function searchTopTeams(
             ub,
             cheap,
             craftScores,
-            freeSlots: freeSlotsCount,
+            freeSlots: teamFreeSlots,
             costBudget: ceBudget,
-            zeroCostSlots: freeBondZeroCost,
+            zeroCostSlots: teamZeroCost,
           });
         }
         if (traitOut !== null && dpCombos.length > 0) {
@@ -1879,7 +1997,7 @@ export async function searchTopTeams(
       let template = makeTeamConfig(
         ctx,
         req,
-        bp,
+        bpT,
         extras,
         mapping as Map<string, number>,
         craftChoice,
@@ -1893,9 +2011,9 @@ export async function searchTopTeams(
       if (pairOptimize) {
         const byPos = new Map<string, PlacedMember>();
         for (const p of template.players) byPos.set(p.position, p);
-        mergeCraftAssignment(ctx, bp, byPos, craftChoice, 2);
+        mergeCraftAssignment(ctx, bpT, byPos, craftChoice, 2);
       }
-      template = fillRemainingCraftSlots(ctx, req, bp, template, craftPool);
+      template = fillRemainingCraftSlots(ctx, req, bpT, template, craftPool);
       const playerTpl = template.players.map((p) => ({
         position: p.position,
         servant_id: p.servant_id,
@@ -2707,13 +2825,16 @@ export async function searchTopTeams(
           bond_switch2: bs ? bs.bond_switch2 : player.bond_switch2,
           craft_id: slot.craft_id,
           second_craft_id: slot.second_craft_id,
-          is_crown: slot.is_crown,
+          // 冠位跟着人走：名单成员换到哪个自由位，那个位置才是冠位位（默认关时等同 slot.is_crown）
+          is_crown: bp.crown_positions.has(player.position) || (autoCrown && bp.crown_servant_ids.has(Number(sid))),
           fixed: false,
           stage_locked: false,
         }),
       );
     }
-    const candidate = cloneTeam(team, players);
+    let candidate = cloneTeam(team, players);
+    // 换位后冠位位变了 ⇒ 礼装要按新槽位结构重摆一次（否则第二个礼装会落在非冠位位置上）
+    if (autoCrown) candidate = reassignFreeCraftsForCrowns(candidate);
     return optimizeTeamStages(ctx, candidate);
   };
 
