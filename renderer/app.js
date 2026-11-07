@@ -1820,6 +1820,8 @@ const App = {
       const left = this.slots[a];
       this.slots[a] = this.slots[b];
       this.slots[b] = left;
+      // 拖拽换位后要重算冠位：名单里的从者换了位置也要自动吃两个礼装位（2026-11-01）
+      this.applyRosterCrowns();
     },
     swapCraft(a, ai, b, bi) {
       if (a === b && Number(ai) === Number(bi)) return;
@@ -3260,6 +3262,7 @@ const App = {
     },
     /** 把冠位名单里的人所在的位置补成"冠位位"（不动助战位、不动空格） */
     applyRosterCrowns() {
+      if (!this.crownModeOn) return;
       const roster = new Set((this.crownServantIds || []).map(Number));
       if (!roster.size) return;
       let changed = 0;
@@ -3273,6 +3276,61 @@ const App = {
       if (changed) this.crownRosterError = "";
     },
     // ---------- 冠位名单（终章柱子战） ----------
+    /**
+     * 这一行**当前显示**的队伍里，哪些冠位从者没按冠位算（它所在的位置没勾冠位）。
+     * 引擎在搜索时不知道名单，所以只能算完在这里指出来 —— 2026-11-01 定的口径：
+     * **不把"每队槽数不同"塞进搜索**（那条路的收益只有一个免费礼装位，代价却是把
+     * "槽数是常量"从蓝图 / 组合生成 / 搜索 / 上界里全拆掉，不划算）。
+     */
+    crownGapMembers(result) {
+      if (!this.crownModeOn) return [];
+      const roster = new Set((this.crownServantIds || []).map(Number));
+      if (!roster.size) return [];
+      const team = this.displayedResultTeam(result) || [];
+      return team.filter((m) => m && !m.isSupport && roster.has(Number(m.servantId)) && !m.isCrown);
+    },
+    /** 提示行用的摘要（没有缺口返回 null） */
+    crownGapInfo(result) {
+      const gaps = this.crownGapMembers(result);
+      if (!gaps.length) return null;
+      const names = gaps
+        .map((m) => (this.servantMap[Number(m.servantId)] || {}).name || String(m.servantId))
+        .join("、");
+      return { count: gaps.length, names };
+    },
+    /**
+     * 「按冠位重算」：把这支队伍原样填进队伍配置、把冠位从者的位置勾上冠位，再按"固定这几位"重算一次。
+     * **引擎零改动** —— "固定阵容 + 冠位位置"本来就能算，这一趟只剩礼装搭配，几十毫秒就出结果。
+     */
+    async recalcResultWithCrown(result) {
+      if (this.calculating) return;
+      const gaps = this.crownGapMembers(result);
+      if (!gaps.length) return;
+      const gapPositions = new Set(gaps.map((m) => String(m.position)));
+      const names = gaps
+        .map((m) => (this.servantMap[Number(m.servantId)] || {}).name || String(m.servantId))
+        .join("、");
+      const ok = confirm(
+        `将把方案 #${result.rank} 的这支队伍填进「队伍配置」，把 ${names} 的位置勾成冠位，再按固定这几位重算一次。\n` +
+          "当前队伍配置会被替换，结果列表也会重新生成。继续？",
+      );
+      if (!ok) return;
+      const team = this.displayedResultTeam(result) || [];
+      const byPos = {};
+      for (const m of team) byPos[String(m.position)] = m;
+      this.slots.forEach((slot, i) => {
+        const pos = this.slotPosition(i);
+        const m = byPos[pos];
+        if (!m) return;
+        if (!!slot.isSupport !== !!m.isSupport) return; // 助战位对不上就不动它
+        slot.servantId = m.servantId === undefined ? null : m.servantId;
+        slot.stage = m.stage || null;
+        slot.craftId = m.craftId === undefined ? null : m.craftId;
+        slot.secondCraftId = m.secondCraftId === undefined ? null : m.secondCraftId;
+        if (!m.isSupport && gapPositions.has(pos)) slot.isCrown = true;
+      });
+      await this.calculate();
+    },
     openCrownRoster() {
       this.crownRosterKeyword = "";
       this.crownRosterError = "";
@@ -3877,6 +3935,8 @@ const App = {
         : "standard";
       this.mode = preset.mode || "normal";
       this.crownClass = preset.crownClass || "all";
+      // 读预设后也要按名单补默认冠位：老预设里可能没存冠位标记（2026-11-01）
+      if (this.crownModeOn) this.applyRosterCrowns();
       this.baseBond = Number(preset.baseBond || 0);
       this.sortMode = preset.sortMode === "points" ? "points" : "multiplier";
       this.presetModalVisible = false;
@@ -5495,6 +5555,11 @@ const App = {
             </button>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
             <button class="secondary" @click="exportJson(r)">导出JSON</button>
+          </div>
+          <div v-if="crownGapInfo(r)" class="crown-gap-hint">
+            ⚠️ 含冠位从者 {{ crownGapInfo(r).names }}，{{ crownGapInfo(r).count }} 个位置没按冠位算
+            （每处还能多放 1 张绊礼装、不占 Cost）
+            <button class="secondary" @click="recalcResultWithCrown(r)">按冠位重算</button>
           </div>
           <div v-if="expandedSameScore === r.rank && sameScoreCount(r) > 1" class="same-score-panel">
             <div class="same-score-hint text-muted">

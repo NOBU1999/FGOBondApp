@@ -1494,6 +1494,21 @@ label.team-config-check {
   border: 1px solid rgba(255, 176, 64, 0.35);
 }
 
+/* 结果卡里的提示：这支含冠位从者、但那个位置没按冠位算（点一下按冠位重算） */
+.crown-gap-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #ffcf80;
+  background: rgba(255, 176, 64, 0.1);
+  border: 1px solid rgba(255, 176, 64, 0.3);
+}
+
 /* 冠位名单弹窗：按职阶分组的网格 */
 .crown-roster {
   overflow-y: auto;
