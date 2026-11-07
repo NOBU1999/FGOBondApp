@@ -815,9 +815,14 @@ const App = {
   },
   methods: {
     // ---------- 工具 ----------
-    /** 某位从者这次要按多少 Cost 算：玛修可被玩家改成 0/16（其余一律取资料库） */
+    /**
+     * 某位从者这次要按多少 Cost 算（界面显示与 payload 走同一条口径）。
+     * 终章柱子战模式下玛修固定 16（用户 2026-11-01 定：这个模式里她就是按 16 占位）；
+     * 其余情况玛修可被玩家改成 0/16，其他从者一律取资料库。
+     */
     servantCostOf(servantId) {
       const id = Number(servantId);
+      if (this.mode === "pillar" && id === 800100) return 16;
       const b = this.box && this.box[id];
       const ov = b ? b.costOverride : null;
       if (ov !== null && ov !== undefined && Number.isFinite(Number(ov))) return Number(ov);
@@ -3290,6 +3295,17 @@ const App = {
       if (m === "pillar" && Number(servantId) === 800100) return 0;
       return Number((boxEntry && boxEntry.auraBonus) || 0) / 100;
     },
+    /**
+     * 发请求时的「Cost 覆盖」（**方法，不是 computed**：要带参数）。
+     * 终章柱子战模式下玛修固定 16 —— 引擎侧本来就有 `cost_override` 这个接口，界面按模式传值即可；
+     * 其余模式照旧用 Box 里的 0/16 设置，没设置传 null（引擎按资料库里的 Cost 算）。
+     */
+    costOverrideForPayload(servantId, boxEntry, mode) {
+      const m = mode || this.mode;
+      if (m === "pillar" && Number(servantId) === 800100) return 16;
+      const ov = boxEntry ? boxEntry.costOverride : null;
+      return ov === null || ov === undefined ? null : Number(ov);
+    },
     /** 该从者占的冠位名额（七个普通职阶各 1、EX1 一个、EX2 一个）；不在任何组里返回 null */
     crownSlotOf(servantClass) {
       const cls = String(servantClass || "");
@@ -4191,8 +4207,8 @@ const App = {
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: this.auraBonusForPayload(s.id, b),
-          // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
-          costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
+          // 玛修 Cost 覆盖：柱子战模式固定 16；其余模式按 Box 里的 0/16 设置，没设置就不传
+          costOverride: this.costOverrideForPayload(s.id, b),
         };
       });
       const fixedServants = [];
@@ -4285,8 +4301,8 @@ const App = {
           bondSwitch2: f.switch2,
           personalBonus: Number(b.personalBonus || 0) / 100,
           auraBonus: this.auraBonusForPayload(s.id, b, mode),
-          // 玛修 Cost 覆盖（0/16）：没设置就不传，引擎按资料库里的 Cost 算
-          costOverride: b.costOverride === null || b.costOverride === undefined ? null : Number(b.costOverride),
+          // 玛修 Cost 覆盖：按**预设自己的模式**判（柱子战预设固定 16），其余照 Box 里的 0/16
+          costOverride: this.costOverrideForPayload(s.id, b, mode),
         };
       });
       const crownClass = preset.crownClass || this.crownClass;
@@ -6259,13 +6275,16 @@ const App = {
           <div v-if="Number(servantDetail.servantId) === 800100" class="field">
             <label>玛修的 Cost</label>
             <select
-              :value="String(box[servantDetail.servantId].costOverride === null || box[servantDetail.servantId].costOverride === undefined ? 0 : box[servantDetail.servantId].costOverride)"
+              :disabled="mode === 'pillar'"
+              :value="mode === 'pillar' ? '16' : String(box[servantDetail.servantId].costOverride === null || box[servantDetail.servantId].costOverride === undefined ? 0 : box[servantDetail.servantId].costOverride)"
               @change="setCostOverride(servantDetail.servantId, $event.target.value)"
             >
               <option value="0">0（游戏里的默认值，不占 Cost 上限）</option>
               <option value="16">16（按 16 Cost 计算队伍）</option>
             </select>
-            <div class="text-muted" style="margin-top:2px">改动会立刻用于算 Cost 上限与推荐结果，并跟账号一起保存。</div>
+            <div class="text-muted" style="margin-top:2px">{{ mode === 'pillar'
+              ? '终章柱子战模式下玛修固定按 16 Cost 计算（本模式不可改；切回其他模式仍按你自己的设置）。'
+              : '改动会立刻用于算 Cost 上限与推荐结果，并跟账号一起保存。' }}</div>
           </div>
           <div class="field" style="margin-top:8px;border-top:1px solid rgba(128,128,128,.25);padding-top:8px">
             <label>从活动导入该从者加成</label>
