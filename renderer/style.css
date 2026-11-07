@@ -1447,6 +1447,16 @@ label.team-config-check {
   color: #fff;
 }
 
+/* 戴冠战面板里「冠位名单」那一行：5b9e7ee 重做柱子战面板时把 .pillar-row 的样式一起删了，
+   这处标记还在用，补回横排（只作用于戴冠战面板，不影响柱子战面板的两行设置项） */
+.crown-filter .pillar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 /* 终章柱子战面板（玛修主线加成 + 冠位名单）：对齐的两行设置项 */
 .pillar-panel .pillar-list {
   margin-top: 8px;
