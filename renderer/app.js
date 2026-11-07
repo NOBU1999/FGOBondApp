@@ -3312,24 +3312,33 @@ const App = {
       }
       return null;
     },
-    /** 冠位名单弹窗里的列表：支持关键字；红标 = 不在当前 Box */
-    crownRosterRows() {
+    /**
+     * 冠位名单弹窗的内容：**只列 Box 里已勾选的从者**，并按冠位名额（职阶）分组。
+     * 分组的理由：一个名额只能有 1 位，按职阶分开才看得出"这一格归谁"；
+     * 名字为空的分组直接不渲染（不然 9 个分组里 8 个是空的，反而更难读）。
+     */
+    crownRosterGroups() {
       const kw = String(this.crownRosterKeyword || "").trim().toLowerCase();
-      const order = { saber: 0, archer: 1, lancer: 2, rider: 3, caster: 4, assassin: 5, berserker: 6, ex1: 7, ex2: 8 };
-      return (this.servants || [])
-        .map((s) => {
-          const slot = this.crownSlotOf(s.class);
-          const checked = (this.crownServantIds || []).some((x) => Number(x) === Number(s.id));
-          const inBox = !!(this.box && this.box[s.id] && this.box[s.id].checked);
-          return { ...s, crownSlot: slot, crownSlotText: slot ? this.crownSlotLabel(slot) : "", checked, inBox };
-        })
-        .filter((s) => (kw ? String(s.name || "").toLowerCase().includes(kw) || String(s.id).includes(kw) : true))
-        .sort(
-          (a, b) =>
-            (order[a.crownSlot] ?? 99) - (order[b.crownSlot] ?? 99) ||
-            Number(b.checked) - Number(a.checked) ||
-            (a.collectionNo || 0) - (b.collectionNo || 0),
-        );
+      const picked = new Set((this.crownServantIds || []).map(Number));
+      const out = [];
+      for (const key of ["saber", "archer", "lancer", "rider", "caster", "assassin", "berserker", "ex1", "ex2"]) {
+        const classes = (CROWN_CLASS_GROUPS[key] || []).map((c) => String(c).toLowerCase());
+        const rows = (this.ownedServants || [])
+          .filter((s) => classes.includes(String(s.class || "").toLowerCase()))
+          .filter((s) => (kw ? String(s.name || "").toLowerCase().includes(kw) || String(s.id).includes(kw) : true))
+          .map((s) => ({ ...s, checked: picked.has(Number(s.id)) }));
+        if (!rows.length) continue;
+        // 已选的那位排到最前，一眼能看到这一格归谁
+        rows.sort((a, b) => Number(b.checked) - Number(a.checked) || (a.collectionNo || 0) - (b.collectionNo || 0));
+        const occupant = rows.find((r) => r.checked);
+        out.push({
+          key,
+          label: this.crownSlotLabel(key),
+          pickedName: occupant ? occupant.name : "",
+          rows,
+        });
+      }
+      return out;
     },
     async persistCrownRoster() {
       if (this.accountBusy) return;
@@ -5971,26 +5980,33 @@ const App = {
           <span class="text-muted">已选 {{ (crownServantIds || []).length }}/9</span>
         </div>
         <div class="text-muted" style="margin:4px 0 8px">
-          名单里的人放进队伍位置时自动勾成冠位（右键仍可取消），并保送进候选池。
-          标「不在 Box」的 = 名单里有、当前 Box 没勾（不影响计算，只是提示）。
+          只列你 Box 里已勾选的从者，按职阶分组。名单里的人放进队伍位置时自动勾成冠位（右键仍可取消），并保送进候选池。
         </div>
         <div v-if="crownRosterError" class="panel error" style="margin:6px 0">{{ crownRosterError }}</div>
-        <div class="exclusion-grid crown-roster">
-          <div
-            v-for="s in crownRosterRows()"
-            :key="s.id"
-            class="box-cell exclusion-cell"
-            :class="{ 'exclusion-active': s.checked, 'crown-outside': !s.inBox }"
-            @click="toggleCrownServant(s.id)"
-            :title="s.name + '｜' + (s.crownSlotText || '无冠位名额') + (s.inBox ? '' : '｜不在 Box')"
-          >
-            <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" draggable="false" @error="markAvatarBroken(s.id)" />
-            <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
-            <div class="crown-slot-badge">{{ s.crownSlotText }}</div>
-            <div v-if="!s.inBox" class="crown-outside-badge">不在 Box</div>
-            <div class="exclusion-check">{{ s.checked ? '✓' : '' }}</div>
+        <div class="crown-roster">
+          <div v-for="g in crownRosterGroups()" :key="g.key" class="crown-group">
+            <div class="crown-group-head">
+              <span class="crown-group-name">{{ g.label }}</span>
+              <span v-if="g.pickedName" class="crown-group-picked">冠位：{{ g.pickedName }}</span>
+              <span v-else class="crown-group-empty">未选</span>
+            </div>
+            <div class="exclusion-grid crown-group-grid">
+              <div
+                v-for="s in g.rows"
+                :key="s.id"
+                class="box-cell exclusion-cell"
+                :class="{ 'exclusion-active': s.checked }"
+                :data-servant-id="s.id"
+                @click="toggleCrownServant(s.id)"
+                :title="s.name"
+              >
+                <img v-if="!avatarMissingSet.has(String(s.id))" :src="avatarPath(s.id)" class="box-avatar" alt="" draggable="false" @error="markAvatarBroken(s.id)" />
+                <div v-else class="box-avatar fallback">{{ s.name.charAt(0) }}</div>
+                <div class="exclusion-check">{{ s.checked ? '✓' : '' }}</div>
+              </div>
+            </div>
           </div>
-          <div v-if="!crownRosterRows().length" class="empty">没有可选的从者</div>
+          <div v-if="!crownRosterGroups().length" class="empty">当前 Box 里没有可选的从者</div>
         </div>
       </div>
     </div>

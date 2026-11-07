@@ -1480,34 +1480,40 @@ label.team-config-check {
   border: 1px solid rgba(255, 176, 64, 0.35);
 }
 
-/* 冠位名单弹窗：职阶角标 + 「不在 Box」标记 */
-.exclusion-cell .crown-slot-badge {
-  position: absolute;
-  left: 2px;
-  bottom: 2px;
-  max-width: calc(100% - 4px);
-  padding: 0 3px;
-  border-radius: 4px;
-  font-size: 10px;
-  line-height: 15px;
-  color: #dbe4ff;
-  background: rgba(20, 24, 36, 0.78);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+/* 冠位名单弹窗：按职阶分组的网格 */
+.crown-roster {
+  overflow-y: auto;
+  max-height: 60vh;
+  padding-right: 2px;
 }
-.exclusion-cell.crown-outside { opacity: 0.55; }
-.exclusion-cell .crown-outside-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  padding: 0 3px;
-  border-radius: 4px;
-  font-size: 10px;
-  line-height: 15px;
-  color: #ffd0d0;
-  background: rgba(120, 24, 24, 0.82);
+.crown-group + .crown-group { margin-top: 10px; }
+.crown-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  margin-bottom: 6px;
 }
+.crown-group-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.crown-group-picked {
+  font-size: 12px;
+  color: var(--accent);
+}
+.crown-group-empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+.crown-roster .crown-group-grid {
+  max-height: none;
+  overflow: visible;
+  grid-auto-rows: 56px;
+}
+.crown-roster .crown-group-grid .exclusion-cell { height: 56px; }
 /* 冠位名单里"已选"用主题色，别跟「排除管理」的红色语义混在一起 */
 .crown-roster .exclusion-cell.exclusion-active {
   border-color: var(--accent);
