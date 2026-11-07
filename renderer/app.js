@@ -5136,18 +5136,17 @@ const App = {
     <!-- 终章柱子战：玛修主线加成自动判 + 冠位名单（不限职阶、不设预算档） -->
     <div v-if="mode === 'pillar'" class="crown-filter panel pillar-panel">
       <div class="team-config-title">终章柱子战</div>
-      <div class="pillar-row">
-        <span class="pillar-label">玛修主线加成</span>
-        <span class="pillar-auto">队里有玛修时全队自动 +20%</span>
-      </div>
-      <div class="pillar-row">
-        <span class="pillar-label">冠位名单</span>
-        <button class="secondary" @click="openCrownRoster">管理冠位名单（{{ (crownServantIds || []).length }}）</button>
-        <span class="text-muted">名单里的人放进位置时自动勾冠位，并保送进候选池</span>
-      </div>
-      <div class="text-muted" style="margin-top:6px">
-        不限职阶；冠位从者位多一个礼装位（只算主礼装位的 Cost）。
-        <template v-if="!(Number(baseBond) > 0)">基础牵绊还没填（在下面「队伍配置」里填），现在只按倍率排序；该难度越难基础值越高。</template>
+      <div class="pillar-list">
+        <div class="pillar-item">
+          <span class="pillar-label">玛修主线加成</span>
+          <span class="pillar-value">队里有玛修时全队自动 +20%</span>
+        </div>
+        <div class="pillar-item">
+          <span class="pillar-label">冠位名单</span>
+          <span class="pillar-value">
+            <button class="secondary" @click="openCrownRoster">管理冠位名单（{{ (crownServantIds || []).length }}）</button>
+          </span>
+        </div>
       </div>
       <div v-if="crownMissingFromBox.length" class="pillar-warn">
         ⚠️ 冠位名单里有 {{ crownMissingFromBox.length }} 位不在当前 Box：{{ crownMissingFromBox.map((x) => x.name).join("、") }}

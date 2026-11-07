@@ -1447,26 +1447,30 @@ label.team-config-check {
   color: #fff;
 }
 
-/* 终章柱子战面板（玛修主线加成 + 冠位名单） */
-.pillar-panel .pillar-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+/* 终章柱子战面板（玛修主线加成 + 冠位名单）：对齐的两行设置项 */
+.pillar-panel .pillar-list {
   margin-top: 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.18);
+}
+.pillar-panel .pillar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.18);
 }
 .pillar-panel .pillar-label {
+  flex: 0 0 96px;
   font-size: 13px;
   color: var(--muted);
-  min-width: 84px;
 }
-.pillar-panel .pillar-row button.active {
-  border-color: var(--accent);
-  background: rgba(122, 162, 247, 0.25);
-  color: #fff;
-}
-/* 玛修主线的"自动判定"说明与当前状态（不再给按钮，只用一行字） */
-.pillar-panel .pillar-auto {
+.pillar-panel .pillar-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-size: 13px;
   color: var(--text);
 }
