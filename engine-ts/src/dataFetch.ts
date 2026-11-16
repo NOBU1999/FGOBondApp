@@ -1048,17 +1048,23 @@ export function isoSeconds(d: Date): string {
 export const COSTUME_NAME_SOURCE = "https://api.atlasacademy.io/raw/{region}/servant/{id}";
 const COSTUME_NAME_PREFIX = /^[^：:]{0,8}(?:灵衣|霊衣)[：:]/;
 
-/** 库里已出现灵衣的 (servant_id, costume_id) 对；onlyMissing 只留还没名字的 */
+/** 库里已出现灵衣的 (servant_id, costume_id) 对；onlyMissing 只留"还没中文名"的 */
 export function costumeNamePairs(db: any, onlyMissing: boolean): [number, number][] {
-  let sql =
-    "SELECT DISTINCT t.servant_id, t.costume_id FROM servant_costume_traits t " +
+  const sql =
+    "SELECT DISTINCT t.servant_id, t.costume_id, c.name FROM servant_costume_traits t " +
     "LEFT JOIN servant_costumes c " +
     "ON c.servant_id = t.servant_id AND c.costume_id = t.costume_id";
-  if (onlyMissing) sql += " WHERE c.name IS NULL OR TRIM(c.name) = ''";
-  return queryAll(db, sql).map((r) => [
-    parseInt(String(r["servant_id"]), 10),
-    parseInt(String(r["costume_id"]), 10),
-  ]);
+  const rows = queryAll(db, sql);
+  // 旧库里有些灵衣名是日文原样存下来的（早年按 JP 数据建的库），
+  // 只判"空"会永远跳过它们 ⇒ 界面一直显示日文。带假名的一律当"缺名字"，让官方中文名覆盖掉。
+  const JP_KANA = /[\u3040-\u30ff]/;
+  const need = (name: any): boolean => {
+    const s = String(name ?? "").trim();
+    return s === "" || JP_KANA.test(s);
+  };
+  return rows
+    .filter((r) => !onlyMissing || need(r["name"]))
+    .map((r) => [parseInt(String(r["servant_id"]), 10), parseInt(String(r["costume_id"]), 10)]);
 }
 
 export async function fetchCostumeNames(sid: number, region: string): Promise<[Map<number, string>, number]> {
