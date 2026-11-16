@@ -127,9 +127,10 @@ python scripts/privacy_clean.py
 
 ## 数据来源与致谢
 
-- 游戏数据来自 **Atlas Academy**：[fgo-game-data-api](https://github.com/atlasacademy/fgo-game-data-api)
-- 中文名称与部分翻译映射生成时参考 **Chaldea**：[chaldea-center/chaldea](https://github.com/chaldea-center/chaldea)
-- 两者均以 AGPL-3.0 许可发布，本项目同样使用 AGPL-3.0
+- 游戏数据来自 **Atlas Academy**：[fgo-game-data-api](https://github.com/atlasacademy/fgo-game-data-api)（AGPL-3.0）
+- 部分中文译名与文本表述参考 **Chaldea** 项目及其整理的游戏映射数据：
+  [chaldea-center/chaldea](https://github.com/chaldea-center/chaldea)，在此致谢
+- 本项目以 AGPL-3.0 发布
 - 游戏素材、文本与角色数据版权归 TYPE-MOON / FGO Project 等相关权利方所有
 - 本项目仅用于非商业学习与工具用途
 
