@@ -330,20 +330,10 @@ function newestMtime(targets) {
 
 function buildWindows() {
   step("Windows 便携版");
-  // 引擎只有 TS 一种实现：产物是 dist/engine-ts/worker.mjs（esbuild 打的 worker bundle）。
-  // 源码比产物新就重打；`--force-engine` 强制重打。产物缺了直接 fatal —— 宁可停下也不要打出没引擎的包。
+  // 引擎产物在 buildEngines() 里已经现打（桌面 worker.mjs + 安卓 web.js/web.mjs），这里只做存在性核对。
   const tsBundle = path.join(ROOT, "dist", "engine-ts", "worker.mjs");
-  const tsSrcNewest = newestMtime([path.join(ROOT, "engine-ts", "src"), path.join(ROOT, "engine-ts", "entry")]);
-  const bundleTime = existsSync(tsBundle) ? statSync(tsBundle).mtimeMs : 0;
-  const stale = !existsSync(tsBundle) || tsSrcNewest > bundleTime;
-  if (FORCE_ENGINE || stale) {
-    log(stale && existsSync(tsBundle) ? "引擎源码比产物新 → 重新打包引擎" : "打包引擎（build:engine-ts）");
-    npmRun("build:engine-ts");
-    if (!existsSync(tsBundle)) fatal("dist/engine-ts/worker.mjs 没有生成 → 引擎构建失败，别继续打包");
-    log(`引擎产物已更新（${humanSize(statSync(tsBundle).size)}）`);
-  } else {
-    log("引擎产物已是最新（跳过；要强制重打加 --force-engine）");
-  }
+  if (!existsSync(tsBundle)) fatal("dist/engine-ts/worker.mjs 不存在 → 引擎构建失败，别继续打包");
+  log(`引擎产物：worker.mjs ${humanSize(statSync(tsBundle).size)}`);
 
   // 种子库：db/fgo_data.seed.db 是玩家首次运行时复制成运行库的模板，必须「复制一份再清空用户表」。
   // 不能像以前那样直接把开发机工作库 db/fgo_data.db 当种子库（v0.1.11 真实事故：
@@ -585,6 +575,20 @@ function loadHandWrittenNotes(notesFile) {
 }
 
 // ---------------------------------------------------------------- 主流程
+// 🔴 引擎产物一律重打（2026-11-21 事故：安卓用的 dist/engine-ts/web.js 没人重打，
+//    从 10-28 起每个 APK 里都是旧引擎）。两个 bundle 都从源码现打，代价 ~1 秒，
+//    不再依赖 mtime 判断 —— 桌面 worker.mjs 与安卓 web.js/web.mjs 必须同源同版。
+function buildEngines() {
+  step("打包引擎（桌面 worker + 安卓 web）");
+  npmRun("build:engine-ts");
+  npmRun("build:engine-ts:web");
+  for (const f of ["worker.mjs", "web.js", "web.mjs"]) {
+    const p = path.join(ROOT, "dist", "engine-ts", f);
+    if (!existsSync(p)) fatal(`dist/engine-ts/${f} 没有生成 → 引擎构建失败，别继续打包`);
+  }
+  log("引擎三份产物已就绪（worker.mjs / web.js / web.mjs）");
+}
+buildEngines();
 // 出包前自动补齐缺失从者头像（新从者上线后，头像 PNG 需要随包发布）。
 // 失败只警告、不中断出包（断网/源图缺图时不该卡住发版）。
 ensureMissingAvatars();
