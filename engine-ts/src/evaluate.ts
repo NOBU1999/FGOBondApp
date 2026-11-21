@@ -35,6 +35,17 @@ function sortedStrings(values: Set<string>): string[] {
   return [...values].sort();
 }
 
+/**
+ * 游戏口径的单人牵绊点数：先对 `基础 × (1 + 先发)` 向下取整，再乘其余加成后向下取整。
+ * 2026-11-21 用玩家实测反推（基础 4748 → 11678 / 10539 / 10539 / 8783 / 7834）。
+ */
+export function gameBondPoints(baseBond: number, front: number, multiplier: number, flatBonus: number): number {
+  if (!baseBond && !flatBonus) return 0;
+  const base = Math.floor(baseBond * (1 + front) + 1e-9);
+  const rest = multiplier / (1 + front);
+  return Math.floor(base * rest + 1e-9) + Math.floor(flatBonus + 1e-9);
+}
+
 export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
   const playerCrafts: any[] = [];
   for (const p of team.players) {
@@ -201,7 +212,9 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
         auraBonus: pyRound(auraBonus, 4),
         personalBonus: personalBonusUsed,
         totalMultiplier: pyRound(multiplier, 6),
-        bondPoints: baseBond || flatBonus ? pyRound(multiplier * baseBond + flatBonus, 2) : 0,
+        bondPoints: baseBond || flatBonus
+          ? gameBondPoints(baseBond, frontlineBonus(p.position, supportInFront), multiplier, flatBonus)
+          : 0,
       },
     });
   }
@@ -256,7 +269,9 @@ export function evaluateTeam(ctx: DataContext, team: TeamConfig): any {
     costUsed: teamCost(ctx, team),
     baseBond,
     totalBondPoints:
-      baseBond || totalFlatBonus ? pyRound(totalMultiplier * baseBond + totalFlatBonus, 2) : 0,
+      baseBond || totalFlatBonus
+        ? members.reduce((sum, m) => sum + Number(m.bonusDetail.bondPoints || 0), 0)
+        : 0,
     team: allMembers,
     maxBondStats: { count: maxBondCount, totalBonus: pyRound(maxBondBonus, 4) },
     traitCoverage: sortedStrings(traitCoverage),
