@@ -1155,18 +1155,32 @@ const App = {
     sameScoreCount(result) {
       return this.sameScoreListFiltered(result).length;
     },
-    /** 当前选中项在**过滤后**列表里的下标（下拉 v-for 用的就是过滤后的列表） */
+    /** 当前选中项在**过滤后**列表里的下标；**-1 = 本行原阵容（不换人）**。
+     *  引擎自 2026-11-21 起不再把"原阵容"塞进 sameScoreTeams（那属于重复项），
+     *  现在由界面自己补一条（`headTeamRows`），默认显示的就是它。
+     *  本行头部被简易排除时没有原阵容可显示 ⇒ 自动落到第一支干净的替补（保持旧行为）。 */
     sameScoreChoiceIndex(result) {
       const raw = this.sameScoreList(result);
       const list = this.sameScoreListFiltered(result);
+      if (!list.length) return -1;
       const want = Number((this.sameScoreChoice || {})[Number(result && result.rank)]);
-      const rawIdx = Number.isInteger(want) && want >= 0 && want < raw.length ? want : 0;
-      const idx = list.indexOf(raw[rawIdx]);
-      return idx >= 0 ? idx : 0;
+      if (Number.isInteger(want)) {
+        if (want < 0) return -1;
+        const rawIdx = want < raw.length ? want : 0;
+        const idx = list.indexOf(raw[rawIdx]);
+        return idx >= 0 ? idx : 0;
+      }
+      const head = ((result && result.team) || []).map((m) => Number(m.servantId));
+      return this.hitSimpleExclusion(head) ? 0 : -1;
     },
     chooseSameScore(result, index) {
       const rank = Number(result && result.rank);
       if (!rank) return;
+      // -1 = 本行原阵容（点「本行原阵容」那一条时把选择清掉）
+      if (Number(index) < 0) {
+        this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: -1 };
+        return;
+      }
       // 模板传进来的是"过滤后列表"的下标 ⇒ 存回原列表下标（否则一排除就从 0 重算）
       const alt = this.sameScoreListFiltered(result)[index];
       const rawIdx = alt ? this.sameScoreList(result).indexOf(alt) : 0;
@@ -1269,6 +1283,32 @@ const App = {
       const front = slots.filter((s) => isFront(s.position)).map((s) => this.sameScoreMember(result, s));
       const back = slots.filter((s) => !isFront(s.position)).map((s) => this.sameScoreMember(result, s));
       const rows = [];
+      if (front.length) rows.push({ label: "前排", members: front });
+      if (back.length) rows.push({ label: "后排", members: back });
+      return rows;
+    },
+    /**
+     * 「本行原阵容」那一条的头像行（同分面板的第一条，**不来自引擎列表**）。
+     * 引擎自 2026-11-21 起不再把原阵容作为同分替补返回（那属于重复项），
+     * 但界面的默认显示、以及用户"换回原队"的入口都靠它 ⇒ 由这里补出来。
+     */
+    headTeamRows(result) {
+      const players = ((result && result.team) || []).filter((m) => !m.isSupport);
+      const isFront = (p) => String(p || "").startsWith("front");
+      const mk = (m) => ({
+        position: String(m.position),
+        posLabel: this.positionLabel(m.position),
+        servantId: Number(m.servantId),
+        changed: false,
+        name: this.resultMemberName(m),
+        craftId: m.craftId,
+        secondCraftId: m.secondCraftId,
+        craftName: m.craftName || (this.craftById(m.craftId) || {}).name || "",
+        secondCraftName: m.secondCraftName || (this.craftById(m.secondCraftId) || {}).name || "",
+      });
+      const rows = [];
+      const front = players.filter((m) => isFront(m.position)).map(mk);
+      const back = players.filter((m) => !isFront(m.position)).map(mk);
       if (front.length) rows.push({ label: "前排", members: front });
       if (back.length) rows.push({ label: "后排", members: back });
       return rows;
@@ -1456,7 +1496,9 @@ const App = {
       // 用**过滤后**的替补列表：本行头部被简易排除时，这里会自动换成第一支干净的
       const list = this.sameScoreListFiltered(result);
       if (!list.length) return team;
-      const alt = list[this.sameScoreChoiceIndex(result)] || {};
+      const idx = this.sameScoreChoiceIndex(result);
+      if (idx < 0) return team; // -1 = 本行原阵容
+      const alt = list[idx] || {};
       const slots = this.altSlots(result, alt);
       const players = team.filter((m) => !m.isSupport);
       if (!slots.length || players.length !== slots.length) return team;
@@ -1511,7 +1553,7 @@ const App = {
       return out;
     },
     sameScoreActive(result) {
-      return this.sameScoreListFiltered(result).length > 1 && this.sameScoreChoiceIndex(result) > 0;
+      return this.sameScoreListFiltered(result).length > 0 && this.sameScoreChoiceIndex(result) >= 0;
     },
     visibleResultTeam(result) {
       const team = this.displayedResultTeam(result);
@@ -1676,9 +1718,11 @@ const App = {
         // 免得对方按摘要复现时只看到被合并后的那一支。
         const sameScore = this.sameScoreListFiltered(r);
         const hidden = this.sameScoreHiddenCount(r);
-        if (sameScore.length > 1) {
-          const shown = this.sameScoreChoiceIndex(r) + 1;
-          lines.push(`  ── 同分可替换阵容共 ${this.sameScoreCount(r)} 支（分数完全相同 ${Number(r.totalMultiplier).toFixed(3)}x，礼装/站位相同）；本行当前显示第 ${shown} 支${hidden > 0 ? `（另有 ${hidden} 支含简易排除的从者，未列出）` : ""}：`);
+        if (sameScore.length >= 1) {
+          const idx = this.sameScoreChoiceIndex(r);
+          const shown = idx >= 0 ? idx + 1 : 0; // 0 = 本行原阵容
+          const where = idx >= 0 ? `第 ${shown} 支` : "原阵容（不换人）";
+          lines.push(`  ── 另有同分可替换阵容 ${this.sameScoreCount(r)} 支（分数完全相同 ${Number(r.totalMultiplier).toFixed(3)}x，礼装/站位相同）；本行当前显示${where}${hidden > 0 ? `（另有 ${hidden} 支含简易排除的从者，未列出）` : ""}：`);
           sameScore.forEach((alt, i) => {
             lines.push(`     同分${i + 1}${i + 1 === shown ? "（显示中）" : ""}：${this.sameScoreTeamText(r, alt)}`);
           });
@@ -5572,10 +5616,10 @@ const App = {
             </label>
             <span style="flex:1"></span>
             <button
-              v-if="sameScoreCount(r) > 1"
+              v-if="sameScoreCount(r) >= 1"
               class="secondary same-score-toggle"
               :class="{ open: expandedSameScore === r.rank }"
-              :title="'本行有 ' + sameScoreCount(r) + ' 支「同分可替换」阵容（分数完全相同）；点开可看全部，点其中一支即可让它在本行显示'"
+              :title="'本行另有 ' + sameScoreCount(r) + ' 支「同分可替换」阵容（分数完全相同）；点开可看全部，点其中一支即可让它在本行显示，点「本行原阵容」换回不换人的那一支'"
               @click="expandedSameScore = (expandedSameScore === r.rank ? null : r.rank)"
             >
               {{ expandedSameScore === r.rank ? '▴' : '▾' }} 同分 {{ sameScoreCount(r) }} 支
@@ -5588,10 +5632,40 @@ const App = {
             （每处还能多放 1 张绊礼装、不占 Cost）
             <button class="secondary" @click="recalcResultWithCrown(r)">按冠位重算</button>
           </div>
-          <div v-if="expandedSameScore === r.rank && sameScoreCount(r) > 1" class="same-score-panel">
+          <div v-if="expandedSameScore === r.rank && sameScoreCount(r) >= 1" class="same-score-panel">
             <div class="same-score-hint text-muted">
-              {{ sameScoreCount(r) }} 支分数完全相同（{{ Number(r.totalMultiplier).toFixed(3) }}x），点一支让它在本行显示<template
+              另有 {{ sameScoreCount(r) }} 支分数完全相同（{{ Number(r.totalMultiplier).toFixed(3) }}x），点一支让它在本行显示；点「本行原阵容」换回不换人的那一支<template
                 v-if="sameScoreHiddenCount(r) > 0">；{{ sameScoreHiddenCount(r) }} 支含已排除从者已隐藏</template>
+            </div>
+            <div class="same-score-section">
+              <div class="same-score-section-label text-muted">本行原阵容 · 不换人</div>
+              <div
+                class="same-score-item"
+                :class="{ active: sameScoreChoiceIndex(r) === -1 }"
+                @click="chooseSameScore(r, -1)"
+              >
+                <span v-if="sameScoreChoiceIndex(r) === -1" class="same-score-badge">显示中</span>
+                <span class="same-score-team">
+                  <span v-for="grp in headTeamRows(r)" :key="grp.label" class="same-score-rowgroup">
+                    <span class="same-score-rowlabel text-muted">{{ grp.label }}</span>
+                    <span
+                      v-for="m in grp.members"
+                      :key="m.position"
+                      class="same-score-avatar"
+                      :title="m.name + '（' + m.posLabel + '）' + (m.craftName ? '｜主礼装：' + m.craftName : '') + (m.secondCraftName ? '｜第二礼装位：' + m.secondCraftName : '')"
+                    >
+                      <img
+                        v-if="!avatarMissingSet.has(String(m.servantId))"
+                        :src="avatarPath(m.servantId)"
+                        alt=""
+                        @error="markAvatarBroken(m.servantId)"
+                      />
+                      <span v-else class="same-score-avatar-fallback">{{ (m.name || '?').charAt(0) }}</span>
+                    </span>
+                  </span>
+                </span>
+                <span v-if="sameScoreChoiceIndex(r) === -1" class="same-score-badge">显示中</span>
+              </div>
             </div>
             <div v-for="sec in sameScoreSections(r)" :key="sec.key" class="same-score-section">
               <div class="same-score-section-label text-muted">{{ sec.label }}</div>
@@ -5676,7 +5750,7 @@ const App = {
             <div v-if="sameScoreActive(r)" class="same-score-note">
               ℹ️ 本行显示的是「同分可替换」阵容里的第 {{ sameScoreChoiceIndex(r) + 1 }} 支（共 {{ sameScoreCount(r) }} 支，分数完全相同 {{ Number(r.totalMultiplier).toFixed(3) }}x）。
               站位沿用本行，礼装取这一支自己的配置（同一组里礼装相同，只是换了谁拿），<b>Cost 也随人变化</b>；
-              若要换回引擎给的那一支，回列表点开「同分 {{ sameScoreCount(r) }} 支」再选。
+              若要换回本行原阵容，回列表点开「同分 {{ sameScoreCount(r) }} 支」再点「本行原阵容 · 不换人」。
             </div>
             <div class="detail-summary">
               <div class="summary-item"><span class="label">总倍率</span><span class="value">x{{ Number(r.totalMultiplier).toFixed(3) }}</span></div>
