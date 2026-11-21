@@ -3098,6 +3098,17 @@ export async function searchTopTeams(
         const evaluated = evaluateTeam(ctx, sortedAlt);
         if (Math.abs(Number(evaluated.totalMultiplier) - targetScore) > 1e-9) continue;
         const ordered = (evaluated.team ?? []).filter((m: any) => !m.isSupport);
+        // 与主队完全相同的“替补”不算替补（位置 / 从者 / 两张礼装都一致）
+        const sameAsHead = ordered.every((m: any) => {
+          const h = (item.team ?? []).find((x: any) => x.position === m.position && !x.isSupport);
+          return (
+            h !== undefined &&
+            Number(h.servantId) === Number(m.servantId) &&
+            (h.craftId ?? null) === (m.craftId ?? null) &&
+            (h.secondCraftId ?? null) === (m.secondCraftId ?? null)
+          );
+        });
+        if (sameAsHead) continue;
         kept.push({
           positions: ordered.map((m: any) => m.position),
           servantIds: ordered.map((m: any) => Number(m.servantId)),
