@@ -2969,6 +2969,156 @@ export async function searchTopTeams(
   }
   for (let i = 0; i < mergedItems.length; i++) mergedItems[i].rank = i + 1;
 
+  // 最终站位复核：搜索过程里那轮复核可能被预算截断、也可能受当时形态影响，
+  // 这里对**最终输出行**和**同分替补**各兜一遍：自由位按"与站位无关的加成"降序重排。
+  if (optimizeFreePositionsEnabled() && mergedItems.length > 0) {
+    const freeSet = new Set(bp.free_servant_positions);
+    const teamFromMembers = (members: any[]): TeamConfig | null => {
+      const players: PlacedMember[] = [];
+      let sup: any = null;
+      for (const m of members) {
+        if (m.isSupport) {
+          sup = m;
+          continue;
+        }
+        const bs = box.get(Number(m.servantId));
+        players.push(
+          new PlacedMember({
+            position: m.position,
+            servant_id: Number(m.servantId),
+            stage: m.stage ?? (bs ? bs.stage : "fourth"),
+            personal_bonus: m.personalBonus ?? (bs ? bs.personal_bonus : 0),
+            aura_bonus: m.auraBonus ?? (bs ? bs.aura_bonus : 0),
+            max_bond: m.isMaxBond ?? (bs ? bs.max_bond : false),
+            bond_switch1: m.bondSwitch1 ?? false,
+            bond_switch2: m.bondSwitch2 ?? false,
+            craft_id: m.craftId ?? null,
+            second_craft_id: m.secondCraftId ?? null,
+            is_crown: Boolean(m.isCrown),
+          }),
+        );
+      }
+      if (players.length === 0) return null;
+      return new TeamConfig({
+        players,
+        support_position: sup ? sup.position : bp.support_position,
+        support_servant_id: sup ? Number(sup.servantId) : bp.support_servant_id,
+        support_craft_id: sup ? (sup.craftId ?? null) : bp.support_craft_id,
+        support_second_craft_id: sup ? (sup.secondCraftId ?? null) : bp.support_second_craft_id,
+        crown_positions: new Set(players.filter((p) => p.is_crown).map((p) => p.position)),
+        base_bond: req.base_bond ?? 0,
+        activity_bonus: req.activity_bonus ?? 0,
+        main_story_bond_bonus: req.main_story_bond_bonus ?? 0,
+      });
+    };
+
+    // 自由位重排：礼装/形态跟着人走，只换位置
+    const sortFreePositions = (team: TeamConfig): TeamConfig => {
+      const freePositions = team.players.filter((p) => freeSet.has(p.position)).map((p) => p.position);
+      if (freePositions.length <= 1) return team;
+      const metrics = calculateTeamMetrics(ctx, team);
+      const mults = metrics.multipliers ?? [];
+      if (mults.length !== team.players.length) return team;
+      const supportInFront = team.support_position !== null && FRONT_POSITIONS.has(team.support_position);
+      const ranked = team.players
+        .map((p, i) => ({ p, i }))
+        .filter((x) => freeSet.has(x.p.position))
+        .map((x) => {
+          const front = frontlineBonus(x.p.position, supportInFront);
+          return { position: x.p.position, self: mults[x.i] / (1 + front) };
+        })
+        .sort((a, b) => b.self - a.self);
+      const byPosOrder = (a: string, b: string) => POSITIONS.indexOf(a as any) - POSITIONS.indexOf(b as any);
+      const target = [
+        ...freePositions.filter((pos) => FRONT_POSITIONS.has(pos)).sort(byPosOrder),
+        ...freePositions.filter((pos) => !FRONT_POSITIONS.has(pos)).sort(byPosOrder),
+      ];
+      let same = true;
+      for (let i = 0; i < target.length; i++) if (target[i] !== ranked[i].position) same = false;
+      if (same) return team;
+      const oldToNew = new Map<string, string>();
+      for (let i = 0; i < target.length; i++) oldToNew.set(ranked[i].position, target[i]);
+      const players = team.players.map((p) => {
+        const moved = clonePlayer(p);
+        const next = oldToNew.get(p.position);
+        if (next) moved.position = next;
+        return moved;
+      });
+      return cloneTeam(team, players);
+    };
+
+    let posfixFinal = 0;
+    for (let i = 0; i < mergedItems.length; i++) {
+      const item = mergedItems[i];
+      const team = teamFromMembers(item.team ?? []);
+      if (!team) continue;
+      const sorted = sortFreePositions(team);
+      if (sorted === team) continue;
+      const evaluated = evaluateTeam(ctx, sorted);
+      if (Number(evaluated.totalMultiplier) <= Number(item.totalMultiplier ?? 0) + 1e-9) continue;
+      const fresh = solutionDict(evaluated, item.rank);
+      fresh.sameScoreTeams = item.sameScoreTeams;
+      fresh.sameScoreTotal = item.sameScoreTotal;
+      mergedItems[i] = fresh;
+      posfixFinal += 1;
+    }
+
+    // 同分替补：同样重排；重排后不再同分的就不算替补（丢）
+    for (const item of mergedItems) {
+      const alts: any[] = Array.isArray(item.sameScoreTeams) ? item.sameScoreTeams : [];
+      if (!alts.length) continue;
+      const targetScore = Number(item.totalMultiplier ?? 0);
+      const headSidByPos = new Map<string, number>(
+        (item.team ?? []).filter((m: any) => !m.isSupport).map((m: any) => [m.position, Number(m.servantId)]),
+      );
+      const kept: any[] = [];
+      for (const alt of alts) {
+        const members = (alt.positions ?? []).map((pos: string, k: number) => ({
+          position: pos,
+          servantId: alt.servantIds?.[k] ?? null,
+          craftId: alt.craftIds?.[k] ?? null,
+          secondCraftId: alt.secondCraftIds?.[k] ?? null,
+        }));
+        const supMember = item.team?.find((m: any) => m.isSupport);
+        if (!supMember || members.some((m: any) => m.servantId === null)) continue;
+        const team = teamFromMembers([
+          ...members.map((m: any) => {
+            const head = item.team?.find((h: any) => h.position === m.position && !h.isSupport);
+            return {
+              ...m,
+              stage: head?.stage,
+              isCrown: bp.crown_positions.has(m.position),
+              isSupport: false,
+            };
+          }),
+          { ...supMember, position: supMember.position },
+        ]);
+        if (!team) continue;
+        const sortedAlt = sortFreePositions(team);
+        const evaluated = evaluateTeam(ctx, sortedAlt);
+        if (Math.abs(Number(evaluated.totalMultiplier) - targetScore) > 1e-9) continue;
+        const ordered = (evaluated.team ?? []).filter((m: any) => !m.isSupport);
+        kept.push({
+          positions: ordered.map((m: any) => m.position),
+          servantIds: ordered.map((m: any) => Number(m.servantId)),
+          craftIds: ordered.map((m: any) => m.craftId ?? null),
+          secondCraftIds: ordered.map((m: any) => m.secondCraftId ?? null),
+          changed: ordered.map((m: any) => (Number(m.servantId) !== (headSidByPos.get(m.position) ?? -1) ? 1 : 0)),
+          supportCraftId: supMember.craftId ?? null,
+          supportSecondCraftId: supMember.secondCraftId ?? null,
+        });
+      }
+      item.sameScoreTeams = kept.slice(0, ALT_CAP);
+      item.sameScoreTotal = Math.max(Number(item.sameScoreTotal ?? 0), kept.length);
+    }
+
+    if (posfixFinal) {
+      mergedItems.sort((a, b) => Number(b.totalMultiplier ?? 0) - Number(a.totalMultiplier ?? 0));
+      for (let i = 0; i < mergedItems.length; i++) mergedItems[i].rank = i + 1;
+      report(`最终站位复核：${posfixFinal} 行改好了`);
+    }
+  }
+
   return {
     status: stopFlag[0] ? "partial" : "success",
     totalCandidates: bestBySet.size,
