@@ -3135,6 +3135,19 @@ export async function searchTopTeams(
     }
   }
 
+  // 点数档（填了基础牵绊）：Top 顺序按**逐人取整后的实际点数**排。
+  // 排序分用的是未取整的估算值，显示的点数逐人向下取整后可能差 1 点 ⇒ 不重排就会出现
+  // "第 6 名点数大于第 5 名"的倒挂（契约里那条单调性断言盯的就是这个）。
+  if (usesPointsScoring(req) && req.strategy !== STRATEGY_TARGET_MAX && req.strategy !== STRATEGY_BALANCED) {
+    mergedItems.sort((a, b) => {
+      const pa = Number(a.totalBondPoints ?? 0);
+      const pb = Number(b.totalBondPoints ?? 0);
+      if (pb !== pa) return pb - pa;
+      return Number(b.totalMultiplier ?? 0) - Number(a.totalMultiplier ?? 0);
+    });
+    for (let i = 0; i < mergedItems.length; i++) mergedItems[i].rank = i + 1;
+  }
+
   return {
     status: stopFlag[0] ? "partial" : "success",
     totalCandidates: bestBySet.size,
