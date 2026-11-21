@@ -24,7 +24,9 @@ const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", ".
 const OUT = path.join(ROOT, "dist", "android", "public");
 const PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
-const PERSONAL_TABLES = ["user_box", "user_exclusions", "user_teams", "custom_crafts", "accounts"];
+// ⚠️ 必须与 scripts/make_seed.cjs 的 USER_TABLES 一致：新增用户表时两处一起加，
+//    漏了就会把个人数据打进 APK（v0.3.1~v0.3.4 的 APK 曾因此带上 saved_results / user_crown_servants）。
+const PERSONAL_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "user_crown_servants", "custom_crafts", "saved_results"];
 const PERSONAL_META_KEYS = [
   "active_account_id",
   "server_region",
@@ -94,7 +96,8 @@ function prepareDatabase(destFile) {
     }
   }
   try {
-    db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('accounts','user_box','user_exclusions','user_teams','custom_crafts')").run();
+    const seq = PERSONAL_TABLES.map((t) => `'${t}'`).join(",");
+    db.prepare(`DELETE FROM sqlite_sequence WHERE name IN (${seq})`).run();
   } catch (_) {
     /* ignore */
   }
@@ -102,6 +105,24 @@ function prepareDatabase(destFile) {
     db.exec("VACUUM");
   } catch (_) {
     /* VACUUM 失败不影响正确性 */
+  }
+
+  // 硬闸门：清完再查一遍，任何用户表非空或用户设置键还在就拒绝出包
+  const leaked = [];
+  for (const table of PERSONAL_TABLES) {
+    try {
+      const n = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c);
+      if (n > 0) leaked.push(`${table}=${n}`);
+    } catch (_) {
+      /* 表不存在 */
+    }
+  }
+  for (const key of PERSONAL_META_KEYS) {
+    try {
+      if (db.prepare("SELECT 1 FROM app_meta WHERE key = ?").get(key)) leaked.push(`app_meta:${key}`);
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   const counts = {};
@@ -113,6 +134,9 @@ function prepareDatabase(destFile) {
     }
   }
   db.close();
+  if (leaked.length) {
+    throw new Error("打包中止：个人数据未清干净 → " + leaked.join(", "));
+  }
   log(`数据库已就绪：${path.relative(ROOT, destFile)}（清掉个人行 ${removed} 条）`);
   log("  表计数：" + JSON.stringify(counts));
 }
