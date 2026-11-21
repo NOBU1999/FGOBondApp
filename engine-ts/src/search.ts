@@ -3072,6 +3072,18 @@ export async function searchTopTeams(
         (item.team ?? []).filter((m: any) => !m.isSupport).map((m: any) => [m.position, Number(m.servantId)]),
       );
       const kept: any[] = [];
+      // 「同分可替换」= 换人也能同分。同一批人（前排/后排集合都一样）只是同侧座位互换、
+      // 或礼装换个人拿，对玩家都不是"另一支队伍"——这类条目必须剔掉，否则没有换人的行
+      // 也会显示「同分 1 支」（2026-11-21 用户报的就是这个）。
+      const rosterKey = (list: any[]) => {
+        const side = (front: boolean) => list
+          .filter((m: any) => String(m.position ?? "").startsWith("front") === front)
+          .map((m: any) => Number(m.servantId))
+          .sort((a: number, b: number) => a - b)
+          .join(",");
+        return `${side(true)}|${side(false)}`;
+      };
+      const keptKeys = new Set<string>([rosterKey((item.team ?? []).filter((m: any) => !m.isSupport))]);
       for (const alt of alts) {
         const members = (alt.positions ?? []).map((pos: string, k: number) => ({
           position: pos,
@@ -3098,17 +3110,10 @@ export async function searchTopTeams(
         const evaluated = evaluateTeam(ctx, sortedAlt);
         if (Math.abs(Number(evaluated.totalMultiplier) - targetScore) > 1e-9) continue;
         const ordered = (evaluated.team ?? []).filter((m: any) => !m.isSupport);
-        // 与主队完全相同的“替补”不算替补（位置 / 从者 / 两张礼装都一致）
-        const sameAsHead = ordered.every((m: any) => {
-          const h = (item.team ?? []).find((x: any) => x.position === m.position && !x.isSupport);
-          return (
-            h !== undefined &&
-            Number(h.servantId) === Number(m.servantId) &&
-            (h.craftId ?? null) === (m.craftId ?? null) &&
-            (h.secondCraftId ?? null) === (m.secondCraftId ?? null)
-          );
-        });
-        if (sameAsHead) continue;
+        // 与主队同一批人（或与已保留的替补同一批人）⇒ 不算替补
+        const altKey = rosterKey(ordered);
+        if (keptKeys.has(altKey)) continue;
+        keptKeys.add(altKey);
         kept.push({
           positions: ordered.map((m: any) => m.position),
           servantIds: ordered.map((m: any) => Number(m.servantId)),
