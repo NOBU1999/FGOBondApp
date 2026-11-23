@@ -44,7 +44,7 @@ export async function calculateFromData(
   applyConfig(opts);
   const req = parseRequest(data);
   logProgress("正在加载本地数据...");
-  const baseCtx = await loadContext(opts.dbPath ?? dataCfg.dbPath, req.server_region);
+  const baseCtx = await loadContext(opts.dbPath ?? dataCfg.dbPath, req.server_region, req.mode === "pillar");
   // 玛修那类"可调 Cost"的请求级覆盖（0/16）
   const ctx = withServantCostOverrides(baseCtx, costOverridesOf(req.box));
 

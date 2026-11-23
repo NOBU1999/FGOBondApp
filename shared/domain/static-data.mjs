@@ -45,67 +45,79 @@ export function createStaticDataDomain({ sql }) {
     );
   }
 
+  /**
+   * 特性表选择器。
+   * - `"jp"`：主表；`"cn"`：国服表（缺行回退主表）；`"pillar"`：终章柱子战的**冻结表**
+   *   （国服特性的一次性快照 + 所罗门，入库后不随数据更新变化；老库没有该表时退回国服）。
+   */
+  function traitTables(region) {
+    if (region === "pillar") {
+      return { stage: "pillar_stage_traits", costume: "pillar_costume_traits", fallback: false };
+    }
+    if (region === "cn") {
+      return { stage: "servant_stage_traits_cn", costume: "servant_costume_traits_cn", fallback: true };
+    }
+    return { stage: "servant_stage_traits", costume: "servant_costume_traits", fallback: false };
+  }
+
   function getStageTraits(servantId, stage, region) {
     const st = String(stage || "fourth");
-    const useCn = region === "cn";
-    if (st.startsWith("costume_")) {
-      const costumeId = Number(st.split("_")[1]);
-      if (!Number.isFinite(costumeId)) return [];
-      const table = useCn ? "servant_costume_traits_cn" : "servant_costume_traits";
-      const rows = sql.all(
-        `SELECT trait FROM ${table} WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait`,
-        [servantId, costumeId]
-      );
-      if (rows.length) return rows.map((r) => r.trait);
-      // CN 库缺失时回退主库，避免旧数据/未更新数据直接空白
-      if (useCn) {
-        const fallback = sql.all(
-          "SELECT trait FROM servant_costume_traits WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait",
-          [servantId, costumeId]
-        );
-        return fallback.map((r) => r.trait);
+    let sel = traitTables(region);
+    const query = (table, extra) => {
+      if (st.startsWith("costume_")) {
+        const costumeId = Number(st.split("_")[1]);
+        if (!Number.isFinite(costumeId)) return [];
+        return sql
+          .all(
+            `SELECT trait FROM ${table} WHERE servant_id = ? AND costume_id = ? AND trait <> 'unknown' ORDER BY trait`,
+            [servantId, costumeId]
+          )
+          .map((r) => r.trait);
       }
-      return [];
+      return sql
+        .all(
+          `SELECT trait FROM ${table} WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait`,
+          [servantId, st]
+        )
+        .map((r) => r.trait);
+    };
+    let rows;
+    try {
+      rows = query(st.startsWith("costume_") ? sel.costume : sel.stage);
+    } catch (err) {
+      // 冻结表不存在（老库）⇒ 退回国服表
+      if (region !== "pillar") throw err;
+      sel = traitTables("cn");
+      rows = query(st.startsWith("costume_") ? sel.costume : sel.stage);
     }
-    const table = useCn ? "servant_stage_traits_cn" : "servant_stage_traits";
-    const rows = sql.all(
-      `SELECT trait FROM ${table} WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait`,
-      [servantId, st]
-    );
-    if (rows.length) return rows.map((r) => r.trait);
-    if (useCn) {
-      const fallback = sql.all(
-        "SELECT trait FROM servant_stage_traits WHERE servant_id = ? AND stage = ? AND trait <> 'unknown' ORDER BY trait",
-        [servantId, st]
-      );
-      return fallback.map((r) => r.trait);
-    }
+    if (rows.length) return rows;
+    if (sel.fallback) return query(st.startsWith("costume_") ? "servant_costume_traits" : "servant_stage_traits");
     return [];
   }
 
   function getAllStageTraits(servantId, region) {
-    const useCn = region === "cn";
-    const table = useCn ? "servant_stage_traits_cn" : "servant_stage_traits";
-    const rows = sql.all(
-      `SELECT stage, trait FROM ${table} WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait`,
-      [servantId]
-    );
-    let result = {};
-    for (const r of rows) {
-      if (!result[r.stage]) result[r.stage] = [];
-      result[r.stage].push(r.trait);
-    }
-    if (useCn && !Object.keys(result).length) {
-      const fallbackRows = sql.all(
-        "SELECT stage, trait FROM servant_stage_traits WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait",
+    let sel = traitTables(region);
+    const read = (table) => {
+      const rows = sql.all(
+        `SELECT stage, trait FROM ${table} WHERE servant_id = ? AND trait <> 'unknown' ORDER BY stage, trait`,
         [servantId]
       );
-      result = {};
-      for (const r of fallbackRows) {
-        if (!result[r.stage]) result[r.stage] = [];
-        result[r.stage].push(r.trait);
+      const out = {};
+      for (const r of rows) {
+        if (!out[r.stage]) out[r.stage] = [];
+        out[r.stage].push(r.trait);
       }
+      return out;
+    };
+    let result;
+    try {
+      result = read(sel.stage);
+    } catch (err) {
+      if (region !== "pillar") throw err;
+      sel = traitTables("cn");
+      result = read(sel.stage);
     }
+    if (!Object.keys(result).length && sel.fallback) result = read("servant_stage_traits");
     return result;
   }
 

@@ -16,6 +16,7 @@
 // 退出码：0 = 全部通过（含 SKIP/XFAIL）；1 = 有 FAIL/ERROR
 import "../src/platformNode.ts";
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -1163,6 +1164,33 @@ async function main(): Promise<number> {
   }
   return 0;
 }
+
+// ---------------- 终章柱子战：特性读冻结表（2026-11-24） ----------------
+check(
+  "pillar_traits_frozen",
+  "柱子战：阶段/灵衣特性读 pillar_* 冻结表（国服快照 + 所罗门），不随数据更新",
+)(async () => {
+  const p = DB_CANDIDATES.find((x) => fs.existsSync(x));
+  if (!p) throw new Skip("本地没有 db/fgo_data.db 或 db/fgo_data.seed.db");
+  const db = new DatabaseSync(p, { readOnly: true });
+  try {
+    const n = db.prepare("SELECT COUNT(*) AS c FROM pillar_stage_traits").get()["c"];
+    if (!Number(n)) throw new Skip("本地库还没有 pillar_stage_traits（先跑一次界面或脚本建表）");
+  } catch (err) {
+    if (err instanceof Skip) throw err;
+    throw new Skip("本地库没有 pillar_stage_traits 表");
+  } finally {
+    db.close();
+  }
+  const jp = await loadContext(p, "jp", false);
+  const pillar = await loadContext(p, "jp", true);
+  const traitsOf = (ctx: DataContext, sid: number) => ctx.servants.get(sid)?.traits["fourth"] ?? new Set<string>();
+  // 104700 的灵衣国服还没上 ⇒ 日服带 hasCostume，柱子战（冻结的国服快照）不该带
+  if (!traitsOf(jp, 104700).has("hasCostume")) throw new Skip("本地数据里 104700 没有灵衣差异，跳过");
+  require_(!traitsOf(pillar, 104700).has("hasCostume"), "柱子战应按冻结的国服特性（不该有 hasCostume）");
+  // 所罗门国服表里没有 ⇒ 冻结表里从日服补进来的，特性不能是空
+  require_(Object.keys(pillar.servants.get(2801200)?.traits ?? {}).length > 0, "所罗门在冻结表里应有特性");
+});
 
 export { CHECKS };
 

@@ -287,7 +287,110 @@ function ensureSchema(db) {
   } catch (_) {
     // 列已存在
   }
+  ensurePillarTraits(db);
   ensureAccountSchema(db);
+}
+
+/**
+ * 终章柱子战的「冻结特性表」（2026-11-24）：
+ * 这张表对应终章那一次限时活动，**内容永久固定**——建成后不再随数据更新变化。
+ *
+ * 数据来源钉死在**随包种子库**（`db/fgo_data.seed.db`）里那份：构建时烤进去，
+ * 之后任何人、任何时间安装都拿到同一份，不会因为「用户本机国服表更新了」而变。
+ * 没有种子库（开发环境 / 老种子）时才从本机的国服表复制一份兜底。
+ */
+function pillarSeedPath(db) {
+  let file = null;
+  try {
+    if (typeof db.name === "string" && db.name) file = db.name; // better-sqlite3
+  } catch (_) {
+    /* ignore */
+  }
+  if (!file) {
+    try {
+      if (typeof db.location === "function") file = db.location(); // node:sqlite
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (!file) return null;
+  const seed = path.join(path.dirname(file), "fgo_data.seed.db");
+  return fs.existsSync(seed) ? seed : null;
+}
+
+function pillarTraitCount(db) {
+  try {
+    return Number(db.prepare("SELECT COUNT(*) AS c FROM pillar_stage_traits").get().c) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function ensurePillarTraits(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pillar_stage_traits (
+      servant_id INTEGER NOT NULL,
+      stage TEXT NOT NULL,
+      trait TEXT NOT NULL,
+      trait_id INTEGER,
+      PRIMARY KEY (servant_id, stage, trait)
+    );
+    CREATE TABLE IF NOT EXISTS pillar_costume_traits (
+      servant_id INTEGER NOT NULL,
+      costume_id INTEGER NOT NULL,
+      trait TEXT NOT NULL,
+      trait_id INTEGER,
+      PRIMARY KEY (servant_id, costume_id, trait)
+    );
+  `);
+  if (pillarTraitCount(db) > 0) return;
+
+  // ① 首选：从随包种子库整表搬过来（内容由构建时决定，永远一致）
+  const seed = pillarSeedPath(db);
+  if (seed) {
+    try {
+      db.exec(`ATTACH DATABASE '${seed.replace(/'/g, "''")}' AS pil_seed`);
+      try {
+        db.exec(
+          "INSERT OR IGNORE INTO pillar_stage_traits SELECT servant_id, stage, trait, trait_id FROM pil_seed.pillar_stage_traits",
+        );
+        db.exec(
+          "INSERT OR IGNORE INTO pillar_costume_traits SELECT servant_id, costume_id, trait, trait_id FROM pil_seed.pillar_costume_traits",
+        );
+      } finally {
+        db.exec("DETACH DATABASE pil_seed");
+      }
+    } catch (err) {
+      try {
+        console.warn(`柱子战冻结表：种子库不可用，改用本机国服表兜底（${(err && err.message) || err}）`);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (pillarTraitCount(db) > 0) return;
+  }
+
+  // ② 兜底：开发环境 / 老种子没有这张表 ⇒ 用本机国服表复制一份（国服表里没有的所罗门，从日服表补）
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO pillar_stage_traits
+        SELECT servant_id, stage, trait, trait_id FROM servant_stage_traits_cn;
+      INSERT OR IGNORE INTO pillar_stage_traits
+        SELECT servant_id, stage, trait, trait_id FROM servant_stage_traits
+        WHERE servant_id NOT IN (SELECT DISTINCT servant_id FROM pillar_stage_traits);
+      INSERT OR IGNORE INTO pillar_costume_traits
+        SELECT servant_id, costume_id, trait, trait_id FROM servant_costume_traits_cn;
+      INSERT OR IGNORE INTO pillar_costume_traits
+        SELECT servant_id, costume_id, trait, trait_id FROM servant_costume_traits
+        WHERE servant_id NOT IN (SELECT DISTINCT servant_id FROM pillar_costume_traits);
+    `);
+  } catch (err) {
+    try {
+      console.warn(`柱子战冻结特性表构建跳过：${(err && err.message) || err}`);
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

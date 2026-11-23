@@ -203,10 +203,37 @@ function loadAllServants(db: any): Map<number, ServantInfo> {
   return out;
 }
 
-function loadAllTraits(db: any, region = "jp"): Map<number, Record<string, Set<string>>> {
+function loadAllTraits(
+  db: any,
+  region = "jp",
+  pillar = false,
+): Map<number, Record<string, Set<string>>> {
+  // 终章柱子战：读「冻结表」（pillar_stage_traits / pillar_costume_traits）。
+  // 那张表是国服特性的一次性快照 + 所罗门（国服表里没有），入库后不再随数据更新变化。
+  if (pillar) {
+    try {
+      return loadTraitTables(db, "pillar_stage_traits", "pillar_costume_traits");
+    } catch {
+      // 老库还没有冻结表 ⇒ 退回按国服表算（行为与加这张表之前一致）
+      region = "cn";
+    }
+  }
   const useCn = region === "cn";
-  const stageTable = useCn ? "servant_stage_traits_cn" : "servant_stage_traits";
-  const costumeTable = useCn ? "servant_costume_traits_cn" : "servant_costume_traits";
+  return loadTraitTables(
+    db,
+    useCn ? "servant_stage_traits_cn" : "servant_stage_traits",
+    useCn ? "servant_costume_traits_cn" : "servant_costume_traits",
+    useCn,
+  );
+}
+
+/** 从两张特性表读成全量 Map；`fallbackToJp` 时国服缺行的从者整体回退日服 */
+function loadTraitTables(
+  db: any,
+  stageTable: string,
+  costumeTable: string,
+  fallbackToJp = false,
+): Map<number, Record<string, Set<string>>> {
   const out = new Map<number, Record<string, Set<string>>>();
   const push = (sid: number, key: string, trait: string) => {
     let rec = out.get(sid);
@@ -234,7 +261,7 @@ function loadAllTraits(db: any, region = "jp"): Map<number, Record<string, Set<s
   )) {
     push(Number(r["servant_id"]), `costume_${Number(r["costume_id"])}`, String(r["trait"]));
   }
-  if (useCn) {
+  if (fallbackToJp) {
     for (const r of allRows(
       db,
       "SELECT servant_id, stage, trait FROM servant_stage_traits WHERE trait <> 'unknown'",
@@ -391,11 +418,19 @@ const SYNTHETIC_OTHER: Synthetic[] = [
   [-5, 12, "其他礼装(5★)"],
 ];
 
-export async function loadContext(dbPath: string, region = "jp"): Promise<DataContext> {
+/**
+ * 载入计算上下文。
+ *
+ * `pillarMode`（终章柱子战）：阶段/灵衣特性改读**冻结表** `pillar_stage_traits` /
+ * `pillar_costume_traits`（国服特性的一次性快照 + 所罗门），不随数据更新变化。
+ * 服务器可用性（`serverRegion`）仍按请求来 —— 柱子战由界面传 `jp`，
+ * 这样国服「未实装」名单里的所罗门不会被剔掉。
+ */
+export async function loadContext(dbPath: string, region = "jp", pillarMode = false): Promise<DataContext> {
   const db = await openDatabase(dbPath);
   try {
     const servants = loadAllServants(db);
-    const traits = loadAllTraits(db, region);
+    const traits = loadAllTraits(db, region, pillarMode);
     for (const [sid, info] of servants) info.traits = traits.get(sid) ?? {};
     const crafts = loadAllCrafts(db);
     const unavailable = loadUnavailableServantIds(db, region);

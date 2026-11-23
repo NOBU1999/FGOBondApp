@@ -32,7 +32,7 @@ export async function runCalc(args: RunCalcArgs): Promise<Record<string, any>> {
   p.registerDbBytes(args.dbBytes);
   const req = parseRequest(args.request);
   // 区服要从**请求**里取：简中服要读 `*_cn` 特性表、并剔掉未实装从者（与桌面完全同口径）
-  const baseCtx = await loadContext("(host-provided)", req.server_region);
+  const baseCtx = await loadContext("(host-provided)", req.server_region, req.mode === "pillar");
   // 玛修那类"可调 Cost"的请求级覆盖（0/16）
   const ctx = withServantCostOverrides(baseCtx, costOverridesOf(req.box));
   const shouldCancel = args.shouldCancel ?? null;
