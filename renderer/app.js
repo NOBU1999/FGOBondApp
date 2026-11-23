@@ -146,6 +146,14 @@ const GENERIC_BOND_CRAFT_DEFS = [
   },
 ];
 
+// 终章柱子战：资源按"终章那会儿"的池子固定，不随服务器变（2026-11-24 用户定）。
+//   从者：包含所罗门（cn459）及之前；
+//   礼装：包含迦勒底之人（cn2509）及之前，通用系列只留「英灵肖像」「英灵逢魔」，不留「英灵极点」。
+// 注：通用5%（-10）是应用内的可重复 5% 替身，不属于「英灵极点」系列，保留。
+const PILLAR_MAX_SERVANT_COLLECTION = 459;
+const PILLAR_MAX_CRAFT_COLLECTION = 2509;
+const PILLAR_HIDDEN_GENERIC_CRAFT_IDS = [-22];
+
 // 常用 trait key -> 中文显示（先用本地 Chaldea 生成的完整映射，再用常用项覆盖成更简短的名称）
 const TRAIT_LABELS = Object.assign({}, window.TRAIT_NAMES || {}, {
   alignmentGood: "善",
@@ -504,8 +512,42 @@ const App = {
       if (this.serverRegion !== "cn") return new Set();
       return new Set((this.cnUnavailableServantIds || []).map(Number));
     },
-    /** 当前服务器下可见的从者（简中模式会隐藏简中服尚未实装的那些） */
+    /**
+     * 资源侧口径：柱子战不看服务器（资源由本页按「所罗门 / 迦勒底之人」裁面固定），
+     * 且要传 `jp` 给引擎——否则国服「未实装」名单里的所罗门会被剔掉。
+     */
+    effectiveServerRegion() {
+      return this.mode === "pillar" ? "jp" : this.serverRegion;
+    },
+    /**
+     * 特性侧口径：柱子战读那张**冻结的国服特性表**（`pillar`），
+     * 与数据更新脱钩；其余模式跟服务器走。
+     */
+    traitServerRegion() {
+      return this.mode === "pillar" ? "pillar" : this.serverRegion;
+    },
+    /**
+     * 柱子战要排除出自动计算的礼装 id：晚于「迦勒底之人」的牵绊礼装 + 通用英灵极点。
+     * 从者侧靠 visibleServants() 只给到所罗门为止，Box 里不会出现更晚的人。
+     */
+    pillarExcludedCraftIds() {
+      if (this.mode !== "pillar") return [];
+      const out = [];
+      for (const c of this.bondCrafts || []) {
+        if (Number(c.collectionNo ?? 0) > PILLAR_MAX_CRAFT_COLLECTION) out.push(Number(c.id));
+      }
+      for (const cid of PILLAR_HIDDEN_GENERIC_CRAFT_IDS) out.push(Number(cid));
+      return out;
+    },
+    /** 当前服务器下可见的从者（简中模式会隐藏简中服尚未实装的那些；柱子战只到所罗门） */
     visibleServants() {
+      if (this.mode === "pillar") {
+        return this.servants.filter(
+          (s) =>
+            Number(s.collectionNo ?? 0) > 0
+            && Number(s.collectionNo ?? 0) <= PILLAR_MAX_SERVANT_COLLECTION,
+        );
+      }
       const hidden = this.cnUnavailableServantSet;
       if (!hidden.size) return this.servants;
       return this.servants.filter((s) => !hidden.has(Number(s.id)));
@@ -531,19 +573,26 @@ const App = {
     meaningfulBondCrafts() {
       // 只保留有意义的牵绊礼装：排除活动限定、排除满破2.5%及以下、排除英灵逢魔系列；
       // 普通 5% 通用礼装合并为一个可重复的“通用5%”。
+      const pillar = this.mode === "pillar";
       const actual = this.bondCrafts.filter(
         (c) =>
           !c.isEventLimited &&
           (c.bonusValue || 0) > 0.025 &&
           !String(c.name || "").includes("英灵逢魔") &&
           !this.isGenericUniversal5Actual(c) &&
-          !this.isCnUnavailableCraft(c)
+          !this.isCnUnavailableCraft(c) &&
+          // 柱子战：礼装只到「迦勒底之人」为止
+          (!pillar || Number(c.collectionNo ?? 0) <= PILLAR_MAX_CRAFT_COLLECTION)
       );
       // 自定义牵绊礼装直接并入可选库，不再做 2.5% 门槛/合并通用5%处理
       const custom = this.enabledCustomBondCrafts.filter(
         (c) => c.id !== -10 && !this.isGenericUniversal5Actual(c)
       );
-      return [this.universal5Craft, ...actual, ...custom, ...this.genericBondCrafts];
+      // 柱子战：通用系列只给「英灵肖像」「英灵逢魔」，不给「英灵极点」
+      const generic = pillar
+        ? this.genericBondCrafts.filter((c) => !PILLAR_HIDDEN_GENERIC_CRAFT_IDS.includes(Number(c.id)))
+        : this.genericBondCrafts;
+      return [this.universal5Craft, ...actual, ...custom, ...generic];
     },
     otherCraftOptions() {
       const synthetic = [
@@ -958,7 +1007,8 @@ const App = {
     //   · 满绊人数按界面同一套标记重算（含「视为非满绊」开关）。
     /** 取/加载某从者的形态特性（每形态一组特性；库外不变） */
     async ensureServantForms(ids) {
-      const region = (this.info && this.info.serverRegion) || "jp";
+      // 柱子战读冻结的国服特性表（"pillar"），其余跟服务器
+      const region = this.traitServerRegion || (this.info && this.info.serverRegion) || "jp";
       const list = Array.from(new Set((ids || []).map(Number).filter((sid) => sid > 0)));
       const todo = list.filter((sid) => !(this.servantForms || {})[sid] && !(this.servantFormsLoading || {})[sid]);
       if (!todo.length) return;
@@ -2526,7 +2576,7 @@ const App = {
       if (!sid || !stage) return;
       this.servantAttr.loading = true;
       try {
-        const traits = await window.fgo.getStageTraits(sid, stage, this.serverRegion);
+        const traits = await window.fgo.getStageTraits(sid, stage, this.traitServerRegion);
         this.servantAttr.rows = (traits || []).map((t) => ({ label: t, active: false }));
       } catch (e) {
         this.servantAttr.rows = [];
@@ -3310,9 +3360,27 @@ const App = {
       this.mode = mode;
       this.results = [];
       this.currentPage = 1;
+      // 柱子战资源固定到「所罗门」为止：编成里已经放着的更晚从者要清掉，
+      // 否则它们会以固定位的形式被送进计算（换模式本来就重置结果，这里顺带收拾）。
+      if (mode === "pillar") this.dropOutOfPillarSlots();
       if (mode === "crown") this.crownClass = this.crownClass || "all";
       // 冠位类模式：名单里的从者按位置补默认冠位（右键已取消的会被重新勾上，属预期——切模式即重置一次）
       if (this.crownModeOn) this.applyRosterCrowns();
+    },
+    /** 柱子战：把编成里晚于「所罗门」的从者清掉（含助战位，位置结构不变） */
+    dropOutOfPillarSlots() {
+      for (const slot of this.slots || []) {
+        if (!slot || !slot.servantId) continue;
+        const s = (this.servantMap || {})[slot.servantId];
+        const cn = Number((s && s.collectionNo) ?? 0);
+        if (cn > PILLAR_MAX_SERVANT_COLLECTION) {
+          slot.servantId = null;
+          slot.craftId = null;
+          slot.secondCraftId = null;
+          slot.stage = null;
+          slot.isCrown = false;
+        }
+      }
     },
     /** 把冠位名单里的人所在的位置补成"冠位位"（不动助战位、不动空格） */
     applyRosterCrowns() {
@@ -3715,7 +3783,7 @@ const App = {
         const hits = await Promise.all(
           players.map(async (m) => {
             try {
-              const traits = await window.fgo.getStageTraits(m.servantId, m.stage || "fourth", this.serverRegion);
+              const traits = await window.fgo.getStageTraits(m.servantId, m.stage || "fourth", this.traitServerRegion);
               const eff = this.craftEffectOn(c, traits || []);
               if (!eff) return null;
               return {
@@ -3752,7 +3820,7 @@ const App = {
       };
       let traits = [];
       try {
-        traits = (await window.fgo.getStageTraits(member.servantId, member.stage || "fourth", this.serverRegion)) || [];
+        traits = (await window.fgo.getStageTraits(member.servantId, member.stage || "fourth", this.traitServerRegion)) || [];
         const active = this.activeTraitKeys(result, member, traits);
         this.resultInfo.rows = traits.map((t) => ({ label: t, active: active.has(t) }));
       } catch (e) {
@@ -4370,20 +4438,22 @@ const App = {
         }
       });
       const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
-      const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
+      const effectiveRegion = this.effectiveServerRegion || this.serverRegion || "jp";
+      const cnUnavailableCraftIds = (effectiveRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
       const genericNotParticipatingIds = this.genericBondCrafts
         .filter((c) => !this.isCraftParticipating(c))
         .map((c) => Number(c.id));
       const nonParticipatingIds = (Array.isArray(this.nonParticipatingCraftIds) ? this.nonParticipatingCraftIds : []).map(Number);
       // 玩家自由礼装位：手动排除 + 服务器未实装 + 右键设为“不参与自动”的礼装，全部排除。
       // 助战是“借别人”的：手动排除不生效；但服务器未实装、以及用户右键关闭自动参与的礼装仍不进入。
-      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
+      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds, ...(this.pillarExcludedCraftIds || [])];
       return {
         box,
         // 引擎只认两种 mode：柱子战与戴冠战在引擎里是同一条路径（都启用冠位第二礼装位），
         // 差别在 classGroup（柱子战不限职阶）与 mainStoryBondBonus（μ）
-        mode: this.crownModeOn ? "crown" : "normal",
-        serverRegion: this.serverRegion,
+        // 2026-11-24：柱子战单独标 "pillar"（引擎据此按国服特性 + 不做过期实装过滤），其余照旧
+        mode: this.mode === "pillar" ? "pillar" : (this.crownModeOn ? "crown" : "normal"),
+        serverRegion: effectiveRegion,
         classGroup: this.mode === "crown" && this.crownClass && this.crownClass !== "all" ? this.crownClass : null,
         crownPositions: this.crownModeOn ? crownPositions : [],
         // 冠位名单只做"保送进池"，不改变评分；普通模式不传（常规结果逐字节不变）
@@ -4401,7 +4471,7 @@ const App = {
         strategy: this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
         excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
-        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds])),
+        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds, ...(this.pillarExcludedCraftIds || [])])),
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
@@ -4445,16 +4515,17 @@ const App = {
         secondCraftId: presetCrownMode && preset.supportSecondCraftId !== undefined && preset.supportSecondCraftId !== null ? preset.supportSecondCraftId : null,
       };
       const manualExcludedCraftIds = (Array.isArray(this.excludedCrafts) ? this.excludedCrafts : []).map(Number);
-      const cnUnavailableCraftIds = (this.serverRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
+      const effectiveRegion = this.effectiveServerRegion || this.serverRegion || "jp";
+      const cnUnavailableCraftIds = (effectiveRegion === "cn" ? (this.cnUnavailableCraftIds || []) : []).map(Number);
       const genericNotParticipatingIds = this.genericBondCrafts
         .filter((c) => !this.isCraftParticipating(c))
         .map((c) => Number(c.id));
       const nonParticipatingIds = (Array.isArray(this.nonParticipatingCraftIds) ? this.nonParticipatingCraftIds : []).map(Number);
-      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds];
+      const supportExcludedCraftIds = [...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds, ...(this.pillarExcludedCraftIds || [])];
       return {
         box,
-        mode: presetCrownMode ? "crown" : "normal",
-        serverRegion: this.serverRegion,
+        mode: mode === "pillar" ? "pillar" : (presetCrownMode ? "crown" : "normal"),
+        serverRegion: effectiveRegion,
         classGroup: mode === "crown" && crownClass && crownClass !== "all" ? crownClass : null,
         crownPositions,
         crownServantIds: presetCrownMode ? (this.crownServantIds || []).map(Number) : [],
@@ -4469,7 +4540,7 @@ const App = {
         strategy: preset.strategy || this.strategy,
         targetServantId: this.strategy === "target_max" ? this.targetServantId : null,
         excludedServantIds: Array.from(new Set([...this.excludedServants, ...this.simpleExcludedServants].map(Number))),
-        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds])),
+        excludedCraftIds: Array.from(new Set([...manualExcludedCraftIds, ...cnUnavailableCraftIds, ...genericNotParticipatingIds, ...nonParticipatingIds, ...(this.pillarExcludedCraftIds || [])])),
         supportExcludedCraftIds: Array.from(new Set(supportExcludedCraftIds)),
         activityBonus: 0,
         teaBonus: 1,
@@ -5251,8 +5322,8 @@ const App = {
       <button :class="{ active: mode === 'pillar' }" @click="switchMode('pillar')">终章柱子战</button>
     </div>
 
-    <!-- 服务器选择 -->
-    <div class="server-switch">
+    <!-- 服务器选择（终章柱子战资源固定，不分服务器） -->
+    <div v-if="mode !== 'pillar'" class="server-switch">
       <span class="server-label">服务器</span>
       <button :class="{ active: serverRegion === 'jp' }" @click="setServerRegion('jp')">日服</button>
       <button :class="{ active: serverRegion === 'cn' }" @click="setServerRegion('cn')">简中服</button>
@@ -5284,6 +5355,10 @@ const App = {
     <div v-if="mode === 'pillar'" class="crown-filter panel pillar-panel">
       <div class="team-config-title">终章柱子战</div>
       <div class="pillar-list">
+        <div class="pillar-item">
+          <span class="pillar-label">可用资源</span>
+          <span class="pillar-value">从者到所罗门 · 礼装到迦勒底之人</span>
+        </div>
         <div class="pillar-item">
           <span class="pillar-label">玛修主线加成</span>
           <span class="pillar-value">队里有玛修时全队自动 +20%</span>
