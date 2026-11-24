@@ -284,6 +284,12 @@ function loadTraitTables(
       }
     }
   }
+  // 自身特性：Atlas 里 id 等于从者 id 的那条 trait（名字写作 unknown）。它在游戏里由职阶技能/被动付与，
+  // 不属于特性表的行，所以按从者 id 在这里统一补上；礼装条件用 `svt:<id>` 指向它
+  //（例：「カルデアの者」的 OR 组里就有 svt:2801200，所罗门靠単独顕現获得这个资格）。
+  for (const [sid, rec] of out) {
+    for (const key of Object.keys(rec)) rec[key].add(`svt:${sid}`);
+  }
   return out;
 }
 

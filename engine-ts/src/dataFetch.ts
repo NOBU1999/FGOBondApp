@@ -691,10 +691,19 @@ export function parseServant(servant: any): Record<string, any> | null {
 // ---------------------------------------------------------------------------
 export function conditionGroups(func: any): string[][] {
   const groups: string[][] = [];
+  // Atlas 里有些特性条目 name 写作 "unknown"（例如「自身特性」，id 等于从者 id）。它的 id 是有效的，
+  // 直接丢掉会让整组条件消失 —— 「カルデアの者」就靠这种组把所罗门算进效果对象。统一写成 svt:<id>。
+  const nameOf = (t: any): string | null => {
+    const name = t?.name;
+    if (name && name !== "unknown") return String(name);
+    if (t?.id != null && Number(t.id) > 0) return "svt:" + Number(t.id);
+    return null;
+  };
   const functvals = func?.functvals ?? [];
   if (functvals.length > 0) {
     for (const t of functvals) {
-      if (t?.name && t.name !== "unknown") groups.push([String(t.name)]);
+      const n = nameOf(t);
+      if (n) groups.push([n]);
     }
     return groups;
   }
@@ -703,7 +712,10 @@ export function conditionGroups(func: any): string[][] {
   for (const group of overwrite) {
     if (Array.isArray(group)) {
       const names: string[] = [];
-      for (const t of group) if (t?.name && t.name !== "unknown") names.push(String(t.name));
+      for (const t of group) {
+        const n = nameOf(t);
+        if (n) names.push(n);
+      }
       if (names.length > 0) groups.push(names);
     }
   }
