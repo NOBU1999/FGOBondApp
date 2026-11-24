@@ -3699,7 +3699,10 @@ const App = {
       this.currentPage = Math.min(Math.max(1, Number(p) || 1), this.totalPages);
     },
     traitLabel(key) {
-      return TRAIT_LABELS[key] || key;
+      // 自身特性（Atlas 里 id 等于从者 id、name 写作 unknown 的那条）在数据里记作 svt:<id>，别把 id 直接露给用户
+      const k = String(key == null ? "" : key);
+      if (k.startsWith("svt:")) return "自身特性";
+      return TRAIT_LABELS[k] || k;
     },
     traitGroupsText(c) {
       try {
