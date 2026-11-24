@@ -95,6 +95,15 @@ function prepareDatabase(destFile) {
       /* ignore */
     }
   }
+  // 记下「这份随包数据对应哪个程序版本」：与桌面种子库同一口径
+  // （判据见 platforms/android/web-host/boot.js 的 static_align_version；新装用户首次启动不必再重建一次库）
+  // ⚠️ 必须用不带构建日期的 PKG.version —— boot.js 的 currentAppVersion() 会剥掉 "+261125"
+  try {
+    db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES('static_align_version', ?)")
+      .run(String(PKG.version || ""));
+  } catch (_) {
+    /* 老库没有 app_meta 时忽略 */
+  }
   try {
     const seq = PERSONAL_TABLES.map((t) => `'${t}'`).join(",");
     db.prepare(`DELETE FROM sqlite_sequence WHERE name IN (${seq})`).run();

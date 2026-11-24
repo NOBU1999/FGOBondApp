@@ -30,6 +30,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
 // 用户数据表：发布包里必须为空
 const USER_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "user_crown_servants", "custom_crafts", "saved_results"];
@@ -211,6 +212,10 @@ try {
   // 静态数据指纹以"实际落盘的种子库"为准重算一遍，避免与开发库不一致
   db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES('static_revision', ?)")
     .run(staticDataRevision(db));
+  // 记下「这份种子库对应哪个程序版本」：新装用户首次启动就不再白重建一次库
+  // （判据见 main/runtime-db.js 与 platforms/android/web-host/boot.js 的 static_align_version）
+  db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES('static_align_version', ?)")
+    .run(String(PKG.version || ""));
   after = tableCounts(db, USER_TABLES);
 } finally {
   db.close();

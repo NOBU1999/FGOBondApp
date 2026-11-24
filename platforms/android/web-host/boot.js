@@ -620,6 +620,10 @@
   // 个人数据（账号 / Box / 排除 / 预设 / 自定义礼装）原样搬过去。
   // 版本以 app_meta.updated_at 为准（桌面端 main/runtime-db.js 用的是同一套判据）。
   const STATIC_VERSION_KEY = "updated_at";
+  // 程序版本变了就按包内数据对齐一次（与桌面 main/runtime-db.js 同一口径）：
+  // 「行数 + 更新时间」这两个信号对「只改一行里的值」失明，安卓又没有「更新数据」可以兜底，
+  // ⇒ 只能靠程序版本触发。本机日期更新（用户自己更新过）时仍然不动。
+  const ALIGN_VERSION_KEY = "static_align_version";
   const USER_META_KEYS = [
     "active_account_id",
     "server_region",
@@ -883,6 +887,7 @@
       runtimeRoot = new SQL.Database(persistBytes);
       const runtimeVersion = readMetaValue(runtimeRoot, STATIC_VERSION_KEY);
       const runtimeRevision = readMetaValue(runtimeRoot, "static_revision");
+      const runtimeAlign = readMetaValue(runtimeRoot, ALIGN_VERSION_KEY);
       packageDb = new SQL.Database(packageBytes);
       const packageVersion = readMetaValue(packageDb, STATIC_VERSION_KEY);
       const packageRevision = readMetaValue(packageDb, "static_revision");
@@ -900,6 +905,9 @@
         reason = "静态数据已更新（指纹不同）";
       } else if (packageRevision && !runtimeRevision) {
         reason = "本地库缺少静态数据指纹（旧版本库）";
+      } else if (currentAppVersion() && runtimeAlign !== currentAppVersion()) {
+        // 程序版本变了：按包内数据对齐一次。上面两条已经排除了「本机更新过」的情况
+        reason = "程序版本更新（" + (runtimeAlign || "旧版") + " -> " + currentAppVersion() + "）";
       } else if (!packageRevision && !packageVersion) {
         return { status: "keep", runtimeVersion, packageVersion };
       } else {
@@ -910,7 +918,7 @@
       const carried = carryUserTables(
         next,
         runtimeRoot,
-        ["accounts", "user_box", "user_exclusions", "user_crown_servants", "user_teams", "custom_crafts"]
+        ["accounts", "user_box", "user_exclusions", "user_crown_servants", "user_teams", "custom_crafts", "saved_results"]
       );
       for (const key of USER_META_KEYS) {
         const value = readMetaValue(runtimeRoot, key);
@@ -923,6 +931,17 @@
         } catch (_) {
           /* 该键不存在时忽略 */
         }
+      }
+
+      // 记下「已按哪个程序版本对齐过」：同版本再启动就不再重建
+      try {
+        next.exec(
+          "INSERT INTO main.app_meta(key, value) VALUES('" + ALIGN_VERSION_KEY + "', '" +
+            String(currentAppVersion()).replace(/'/g, "''") +
+            "') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        );
+      } catch (_) {
+        /* 写不进标记最多下次启动再对齐一次 */
       }
 
       const newBytes = next.export();

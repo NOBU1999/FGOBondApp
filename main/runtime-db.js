@@ -33,6 +33,25 @@ const NEW_NAME = "fgo_data.new.db";
 const BACKUP_DIR = "backup";
 const BACKUP_KEEP = 5;
 
+/**
+ * 程序版本：每装上一个新版本，启动时按包内数据对齐一次静态表。
+ *
+ * 为什么需要它：判断「包内静态数据是否比本机新」只看两个便宜信号 —— 各静态表的行数 + `updated_at`。
+ * 这个近似对「加行 / 换了数据日期」有效，但**只改某一行里的一个值**时两个信号都不变 ⇒ 随包的修正
+ * 永远进不了老用户的库（2026-11-25 所罗门那条礼装条件就是这样被漏掉的）。
+ * 逐行比内容在启动时太贵，所以改成：**程序版本变了就对齐一次**（同版本再启动直接跳过）；
+ * 用户自己用「更新数据」更新过（本机日期更新）时仍然不动，由上面那条 keep 分支拦住。
+ */
+const APP_VERSION = (() => {
+  try {
+    // 打包后 main/ 与 package.json 同在 app.asar 里，这里读得到
+    return String(require("../package.json").version || "");
+  } catch (_) {
+    return "";
+  }
+})();
+const ALIGN_VERSION_KEY = "static_align_version";
+
 // 需要从旧库搬到新库的个人数据表（顺序无关，都不带外键）
 const USER_TABLES = [
   "accounts",
@@ -264,6 +283,7 @@ function ensureRuntimeDb(dbDir) {
   const runtimeVersion = readMeta(runtime, "updated_at");
   const seedRevision = readMeta(seed, "static_revision");
   const runtimeRevision = readMeta(runtime, "static_revision");
+  const runtimeAlign = readMeta(runtime, ALIGN_VERSION_KEY);
   let reason = "";
 
   if (!seedVersion) {
@@ -287,6 +307,9 @@ function ensureRuntimeDb(dbDir) {
   } else if (!seedRevision && !sameContent(seed, runtime)) {
     // 种子库没有指纹（更老的构建）：退回内容比对
     reason = "种子库与运行库内容不同";
+  } else if (APP_VERSION && runtimeAlign !== APP_VERSION) {
+    // 程序版本变了：按包内数据对齐一次。上面几条已经排除了「用户自己更新过、本机更新」的情况
+    reason = `程序版本更新（${runtimeAlign || "旧版"} -> ${APP_VERSION}）`;
   } else {
     return { action: "keep" };
   }
@@ -336,6 +359,15 @@ function refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion, rea
       fs.rmSync(newPath, { force: true });
       log(`重建失败，保留原运行库：${err2.message}`);
       return { action: "failed", error: err2.message };
+    }
+  }
+
+  // 3.5) 记下「已按哪个程序版本对齐过」：同版本再启动就不再重建
+  if (APP_VERSION) {
+    try {
+      withDb(newPath, (db) => database.setMetaValue(db, ALIGN_VERSION_KEY, APP_VERSION));
+    } catch (err) {
+      log(`写入对齐标记失败（下次启动会再对齐一次）：${err.message}`);
     }
   }
 
