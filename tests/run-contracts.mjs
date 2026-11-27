@@ -12,13 +12,13 @@
  *   node tests/run-contracts.mjs --suite surface # 只跑接口清单一致性（不需要数据库）
  *   node tests/run-contracts.mjs --suite bridge  # 只跑领域层契约
  *   node tests/run-contracts.mjs --suite engine  # 只跑引擎协议
- *   node tests/run-contracts.mjs --db <库路径>    # 换数据库（默认 db/fgo_data.db）
+ *   node tests/run-contracts.mjs --db <库路径>    # 换数据库（默认 db/game.db）
  *   node tests/run-contracts.mjs --host <模块>    # 换宿主实现（默认 Windows：main/database.js）
  *      例如真正的桥接层： --host ./tests/hosts/windows-bridge-host.mjs
  *                          --host ./tests/hosts/android-bridge-host.mjs
  *
  * 前置：
- *   - 需要 db/fgo_data.db（静态数据）。缺库时对应套件会 SKIP，不会误报通过。
+ *   - 需要 db/game.db（静态数据）。缺库时对应套件会 SKIP，不会误报通过。
  *   - engine 套件会真的起一次引擎（`node engine-ts/src/main.ts --mode calculate`），约十几秒。
  *
  * 退出码：0 = 全部通过（含 SKIP）；1 = 有失败。
@@ -40,7 +40,7 @@ function argValue(flag, fallback) {
 }
 
 const SUITE = argValue("--suite", "all");
-const DB_ARG = argValue("--db", path.join(ROOT, "db", "fgo_data.db"));
+const DB_ARG = argValue("--db", path.join(ROOT, "db", "game.db"));
 const HOST_MODULE = argValue("--host", null);
 const TRANSPORT = argValue("--transport", "auto"); // auto | pipe | file
 const VERBOSE = args.includes("--verbose");
@@ -101,10 +101,25 @@ function describe(err) {
 function prepareTempDb() {
   mkdirSync(TMP_DIR, { recursive: true });
   const target = path.join(TMP_DIR, "bridge.db");
+  // 宿主契约跑的是「单文件」形态：静态部分取自随包 game.db，个人表在这里现建。
+  // （两个库分开读写的形态由 .temp/ 里的拆分 e2e 覆盖，见 NEXT-SESSION-NOTICE）
   for (const suffix of ["", "-wal", "-shm"]) {
     const dst = target + suffix;
     if (existsSync(dst)) rmSync(dst, { force: true });
     if (existsSync(DB_ARG + suffix)) copyFileSync(DB_ARG + suffix, dst);
+  }
+  // ⚠️ 不要留 game.db 在临时目录里：桌面宿主会把同名文件 ATTACH 上来当静态库
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const stale = path.join(TMP_DIR, "game.db" + suffix);
+    if (existsSync(stale)) rmSync(stale, { force: true });
+  }
+  // 个人表：game.db 里已经不建这些表了，测试用的库补上
+  const database = require(path.join(ROOT, "main", "database.js"));
+  const db = database.open(target, { attachGame: false });
+  try {
+    database.ensureSchema(db);
+  } finally {
+    db.close();
   }
   // 活动牵绊表（随包发布的那份）：放到运行库旁边，这样桌面/安卓宿主读到的都是真实那份
   const bonusSrc = path.join(path.dirname(DB_ARG), "event_bond_bonus.json");

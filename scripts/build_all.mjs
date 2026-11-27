@@ -28,7 +28,7 @@
  *                   versionCode = 10113*10000 + androidDataRevision（给系统看，只能一样或变大）
  *     仅刷新安卓数据（不动代码）→ 用 --android-data-refresh：版本号不动，只把 androidDataRevision +1
  *   - Windows 侧沿用既有流程：electron-builder --win dir → make_release_meta.py → 7z 打包
- *   - 种子库：打包前跑 scripts/make_seed.cjs —— 由开发库**复制一份再清空用户表**，
+ *   - 随包静态库：打包前跑 scripts/make_game_db.cjs —— 只从开发库复制静态表（个人数据不进包），
  *     绝不直接用开发库当种子库（v0.1.11 真实事故：包里带上了开发者的账号 / Box / 队伍）
  *   - 发出前自检：scripts/verify_package.cjs 检查便携目录与压缩包（种子库无个人数据、
  *     无 node_modules 构建垃圾、语言包已精简）
@@ -212,7 +212,7 @@ function ensureMissingAvatars() {
   }
   const python = process.env.PYTHON || "python";
   try {
-    run(python, [script, "--no-repack", "--db", path.join(ROOT, "db", "fgo_data.db")]);
+    run(python, [script, "--no-repack", "--db", path.join(ROOT, "db", "game.db")]);
   } catch (err) {
     log(`⚠️ 补齐头像失败（继续出包）：${err.message}`);
   }
@@ -335,10 +335,10 @@ function buildWindows() {
   if (!existsSync(tsBundle)) fatal("dist/engine-ts/worker.mjs 不存在 → 引擎构建失败，别继续打包");
   log(`引擎产物：worker.mjs ${humanSize(statSync(tsBundle).size)}`);
 
-  // 种子库：db/fgo_data.seed.db 是玩家首次运行时复制成运行库的模板，必须「复制一份再清空用户表」。
-  // 不能像以前那样直接把开发机工作库 db/fgo_data.db 当种子库（v0.1.11 真实事故：
-  // Windows 包里带上了开发者的 2 个账号 / 7 个从者 / 1 支队伍 / 4 条排除）。
-  npmRun("make:seed");
+  // 随包静态库：db/game.db（只含从者 / 礼装 / 特性 / 灵衣），由 make_game_db.cjs 从开发库生成。
+  // v0.3.8 起个人数据（账号 / Box / 预设…）在单独的 fgo_data.db 里，**根本不进包**
+  // —— v0.1.11 那种「包里带上开发者账号」的事故在结构上就不可能再发生。
+  npmRun("make:game-db");
 
   const electronBuilder = path.join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
   // 离线/加速兜底：electron 二进制默认从网上下（国内直连 github 会超时，已在 package.json 里
@@ -420,10 +420,10 @@ function buildWindows() {
     log("（本地没有 privacy_clean.py，跳过隐私检查）");
   }
 
-  // 打包前最后一道卫生：清掉种子库的 SQLite 旁路文件。
+  // 打包前最后一道卫生：清掉静态库的 SQLite 旁路文件。
   // 只读打开 WAL 模式的库也会生成 -wal/-shm，之前就被带进过发布包（自检会拦，但别让它有机会）。
   for (const suffix of ["-wal", "-shm", "-journal"]) {
-    rmSync(path.join(appDir, "db", `fgo_data.seed.db${suffix}`), { force: true });
+    rmSync(path.join(appDir, "db", `game.db${suffix}`), { force: true });
   }
 
   if (TEST_ONLY) {
@@ -599,7 +599,7 @@ if (!SKIP_WINDOWS) buildWindows();
 if (TEST_ONLY) {
   step("完成（测试模式）");
   console.log(`  测试目录已刷新：${path.relative(ROOT, path.join(RELEASE_DIR, "MyFGOApp"))}`);
-  console.log("  ⚠️ 记得把用户数据从备份恢复回 db\\fgo_data.db（出包会清那目录）");
+  console.log("  ⚠️ 出包只动 db/game.db；个人库 db\\fgo_data.db 不在包里，也没被清");
 } else if (artifacts.length) {
   const record = writeManifestAndNotes();
   step("完成");

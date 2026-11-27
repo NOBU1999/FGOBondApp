@@ -8,12 +8,12 @@
 
   ✅ dist/engine-ts/*                引擎（TS worker / web bundle / sql.js）
   ✅ data/*.json                     数据表（译名表、阶段特性补丁）
-  ✅ db/fgo_data.seed.db             种子库（新装/首次运行用）
+  ✅ db/game.db                    静态数据库（新装/覆盖安装都用它）
   ✅ db/event_bond_bonus.json        活动牵绊表
   ✅ resources/app.asar              界面 / 主进程（直接改写归档，不用重出包）
   ✅ 使用说明.txt / RELEASE_NOTES / 动态文案（有就同步）
 
-  ❌ db/fgo_data.db                  用户的运行库，**绝不覆盖**（装的是他自己的账号 / Box / 队伍）
+  ❌ db/fgo_data.db                  个人数据库，**绝不覆盖、也不进包**（账号 / Box / 预设都在这）
 
 用法
 ----
@@ -24,8 +24,8 @@
 注意
 ----
 - 同步完要**重启应用**（asar 与引擎都是启动时读取）。
-- 用户运行库里的静态数据由出包版 `main/runtime-db.js` 在启动时按 `static_revision` 自动刷新，
-  所以不必手工动 `fgo_data.db`。
+- v0.3.8 起两个库：静态数据在 `db/game.db`（这里同步），
+  个人数据在 `db/fgo_data.db`（永远不动；要从零开始就把它删掉）。
 - `app.asar` 是"解包 → 换文件 → 重打包"，先把原文件备份成 `app.asar.bak-<时间戳>`。
 """
 
@@ -84,7 +84,7 @@ def asar_sync_files() -> list:
 
 # 直接放在 MyFGOApp 下的文件（不进 asar）
 PLAIN_FILES = [
-    ("db/fgo_data.seed.db", "db/fgo_data.seed.db"),
+    ("db/game.db", "db/game.db"),
     ("db/event_bond_bonus.json", "db/event_bond_bonus.json"),
     ("使用说明.txt", "使用说明.txt"),
 ]
@@ -348,7 +348,7 @@ def main() -> int:
         for s in skipped:
             print("  -", s)
     print("=" * 60)
-    print("⚠️  你的运行库 db/fgo_data.db 没被动过（账号 / Box / 队伍都在）。")
+    print("⚠️  你的个人库 db/fgo_data.db 没被动过（账号 / Box / 预设都在）。")
     print("⚠️  同步完请**重启应用**；启动时它会按 static_revision 自动刷新静态数据，")
     print("    简中服的「未实装从者」名单也会一起生效。")
     return 0

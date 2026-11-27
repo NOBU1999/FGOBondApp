@@ -7,7 +7,7 @@ const { registerIpcHandlers, stopActiveEngine } = require("./ipc-handlers");
 const { buildMenu } = require("./menu");
 const database = require("./database");
 const { getDbPath } = require("./paths");
-const { ensureRuntimeDb } = require("./runtime-db");
+const { ensureDatabases } = require("./runtime-db");
 const { diagLog, diagLogPath } = require("./diag-log");
 
 const isDev = !app.isPackaged;
@@ -282,21 +282,23 @@ function initDatabase() {
 }
 
 /**
- * 运行库 / 种子库分离：发布包只带 db/fgo_data.seed.db，
- * 个人数据固定在 db/fgo_data.db（不在发布包内，直接覆盖文件夹不会丢）。
+ * 存储准备（v0.3.8 起两个库）：
+ *   db/game.db       静态数据，随包替换
+ *   db/fgo_data.db   个人数据，升级不碰
+ * 老版本的单库会在这里一次性拆开（备份留在 db/backup/）。
  */
 function prepareRuntimeDatabase() {
   try {
-    const result = ensureRuntimeDb(path.dirname(getDbPath()));
-    if (result && ["created", "refreshed"].includes(result.action)) {
-      console.log(
-        `[main] 运行库已就绪（${result.action}${result.from ? `: ${result.from} -> ${result.to}` : ""}）`
-      );
-    } else if (result && result.action === "failed") {
-      console.error("[main] 运行库刷新失败:", result.error);
+    const result = ensureDatabases(path.dirname(getDbPath()));
+    if (result && ["created", "migrated"].includes(result.action)) {
+      console.log(`[main] 存储已就绪（${result.action}）`);
+    } else if (result && result.action === "migrate-failed") {
+      console.error("[main] 老库拆分失败（个人数据在备份里）:", result.error);
+    } else if (result && result.action === "no-game") {
+      console.error("[main] 缺少 game.db：静态数据不可用");
     }
   } catch (err) {
-    console.error("[main] runtime db prepare error:", err.message);
+    console.error("[main] storage prepare error:", err.message);
   }
 }
 

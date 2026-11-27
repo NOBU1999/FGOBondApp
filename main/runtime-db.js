@@ -1,79 +1,38 @@
 "use strict";
 
 /**
- * 运行库 / 种子库分离（v0.1.10）
+ * 运行库准备：**只在启动时跑一次**（v0.3.8 起大幅简化）
  *
- * 背景
- * ----
- * 0.1.9 及以前：`db/fgo_data.db` 同时装着「静态数据」与「个人数据」，
- * 而这个文件又被直接打进发布包、落在运行时的同一个路径上。
- * 结果就是「解压覆盖到原文件夹」= 用一个空的用户表覆盖掉用户的 Box/账号。
+ * 现在的存储布局
+ * --------------
+ * - `db/game.db`      游戏静态数据，随包发布；装新版时整份替换（用户「更新数据」也会重写它）
+ * - `db/fgo_data.db`  个人数据，不进发布包；升级永远不碰它
  *
- * 现在的做法
- * --------
- * - 发布包只带 `db/fgo_data.seed.db`（纯静态数据，含空用户表）。
- * - 运行时始终使用 `db/fgo_data.db`，该文件永远不会出现在发布包里。
- * - 启动时：
- *     运行库不存在            -> 从种子复制一份（新用户 / 首次运行）
- *     种子比运行库新          -> 以种子为基底重建运行库，并把个人数据搬过去
- *     运行库比种子新          -> 不动（用户自己用「更新数据」更新过）
+ * 所以这里不再有「种子库版本比较 / 刷新 / 搬个人数据」那一整套逻辑 ——
+ * 静态数据由发布包直接覆盖（用户 2026-11-27 拍板的口径：包内的永远优先），
+ * 个人数据根本不在包里，也就无从被覆盖。
  *
- * 重建前会先 `VACUUM INTO` 备份旧库到 `db/backup/`，失败也不会破坏原库：
- * 整个替换过程只依赖两次同盘改名。
+ * 这里只剩两件事：
+ * 1. 个人库不存在 → 建一个空库（新用户／用户自己删了想从零开始）
+ * 2. 老版本（<=0.3.7）的单库 → 一次性拆开：静态表搬出去（没有随包库时用来生成 game.db），
+ *    个人库里删掉静态表，备份留在 `db/backup/`
  */
 
 const fs = require("fs");
-const crypto = require("crypto");
 const path = require("path");
 const database = require("./database");
+const {
+  GAME_DB_NAME,
+  LEGACY_SEED_NAME,
+  PERSONAL_DB_NAME,
+  STATIC_META_KEYS,
+  STATIC_TABLES,
+  USER_META_KEYS,
+  USER_TABLES,
+} = require("../shared/storage/schema.mjs");
 
-const RUNTIME_NAME = "fgo_data.db";
-const SEED_NAME = "fgo_data.seed.db";
-const NEW_NAME = "fgo_data.new.db";
 const BACKUP_DIR = "backup";
 const BACKUP_KEEP = 5;
-
-/**
- * 程序版本：每装上一个新版本，启动时按包内数据对齐一次静态表。
- *
- * 为什么需要它：判断「包内静态数据是否比本机新」只看两个便宜信号 —— 各静态表的行数 + `updated_at`。
- * 这个近似对「加行 / 换了数据日期」有效，但**只改某一行里的一个值**时两个信号都不变 ⇒ 随包的修正
- * 永远进不了老用户的库（2026-11-25 所罗门那条礼装条件就是这样被漏掉的）。
- * 逐行比内容在启动时太贵，所以改成：**程序版本变了就对齐一次**（同版本再启动直接跳过）；
- * 用户自己用「更新数据」更新过（本机日期更新）时仍然不动，由上面那条 keep 分支拦住。
- */
-const APP_VERSION = (() => {
-  try {
-    // 打包后 main/ 与 package.json 同在 app.asar 里，这里读得到
-    return String(require("../package.json").version || "");
-  } catch (_) {
-    return "";
-  }
-})();
-const ALIGN_VERSION_KEY = "static_align_version";
-
-// 需要从旧库搬到新库的个人数据表（顺序无关，都不带外键）
-const USER_TABLES = [
-  "accounts",
-  "user_box",
-  "user_exclusions",
-  // 冠位名单（终章柱子战）：漏搬 = 更新数据后名单清零，且不报错 —— 与 saved_results 同一类坑
-  "user_crown_servants",
-  "user_teams",
-  // ⚠️ 必须搬：预设的「保存结果」（user_teams.result_id 指着它）。
-  // 2026-10-24 修：漏了这张表 ⇒ 每次更新数据都把已存的结果整表丢掉，预设却还指着旧 id，
-  // 表现就是"加载预设时有的结果加载不出来"。
-  "saved_results",
-  "custom_crafts",
-];
-
-// app_meta 里属于「用户偏好」的键：静态数据刷新时保留旧库的值
-const USER_META_KEYS = [
-  "active_account_id",
-  "server_region",
-  "generic_bond_participation",
-  "non_participating_craft_ids",
-];
 
 function log(message) {
   console.log(`[runtime-db] ${message}`);
@@ -81,10 +40,6 @@ function log(message) {
 
 function quoteSql(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function quoteIdent(name) {
-  return `"${String(name).replace(/"/g, '""')}"`;
 }
 
 function timestamp(date) {
@@ -96,132 +51,37 @@ function timestamp(date) {
   );
 }
 
-function safeName(value) {
-  const clean = String(value || "").replace(/[^0-9A-Za-z_-]/g, "");
-  return clean.slice(0, 24) || "unknown";
-}
-
-/** 同名文件已存在时追加序号，避免同一秒内的备份互相覆盖 */
-function uniquePath(base) {
-  if (!fs.existsSync(base)) return base;
-  const dir = path.dirname(base);
-  const ext = path.extname(base);
-  const stem = path.basename(base, ext);
-  for (let i = 2; i < 100; i += 1) {
-    const candidate = path.join(dir, `${stem}-${i}${ext}`);
-    if (!fs.existsSync(candidate)) return candidate;
-  }
-  return path.join(dir, `${stem}-${Date.now()}${ext}`);
-}
-
-function withDb(dbPath, fn) {
-  const db = database.open(dbPath);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
-}
-
-function readMeta(dbPath, key) {
-  try {
-    return withDb(dbPath, (db) => database.getMetaValue(db, key) || "");
-  } catch (_) {
-    return "";
-  }
-}
-
 function removeSidecars(dbPath) {
   for (const suffix of ["-wal", "-shm"]) {
-    fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    try {
+      fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    } catch (_) {
+      /* 删不掉不影响主流程 */
+    }
   }
 }
 
-/** 用 SQLite 自己的备份通道复制数据库（自动处理 WAL），目标文件必须不存在 */
+/** 用 SQLite 自己的备份通道复制（会自动把 WAL 合并进去） */
 function copyDatabase(src, dst) {
   fs.rmSync(dst, { force: true });
-  withDb(src, (db) => {
-    db.exec(`VACUUM INTO ${quoteSql(dst)}`);
-  });
-}
-
-/**
- * 取表的列名。
- * 注意：`PRAGMA table_info(old.x)` 是非法语法（会静默返回空），
- * 必须用表值函数 `pragma_table_info(表, 库)`。
- */
-function tableColumns(db, table, schema) {
+  const db = database.open(src, { attachGame: false });
   try {
-    const rows = schema
-      ? db.prepare("SELECT name FROM pragma_table_info(?, ?)").all(table, schema)
-      : db.prepare("SELECT name FROM pragma_table_info(?)").all(table);
-    return rows.map((r) => String(r.name));
-  } catch (_) {
-    return [];
+    db.exec(`VACUUM INTO ${quoteSql(dst)}`);
+  } finally {
+    db.close();
   }
 }
 
-function tableExists(db, table, schema) {
-  const prefix = schema ? `${schema}.` : "";
-  const row = db
-    .prepare(`SELECT name FROM ${prefix}sqlite_master WHERE type = 'table' AND name = ?`)
-    .get(table);
-  return !!row;
-}
-
-/** 把旧库的个人数据搬到新库（列取交集，兼容旧版本缺列） */
-function carryUserData(targetPath, sourcePath) {
-  const db = database.open(targetPath);
+function tableNames(db) {
   try {
-    database.ensureSchema(db);
-    db.exec(`ATTACH DATABASE ${quoteSql(sourcePath)} AS old`);
-    try {
-      db.exec("PRAGMA foreign_keys = OFF");
-      for (const table of USER_TABLES) {
-        if (!tableExists(db, table, "old")) continue;
-        const targetCols = tableColumns(db, table);
-        const sourceCols = tableColumns(db, table, "old");
-        const shared = targetCols.filter((c) => sourceCols.includes(c));
-        if (!shared.length) continue;
-        const cols = shared.map(quoteIdent).join(", ");
-        db.exec("BEGIN");
-        try {
-          db.exec(`DELETE FROM main.${quoteIdent(table)}`);
-          db.exec(
-            `INSERT INTO main.${quoteIdent(table)} (${cols}) SELECT ${cols} FROM old.${quoteIdent(table)}`
-          );
-          db.exec("COMMIT");
-        } catch (err) {
-          db.exec("ROLLBACK");
-          throw err;
-        }
-      }
-      // 保留旧库的用户偏好（静态数据相关 meta 以种子为准）
-      for (const key of USER_META_KEYS) {
-        const row = db.prepare("SELECT value FROM old.app_meta WHERE key = ?").get(key);
-        if (row && row.value !== undefined && row.value !== null) {
-          database.setMetaValue(db, key, row.value);
-        }
-      }
-    } finally {
-      db.exec("DETACH DATABASE old");
-    }
-    // 修正 AUTOINCREMENT 序列，避免搬运后新插入的 id 冲突
-    try {
-      for (const table of USER_TABLES) {
-        const row = db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM ${quoteIdent(table)}`).get();
-        db.prepare("DELETE FROM sqlite_sequence WHERE name = ?").run(table);
-        db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)").run(
-          table,
-          Number((row && row.m) || 0)
-        );
-      }
-    } catch (_) {
-      // sqlite_sequence 不存在（没有 AUTOINCREMENT 表）时忽略
-    }
-    db.exec("PRAGMA foreign_keys = ON");
-  } finally {
-    db.close();
+    return new Set(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all()
+        .map((r) => String(r.name))
+    );
+  } catch (_) {
+    return new Set();
   }
 }
 
@@ -236,191 +96,185 @@ function pruneBackups(backupDir) {
       fs.rmSync(path.join(backupDir, name), { force: true });
     }
   } catch (_) {
-    // 清理失败不影响主流程
+    /* 清理失败不影响主流程 */
   }
 }
 
-/**
- * 两份数据库内容是否一致（先比大小，再比 sha256）。
- * 用途：`updated_at` 相同时判断"种子库是否真的和运行库一样"，
- * 一样就不刷新（避免每次启动都白重建一遍）。
- */
-function sameContent(a, b) {
+/** 新用户 / 个人库被删：建一个只有个人表的空库 */
+function createPersonalDb(personalPath) {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    fs.rmSync(`${personalPath}${suffix}`, { force: true });
+  }
+  fs.mkdirSync(path.dirname(personalPath), { recursive: true });
+  const db = database.open(personalPath, { attachGame: false });
   try {
-    const sa = fs.statSync(a);
-    const sb = fs.statSync(b);
-    if (sa.size !== sb.size) return false;
-    const ha = crypto.createHash("sha256").update(fs.readFileSync(a)).digest("hex");
-    const hb = crypto.createHash("sha256").update(fs.readFileSync(b)).digest("hex");
-    return ha === hb;
-  } catch (_) {
-    return false;
+    database.ensureSchema(db);
+  } finally {
+    db.close();
   }
 }
 
 /**
- * 确保运行库可用；返回 { action } 便于日志与测试。
- * action: no-seed | created | keep | refreshed | failed
+ * 没有随包 `game.db` 时（开发环境），用老单库里的静态数据切一份出来。
+ * 只复制静态表、只保留静态 meta 键。
  */
-function ensureRuntimeDb(dbDir) {
-  const runtime = path.join(dbDir, RUNTIME_NAME);
-  const seed = path.join(dbDir, SEED_NAME);
-  if (!fs.existsSync(seed)) return { action: "no-seed" };
-
-  // 首次运行：直接从种子复制
-  if (!fs.existsSync(runtime)) {
+function extractGameDbFromLegacy(legacySnapshot, gamePath) {
+  const tmp = `${gamePath}.tmp`;
+  fs.rmSync(tmp, { force: true });
+  copyDatabase(legacySnapshot, tmp);
+  const db = database.open(tmp, { attachGame: false });
+  try {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("BEGIN");
     try {
-      copyDatabase(seed, runtime);
-      log(`首次运行：已从 ${SEED_NAME} 创建运行库`);
-      return { action: "created", runtime };
+      for (const table of USER_TABLES) {
+        try {
+          db.exec(`DELETE FROM "${table}"`);
+        } catch (_) {
+          /* 老库里没有这张表 */
+        }
+      }
+      const placeholders = USER_META_KEYS.map(() => "?").join(", ");
+      try {
+        db.prepare(`DELETE FROM app_meta WHERE key IN (${placeholders})`).run(...USER_META_KEYS);
+      } catch (_) {
+        /* 没有 app_meta 就算了 */
+      }
+      db.exec("COMMIT");
     } catch (err) {
-      log(`创建运行库失败：${err.message}`);
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    // 静态库用 DELETE 日志模式：主进程会长期 ATTACH 它，WAL 会白留两个旁路文件
+    try {
+      db.exec("PRAGMA journal_mode = DELETE");
+    } catch (_) {
+      /* ignore */
+    }
+    db.exec("VACUUM");
+  } finally {
+    db.close();
+  }
+  fs.rmSync(gamePath, { force: true });
+  fs.renameSync(tmp, gamePath);
+  removeSidecars(gamePath);
+}
+
+/**
+ * 一次性迁移：把老单库（静态 + 个人混在一起）拆开。
+ * 先备份整份老库，再删个人库里的静态表与静态 meta 键（DDL/DML 都在一个事务里）。
+ */
+function migrateLegacyLayout({ personalPath, gamePath, backupDir }) {
+  fs.mkdirSync(backupDir, { recursive: true });
+  const snapshot = path.join(backupDir, `fgo_data-${timestamp()}-before-split.db`);
+  copyDatabase(personalPath, snapshot);
+  log(`已备份老运行库：${path.basename(snapshot)}`);
+
+  if (!fs.existsSync(gamePath)) {
+    try {
+      extractGameDbFromLegacy(snapshot, gamePath);
+      log(`已从老运行库切出静态数据：${GAME_DB_NAME}（没有随包库时才会走到这一步）`);
+    } catch (err) {
+      log(`切出 ${GAME_DB_NAME} 失败（先不动个人库）：${err.message}`);
+      return { action: "migrate-failed", error: err.message, backup: snapshot };
+    }
+  }
+
+  const db = database.open(personalPath, { attachGame: false });
+  try {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("BEGIN");
+    try {
+      for (const table of STATIC_TABLES) {
+        db.exec(`DROP TABLE IF EXISTS "${table}"`);
+      }
+      const placeholders = STATIC_META_KEYS.map(() => "?").join(", ");
+      try {
+        db.prepare(`DELETE FROM app_meta WHERE key IN (${placeholders})`).run(...STATIC_META_KEYS);
+      } catch (_) {
+        /* 没有 app_meta 就跳过 */
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    try {
+      db.exec("VACUUM");
+    } catch (_) {
+      /* 磁盘紧张时 VACUUM 可能失败，不影响正确性 */
+    }
+  } catch (err) {
+    log(`拆分个人库失败（数据仍在备份里）：${err.message}`);
+    return { action: "migrate-failed", error: err.message, backup: snapshot };
+  } finally {
+    db.close();
+  }
+
+  pruneBackups(backupDir);
+  log(`个人库已精简：静态表交给 ${GAME_DB_NAME}，Box / 账号 / 预设原样保留`);
+  return { action: "migrated", backup: snapshot, personal: personalPath, game: gamePath };
+}
+
+/**
+ * 确保两个库可用；返回 { action } 便于日志与测试。
+ * action: created | keep | migrated | migrate-failed | no-game
+ */
+function ensureDatabases(dbDir) {
+  const personalPath = path.join(dbDir, PERSONAL_DB_NAME);
+  const gamePath = path.join(dbDir, GAME_DB_NAME);
+  const backupDir = path.join(dbDir, BACKUP_DIR);
+  const hasGame = fs.existsSync(gamePath);
+
+  // ① 个人库不存在：新用户，直接建空库
+  if (!fs.existsSync(personalPath)) {
+    try {
+      createPersonalDb(personalPath);
+      log(`首次运行：已创建个人数据库 ${PERSONAL_DB_NAME}`);
+      log(hasGame ? `静态数据：${GAME_DB_NAME}` : `⚠️ 缺少 ${GAME_DB_NAME}（发布包应带着它）`);
+      return { action: "created", personal: personalPath, game: gamePath };
+    } catch (err) {
+      log(`创建个人数据库失败：${err.message}`);
       return { action: "failed", error: err.message };
     }
   }
 
-  const seedVersion = readMeta(seed, "updated_at");
-  const runtimeVersion = readMeta(runtime, "updated_at");
-  const seedRevision = readMeta(seed, "static_revision");
-  const runtimeRevision = readMeta(runtime, "static_revision");
-  const runtimeAlign = readMeta(runtime, ALIGN_VERSION_KEY);
-  let reason = "";
-
-  if (!seedVersion) {
-    // 种子库没有版本号：只能靠内容比对（没变化就保持）
-    if (sameContent(seed, runtime)) return { action: "keep" };
-    reason = "种子库无版本号且内容不同";
-  } else if (!runtimeVersion) {
-    reason = "运行库无版本号";
-  } else if (seedVersion > runtimeVersion) {
-    reason = "种子库版本更新";
-  } else if (seedVersion < runtimeVersion) {
-    // 用户自己更新过数据（运行库更新）→ 不回退
-    return { action: "keep" };
-  } else if (seedRevision && runtimeRevision && seedRevision !== runtimeRevision) {
-    // 版本号相同但静态数据指纹不同：
-    // 踩过 —— 只补静态数据内容（如新增 app_meta 键、补数据表）而没动 updated_at，
-    // 结果随包的新数据永远刷不进去（简中服未实装名单就是这么没生效的）。
-    reason = "静态数据已更新（指纹不同）";
-  } else if (seedRevision && !runtimeRevision) {
-    reason = "运行库缺少静态数据指纹（旧版本库）";
-  } else if (!seedRevision && !sameContent(seed, runtime)) {
-    // 种子库没有指纹（更老的构建）：退回内容比对
-    reason = "种子库与运行库内容不同";
-  } else if (APP_VERSION && runtimeAlign !== APP_VERSION) {
-    // 程序版本变了：按包内数据对齐一次。上面几条已经排除了「用户自己更新过、本机更新」的情况
-    reason = `程序版本更新（${runtimeAlign || "旧版"} -> ${APP_VERSION}）`;
-  } else {
-    return { action: "keep" };
-  }
-
-  log(`刷新运行库：${reason}`);
-  return refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion, reason });
-}
-
-function refreshRuntime({ dbDir, runtime, seed, seedVersion, runtimeVersion, reason = "" }) {
-  const newPath = path.join(dbDir, NEW_NAME);
-  const backupDir = path.join(dbDir, BACKUP_DIR);
-  let backupPath = "";
-  let carryOk = true;
-
-  // 1) 先备份旧库（失败也继续，但会记录）
+  // ② 老单库：个人库里还有静态表 → 拆开
+  let tables = new Set();
   try {
-    fs.mkdirSync(backupDir, { recursive: true });
-    backupPath = uniquePath(
-      path.join(backupDir, `fgo_data-${safeName(runtimeVersion)}-${timestamp()}.db`)
-    );
-    copyDatabase(runtime, backupPath);
-    log(`已备份旧运行库：${path.basename(backupPath)}`);
-  } catch (err) {
-    backupPath = "";
-    log(`备份旧运行库失败（继续刷新）：${err.message}`);
-  }
-
-  // 2) 以种子为基底建新库
-  try {
-    copyDatabase(seed, newPath);
-  } catch (err) {
-    log(`生成新运行库失败，已放弃刷新：${err.message}`);
-    fs.rmSync(newPath, { force: true });
-    return { action: "failed", error: err.message };
-  }
-
-  // 3) 把个人数据搬过去（失败则退回“纯种子库”，不让旧库/新库都不可用）
-  try {
-    carryUserData(newPath, runtime);
-    log(`已搬移个人数据（账号 / Box / 排除 / 预设 / 自定义礼装）`);
-  } catch (err) {
-    carryOk = false;
-    log(`搬移个人数据失败，改用未含个人数据的种子库：${err.message}`);
+    const probe = database.open(personalPath, { attachGame: false });
     try {
-      copyDatabase(seed, newPath);
-    } catch (err2) {
-      fs.rmSync(newPath, { force: true });
-      log(`重建失败，保留原运行库：${err2.message}`);
-      return { action: "failed", error: err2.message };
-    }
-  }
-
-  // 3.5) 记下「已按哪个程序版本对齐过」：同版本再启动就不再重建
-  if (APP_VERSION) {
-    try {
-      withDb(newPath, (db) => database.setMetaValue(db, ALIGN_VERSION_KEY, APP_VERSION));
-    } catch (err) {
-      log(`写入对齐标记失败（下次启动会再对齐一次）：${err.message}`);
-    }
-  }
-
-  // 4) 同盘两次改名完成替换；失败则改名回滚
-  const oldPath = `${runtime}.old`;
-  try {
-    fs.rmSync(oldPath, { force: true });
-    removeSidecars(runtime);
-    fs.renameSync(runtime, oldPath);
-    try {
-      fs.renameSync(newPath, runtime);
-    } catch (err) {
-      fs.renameSync(oldPath, runtime);
-      throw err;
-    }
-    if (carryOk) {
-      fs.rmSync(oldPath, { force: true });
-    } else if (backupPath) {
-      fs.rmSync(backupPath, { force: true });
-      backupPath = "";
-    } else {
-      // 没有备份时把旧库留作隔离文件，方便人工抢救
-      const quarantine = path.join(backupDir, `fgo_data-failed-${timestamp()}.db`);
-      try {
-        fs.renameSync(oldPath, quarantine);
-        log(`旧运行库已隔离：${path.basename(quarantine)}`);
-      } catch (_) {
-        fs.rmSync(oldPath, { force: true });
-      }
+      tables = tableNames(probe);
+    } finally {
+      probe.close();
     }
   } catch (err) {
-    fs.rmSync(newPath, { force: true });
-    log(`替换运行库失败，原库未受影响：${err.message}`);
-    return { action: "failed", error: err.message };
+    log(`个人数据库打不开：${err.message}（已隔离到 backup/，将重建空库）`);
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.renameSync(personalPath, path.join(backupDir, `fgo_data-corrupt-${timestamp()}.db`));
+    } catch (_) {
+      /* 挪不动就留在原地，下面重建会失败并如实报错 */
+    }
+    return ensureDatabases(dbDir);
   }
 
-  pruneBackups(backupDir);
-  log(`静态数据已刷新：${runtimeVersion || "(空)"} -> ${seedVersion}${reason ? `（${reason}）` : ""}`);
-  return {
-    action: "refreshed",
-    runtime,
-    backup: backupPath,
-    carryOk,
-    from: runtimeVersion,
-    to: seedVersion,
-  };
+  const legacy = STATIC_TABLES.some((t) => tables.has(t));
+  if (legacy) {
+    return migrateLegacyLayout({ personalPath, gamePath, backupDir });
+  }
+
+  if (!hasGame) {
+    log(`⚠️ 缺少 ${GAME_DB_NAME}：静态数据界面会是空的（请重新安装完整包，或在菜单里「更新数据」）`);
+    return { action: "no-game", personal: personalPath, game: gamePath };
+  }
+  return { action: "keep", personal: personalPath, game: gamePath };
 }
 
 module.exports = {
-  ensureRuntimeDb,
-  RUNTIME_NAME,
-  SEED_NAME,
+  ensureDatabases,
   BACKUP_DIR,
-  USER_TABLES,
-  USER_META_KEYS,
+  LEGACY_SEED_NAME,
+  PERSONAL_DB_NAME,
+  GAME_DB_NAME,
 };

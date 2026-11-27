@@ -50,7 +50,8 @@ export const dataCfg: DataConfig = {
   rawCacheDir: path.resolve(HERE, "..", "..", ".cache", "raw"),
   dbPath: process.env.FGO_DB_PATH
     ? process.env.FGO_DB_PATH
-    : path.resolve(HERE, "..", "..", "db", "fgo_data.db"),
+    : // v0.3.8 起静态数据在独立的 game.db（个人数据 fgo_data.db 不参与读写）
+      path.resolve(HERE, "..", "..", "db", "game.db"),
   netEnabled: true,
 };
 

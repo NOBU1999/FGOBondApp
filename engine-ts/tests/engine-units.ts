@@ -6,7 +6,7 @@
 //
 // 写法约定（与 Python 版一致）：
 //  · 只断言**不变量**（"上界必须 ≥ 实际分"这种），不把"当前行为"钉死；
-//  · 需要静态库（db/fgo_data.db 或 db/fgo_data.seed.db）的检查，找不到就 SKIP；
+//  · 需要静态库（db/game.db；老布局是 db/fgo_data.db）的检查，找不到就 SKIP；
 //  · 已知不成立但本轮不修的标 knownBroken ⇒ 报 XFAIL。
 //
 // 跑法：
@@ -77,7 +77,9 @@ function require_(cond: any, msg: string): void {
 }
 
 // ---------------- 公共夹具 ----------------
+// v0.3.8 起静态数据在 db/game.db；后面两个是兼容老布局（单库时代）的退路
 const DB_CANDIDATES = [
+  path.join(APP_ROOT, "db", "game.db"),
   path.join(APP_ROOT, "db", "fgo_data.db"),
   path.join(APP_ROOT, "db", "fgo_data.seed.db"),
 ];
@@ -91,7 +93,7 @@ async function loadCtx(): Promise<DataContext> {
       return CTX;
     }
   }
-  throw new Skip("本地没有 db/fgo_data.db 或 db/fgo_data.seed.db");
+  throw new Skip("本地没有 db/game.db（或老布局的 fgo_data.db）");
 }
 
 function parseReq(over: Record<string, any> = {}): CalculationRequest {
@@ -1171,7 +1173,7 @@ check(
   "柱子战：阶段/灵衣特性读 pillar_* 冻结表（国服快照 + 所罗门），不随数据更新",
 )(async () => {
   const p = DB_CANDIDATES.find((x) => fs.existsSync(x));
-  if (!p) throw new Skip("本地没有 db/fgo_data.db 或 db/fgo_data.seed.db");
+  if (!p) throw new Skip("本地没有 db/game.db（或老布局的 fgo_data.db）");
   const db = new DatabaseSync(p, { readOnly: true });
   try {
     const n = db.prepare("SELECT COUNT(*) AS c FROM pillar_stage_traits").get()["c"];

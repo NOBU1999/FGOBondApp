@@ -90,42 +90,11 @@ CREATE TABLE IF NOT EXISTS crafts (
     is_event_limited INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS user_box (
-    servant_id INTEGER PRIMARY KEY,
-    stage TEXT DEFAULT 'fourth',
-    is_max_bond INTEGER DEFAULT 0,
-    bond_switch1 INTEGER DEFAULT 1,
-    bond_switch2 INTEGER DEFAULT 0,
-    personal_bonus REAL DEFAULT 0,
-    aura_bonus REAL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS user_teams (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    fixed_servants TEXT,
-    fixed_crafts TEXT,
-    support_id INTEGER,
-    support_craft_id INTEGER,
-    cost_limit INTEGER DEFAULT 114,
-    strategy TEXT DEFAULT 'total_max',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS custom_crafts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    craft_type TEXT NOT NULL DEFAULT 'bond',
-    cost INTEGER NOT NULL DEFAULT 0,
-    rarity INTEGER NOT NULL DEFAULT 0,
-    percent_bonus REAL NOT NULL DEFAULT 0,
-    flat_bonus REAL NOT NULL DEFAULT 0,
-    condition_groups_json TEXT NOT NULL DEFAULT '[]',
-    repeatable INTEGER NOT NULL DEFAULT 0,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+-- v0.3.8：个人表（user_box / user_teams / custom_crafts）不再建在这里 ——
+-- 这个库是静态数据 game.db，只装从者 / 礼装 / 特性 / 灵衣 / app_meta。
+-- 个人表的结构在 shared/storage/schema.mjs（桌面 main/database.js 与安卓 boot.js 共用）。
 `;
+
 
 export const STAGES = ["initial", "first", "second", "third", "fourth"] as const;
 export const SCHEMA_VERSION = 1;
@@ -179,11 +148,6 @@ export function initDb(db: any, schemaVersion = SCHEMA_VERSION): void {
   // 轻量迁移：给已存在库补列（列已存在时 sqlite 报错，忽略即可）
   try {
     db.run("ALTER TABLE crafts ADD COLUMN is_event_limited INTEGER NOT NULL DEFAULT 0");
-  } catch {
-    /* 列已存在 */
-  }
-  try {
-    db.run("ALTER TABLE user_box ADD COLUMN aura_bonus REAL DEFAULT 0");
   } catch {
     /* 列已存在 */
   }

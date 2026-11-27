@@ -2,7 +2,7 @@
 """按需获取缺失的“第一再临头像”。
 
 规则：
-- 以便携版数据库 `release/MyFGOApp/db/fgo_data.db` 的 servants.id 为准；
+- 以便携版静态库 `release/MyFGOApp/db/game.db` 的 servants.id 为准；
 - 头像文件应存在于 `renderer/assets/servantface/{id}.png`
   和 `release/app-staging/renderer/assets/servantface/{id}.png`；
 - 只下载缺失的 id，URL 为 Atlas CN Faces 第一再临：
@@ -11,7 +11,7 @@
 
 用法：
     python scripts/fetch_missing_avatars.py
-    python scripts/fetch_missing_avatars.py --db D:/path/fgo_data.db
+    python scripts/fetch_missing_avatars.py --db D:/path/game.db
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def main() -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=ROOT / "release" / "MyFGOApp" / "db" / "fgo_data.db",
+        default=ROOT / "release" / "MyFGOApp" / "db" / "game.db",
         help="数据库路径（默认便携版数据库）",
     )
     parser.add_argument(

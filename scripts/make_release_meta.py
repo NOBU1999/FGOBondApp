@@ -89,8 +89,8 @@ def main() -> int:
         problems.append("缺少 resources/app.asar（asar 还没打包？）")
     if (app_dir / "db" / "fgo_data.db").exists():
         problems.append("db/fgo_data.db 仍在发布目录（个人数据，必须先跑 scripts/privacy_clean.py）")
-    if not (app_dir / "db" / "fgo_data.seed.db").exists():
-        problems.append("缺少 db/fgo_data.seed.db（静态数据种子库）")
+    if not (app_dir / "db" / "game.db").exists():
+        problems.append("缺少 db/game.db（随包静态数据库，先跑 scripts/make_game_db.cjs）")
     for item in problems:
         print(f"[warn] {item}")
 

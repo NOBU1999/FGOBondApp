@@ -9,7 +9,7 @@
  *   shared/**                                                          ← 共用领域层与桥接
  *   platforms/android/web-host/**                                      ← 安卓宿主（sql.js 端口 / 启动脚本）
  *   vendor/sqljs/sql-wasm.js + sql-wasm.wasm                           ← sql.js 运行时
- *   db/fgo_data.db                                                     ← 静态数据（**已清空个人表**）
+ *   db/game.db                                                         ← 静态数据（个人数据不进包）
  *
  * 用法：node scripts/android/build-web-bundle.mjs
  */
@@ -24,15 +24,9 @@ const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", ".
 const OUT = path.join(ROOT, "dist", "android", "public");
 const PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
-// ⚠️ 必须与 scripts/make_seed.cjs 的 USER_TABLES 一致：新增用户表时两处一起加，
-//    漏了就会把个人数据打进 APK（v0.3.1~v0.3.4 的 APK 曾因此带上 saved_results / user_crown_servants）。
-const PERSONAL_TABLES = ["accounts", "user_box", "user_teams", "user_exclusions", "user_crown_servants", "custom_crafts", "saved_results"];
-const PERSONAL_META_KEYS = [
-  "active_account_id",
-  "server_region",
-  "generic_bond_participation",
-  "non_participating_craft_ids",
-];
+// 个人表 / 个人设置键的清单只认 shared/storage/schema.mjs 这一份：
+// 各脚本各写一套时漏过一次（v0.3.1~v0.3.4 的 APK 曾带上 saved_results / user_crown_servants）。
+const { USER_TABLES: PERSONAL_TABLES, USER_META_KEYS: PERSONAL_META_KEYS } = require("../../shared/storage/schema.mjs");
 
 function log(...args) {
   console.log("[bundle]", ...args);
@@ -56,97 +50,59 @@ function copyFiles(srcDir, destDir, filter) {
   return count;
 }
 
-/** 清掉个人数据，只留静态游戏数据（安全：绝不把用户数据打进 APK） */
+/**
+ * 把随包静态库复制进网页包。
+ *
+ * v0.3.8 起不再「从开发库复制再清个人表」：静态库由 scripts/make_game_db.cjs 单独生成，
+ * 这里只做两件事 —— **硬闸门体检**（任何个人表/个人设置键出现就中止出包）与复制。
+ */
 function prepareDatabase(destFile) {
-  const src = path.join(ROOT, "db", "fgo_data.db");
-  if (!existsSync(src)) throw new Error("找不到 db/fgo_data.db");
+  const src = path.join(ROOT, "db", "game.db");
+  if (!existsSync(src)) {
+    throw new Error("找不到 db/game.db —— 先跑 node scripts/make_game_db.cjs 生成静态库");
+  }
   mkdirSync(path.dirname(destFile), { recursive: true });
 
   const { DatabaseSync } = require("node:sqlite");
-  // 先把源库的 WAL 合并进主文件，否则只复制主文件会丢最新静态数据
-  try {
-    const srcDb = new DatabaseSync(src);
-    try {
-      srcDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch (_) {
-      /* 非 WAL 模式忽略 */
-    }
-    srcDb.close();
-  } catch (err) {
-    log("源库 checkpoint 失败（继续）：" + err.message);
-  }
-
-  cpSync(src, destFile);
-
-  const db = new DatabaseSync(destFile);
-  let removed = 0;
-  for (const table of PERSONAL_TABLES) {
-    try {
-      const info = db.prepare(`DELETE FROM "${table}"`).run();
-      removed += Number(info.changes || 0);
-    } catch (_) {
-      /* 表不存在 */
-    }
-  }
-  for (const key of PERSONAL_META_KEYS) {
-    try {
-      db.prepare("DELETE FROM app_meta WHERE key = ?").run(key);
-    } catch (_) {
-      /* ignore */
-    }
-  }
-  // 记下「这份随包数据对应哪个程序版本」：与桌面种子库同一口径
-  // （判据见 platforms/android/web-host/boot.js 的 static_align_version；新装用户首次启动不必再重建一次库）
-  // ⚠️ 必须用不带构建日期的 PKG.version —— boot.js 的 currentAppVersion() 会剥掉 "+261125"
-  try {
-    db.prepare("INSERT OR REPLACE INTO app_meta(key, value) VALUES('static_align_version', ?)")
-      .run(String(PKG.version || ""));
-  } catch (_) {
-    /* 老库没有 app_meta 时忽略 */
-  }
-  try {
-    const seq = PERSONAL_TABLES.map((t) => `'${t}'`).join(",");
-    db.prepare(`DELETE FROM sqlite_sequence WHERE name IN (${seq})`).run();
-  } catch (_) {
-    /* ignore */
-  }
-  try {
-    db.exec("VACUUM");
-  } catch (_) {
-    /* VACUUM 失败不影响正确性 */
-  }
-
-  // 硬闸门：清完再查一遍，任何用户表非空或用户设置键还在就拒绝出包
+  const db = new DatabaseSync(src, { readOnly: true });
   const leaked = [];
-  for (const table of PERSONAL_TABLES) {
-    try {
-      const n = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c);
-      if (n > 0) leaked.push(`${table}=${n}`);
-    } catch (_) {
-      /* 表不存在 */
-    }
-  }
-  for (const key of PERSONAL_META_KEYS) {
-    try {
-      if (db.prepare("SELECT 1 FROM app_meta WHERE key = ?").get(key)) leaked.push(`app_meta:${key}`);
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
   const counts = {};
-  for (const table of ["servants", "crafts", "servant_stage_traits", ...PERSONAL_TABLES]) {
-    try {
-      counts[table] = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c);
-    } catch (_) {
-      counts[table] = "-";
+  try {
+    for (const table of PERSONAL_TABLES) {
+      let n = -1;
+      try {
+        n = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c);
+      } catch (_) {
+        n = -1; // 表不存在（正确形态）
+      }
+      counts[table] = n;
+      if (n > 0) leaked.push(`${table}=${n}`);
     }
+    for (const key of PERSONAL_META_KEYS) {
+      try {
+        if (db.prepare("SELECT 1 FROM app_meta WHERE key = ?").get(key)) leaked.push(`app_meta:${key}`);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    for (const table of ["servants", "crafts", "servant_stage_traits", "pillar_stage_traits"]) {
+      try {
+        counts[table] = Number(db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get().c);
+      } catch (_) {
+        counts[table] = "-";
+      }
+    }
+  } finally {
+    db.close();
   }
-  db.close();
   if (leaked.length) {
-    throw new Error("打包中止：个人数据未清干净 → " + leaked.join(", "));
+    throw new Error("打包中止：静态库里混进了个人数据 → " + leaked.join(", "));
   }
-  log(`数据库已就绪：${path.relative(ROOT, destFile)}（清掉个人行 ${removed} 条）`);
+  if (!counts.servants || counts.servants <= 0) {
+    throw new Error("打包中止：db/game.db 里没有从者数据（重新跑 make_game_db.cjs）");
+  }
+  cpSync(src, destFile);
+  log(`数据库已就绪：${path.relative(ROOT, destFile)}`);
   log("  表计数：" + JSON.stringify(counts));
 }
 
@@ -192,7 +148,7 @@ mkdirSync(path.join(OUT, "engine-ts"), { recursive: true });
 cpSync(tsBundle, path.join(OUT, "engine-ts", "web.js"));
 log(`TS 引擎 → engine-ts/web.js（${(statSync(tsBundle).size / 1024).toFixed(0)}KB）`);
 
-prepareDatabase(path.join(OUT, "db", "fgo_data.db"));
+prepareDatabase(path.join(OUT, "db", "game.db"));
 
 // 事件加成表（桌面读 db 同目录的 JSON；有就一起带上）
 const eventFile = path.join(ROOT, "db", "event_bond_bonus.json");

@@ -12,7 +12,8 @@ export function createMetaDomain({ sql }) {
   }
 
   function setMetaValue(key, value) {
-    sql.run("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)", [key, String(value)]);
+    // ⚠️ 必须显式写 `main.`：app_meta 是「个人库优先 + game.db 补静态键」的合并视图，视图不可写
+    sql.run("INSERT OR REPLACE INTO main.app_meta(key, value) VALUES (?, ?)", [key, String(value)]);
   }
 
   function getCnUnavailableBondCeIds() {

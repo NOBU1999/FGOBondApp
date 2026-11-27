@@ -6,7 +6,7 @@ const path = require("path");
 const database = require("./database");
 const appUpdate = require("./app-update-check");
 const { createEngine } = require("./engine-factory");
-const { getAppRoot, getDbPath } = require("./paths");
+const { getAppRoot, getDbPath, getGameDbPath } = require("./paths");
 const { resetStaticData } = require("./db-reset");
 const { diagLog, tailOf, readDiagLog, clearDiagLog } = require("./diag-log");
 const avatars = require("./avatars");
@@ -178,7 +178,7 @@ function registerIpcHandlers() {
       }
       payload.stopFile = activeStopFile;
     }
-    const engine = createEngine({ dbPath: getDbPath(), mode: "calculate" });
+    const engine = createEngine({ dbPath: getGameDbPath(), mode: "calculate" });
     activeEngine = engine;
     engine.on("progress", (text) => sendProgress(event, text));
     try {
@@ -196,7 +196,7 @@ function registerIpcHandlers() {
   // 只检查远程是否有新数据（HEAD，不下载、不重建）
   ipcMain.handle("engine:check", async (event) => {
     stopActiveEngine();
-    const engine = createEngine({ dbPath: getDbPath(), mode: "check" });
+    const engine = createEngine({ dbPath: getGameDbPath(), mode: "check" });
     activeEngine = engine;
     engine.on("progress", (text) => sendProgress(event, text));
     try {
@@ -214,7 +214,7 @@ function registerIpcHandlers() {
   // 全量重建静态数据（保留个人数据）
   ipcMain.handle("engine:update", async (event) => {
     stopActiveEngine();
-    const engine = createEngine({ dbPath: getDbPath(), mode: "update" });
+    const engine = createEngine({ dbPath: getGameDbPath(), mode: "update" });
     activeEngine = engine;
     engine.on("progress", (text) => sendProgress(event, text));
     try {

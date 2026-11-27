@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const database = require("./database");
-const { getDbPath } = require("./paths");
+const { getGameDbPath } = require("./paths");
 const { createEngine } = require("./engine-factory");
 
 // 静态数据表（按外键依赖顺序清空）
@@ -39,7 +39,7 @@ function stamp() {
 
 /** 把 WAL 落盘，保证直接复制文件是完整的 */
 function checkpoint(dbPath) {
-  const db = database.open(dbPath);
+  const db = database.open(dbPath, { attachGame: false });
   try {
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally {
@@ -48,7 +48,7 @@ function checkpoint(dbPath) {
 }
 
 function countStatic(dbPath) {
-  const db = database.open(dbPath);
+  const db = database.open(dbPath, { attachGame: false });
   try {
     const one = (sql) => {
       try {
@@ -69,9 +69,8 @@ function countStatic(dbPath) {
 }
 
 function clearStaticTables(dbPath) {
-  const db = database.open(dbPath);
+  const db = database.open(dbPath, { attachGame: false });
   try {
-    database.ensureSchema(db);
     const cleared = {};
     for (const table of STATIC_TABLES) {
       try {
@@ -112,7 +111,8 @@ function restoreFrom(backupPath, dbPath) {
  * onProgress(message) 用来把引擎进度转发到界面。
  */
 async function resetStaticData({ onProgress } = {}) {
-  const dbPath = getDbPath();
+  // 只重建静态数据：现在它在独立的 game.db 里，个人库（fgo_data.db）完全不参与
+  const dbPath = getGameDbPath();
   const backupDir = path.join(path.dirname(dbPath), "backup");
   fs.mkdirSync(backupDir, { recursive: true });
   const backupPath = path.join(backupDir, `pre-reset-${stamp()}.db`);

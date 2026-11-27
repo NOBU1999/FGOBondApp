@@ -2,7 +2,7 @@
 
 const { Menu, BrowserWindow, dialog, app, shell } = require("electron");
 const path = require("path");
-const { getDbPath, getAppRoot } = require("./paths");
+const { getDbPath, getGameDbPath, getAppRoot } = require("./paths");
 const { stopActiveEngine } = require("./ipc-handlers");
 
 const GITHUB_URL = "https://github.com/NOBU1999/FGOBondApp";
@@ -70,7 +70,8 @@ function buildMenu() {
                 "个人数据不受影响：账号 / Box / 排除列表 / 固定预设 / 自定义礼装都会保留。",
                 "重建前会自动备份，失败会自动回滚。",
                 "",
-                `数据库路径：${getDbPath()}`,
+                `静态数据库：${getGameDbPath()}`,
+                `个人数据库：${getDbPath()}（重置不会动它）`,
               ].join("\n"),
             });
             if (response === 1) {

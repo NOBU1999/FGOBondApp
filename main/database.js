@@ -5,13 +5,26 @@
  *
  * 优先使用 better-sqlite3（若已安装并完成 Electron 原生模块重建）；
  * 否则退回 Node 内置 node:sqlite（DatabaseSync），便于开发期直接运行。
- * 所有用户数据/本地数据都存放在 db/fgo_data.db。
+ *
+ * v0.3.8 起两个库（见 shared/storage/schema.mjs 的文件头）：
+ *   主库 = `db/fgo_data.db`（个人数据，可写）
+ *   挂载 = `db/game.db`（随包静态数据，只读）→ 每张静态表在临时库里建同名视图
+ * 于是「静态表读 game、个人表读主库」对上层完全透明，既有 SQL 一行不改。
  */
 
 const fs = require("fs");
 const path = require("path");
 const { getDbPath } = require("./paths");
 const { createDomain } = require("../shared/domain/index.mjs");
+const {
+  GAME_DB_NAME,
+  GAME_SCHEMA,
+  META_VIEW_SQL,
+  PERSONAL_ALTERS,
+  PERSONAL_DDL,
+  STATIC_TABLES,
+  staticViewSql,
+} = require("../shared/storage/schema.mjs");
 
 let BetterSqlite3 = null;
 try {
@@ -89,12 +102,68 @@ function getDomain(db) {
   return domain;
 }
 
-function open(dbPath) {
+function quoteSql(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/**
+ * 把随包的 `game.db` 挂到当前连接上，并给静态表建同名临时视图。
+ * 挂不上（缺文件 / 文件坏了）时只警告，不抛：界面会退化成"没有静态数据"，
+ * 但个人数据（Box / 预设）仍然读得出，用户至少能看到自己存的东西。
+ */
+function attachGame(db, gamePath) {
+  if (!gamePath || !fs.existsSync(gamePath)) {
+    console.warn(`[database] 找不到静态数据库 ${gamePath}（数据界面会是空的，请重新安装或更新数据）`);
+    return false;
+  }
+  try {
+    db.exec(`ATTACH DATABASE ${quoteSql(gamePath)} AS ${GAME_SCHEMA}`);
+  } catch (err) {
+    console.warn(`[database] 挂载静态数据库失败：${(err && err.message) || err}`);
+    return false;
+  }
+  let hasTable = null;
+  try {
+    hasTable = db.prepare(
+      `SELECT name FROM ${GAME_SCHEMA}.sqlite_master WHERE type = 'table' AND name = ?`
+    );
+  } catch (err) {
+    console.warn(`[database] 读静态库表清单失败：${(err && err.message) || err}`);
+    return true;
+  }
+  for (const table of STATIC_TABLES) {
+    let exists = false;
+    try {
+      exists = Boolean(hasTable.get(table));
+    } catch (_) {
+      exists = false;
+    }
+    if (!exists) continue;
+    try {
+      db.exec(staticViewSql(table));
+    } catch (err) {
+      console.warn(`[database] 静态表视图 ${table} 建不起来：${(err && err.message) || err}`);
+    }
+  }
+  // app_meta 统一视图：个人设置优先，静态键（数据日期 / 简中未实装名单…）从 game.db 补
+  try {
+    db.exec(META_VIEW_SQL);
+  } catch (err) {
+    console.warn(`[database] app_meta 合并视图建不起来：${(err && err.message) || err}`);
+  }
+  return true;
+}
+
+function open(dbPath, options = {}) {
   const target = dbPath || getDbPath();
+  const gamePath = path.join(path.dirname(target), GAME_DB_NAME);
+  // 迁移库结构时必须拿到「裸」个人库：挂上 game.db 会建同名临时视图，DROP TABLE 会撞名
+  const attach = options.attachGame !== false;
   if (BetterSqlite3) {
     const db = new BetterSqlite3(target);
     try {
       db.pragma("journal_mode = WAL");
+      if (attach) attachGame(db, gamePath);
     } catch (err) {
       // 打不开（例如文件损坏）时必须释放句柄，否则文件会被锁住无法替换
       try { db.close(); } catch (_) { /* ignore */ }
@@ -106,6 +175,7 @@ function open(dbPath) {
     const db = new NodeSqlite.DatabaseSync(target);
     try {
       db.exec("PRAGMA journal_mode = WAL");
+      if (attach) attachGame(db, gamePath);
     } catch (err) {
       try { db.close(); } catch (_) { /* ignore */ }
       throw err;
@@ -116,281 +186,16 @@ function open(dbPath) {
 }
 
 function ensureSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS app_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS servant_costumes (
-      servant_id INTEGER NOT NULL,
-      costume_id INTEGER NOT NULL,
-      name TEXT NOT NULL DEFAULT '',
-      PRIMARY KEY (servant_id, costume_id)
-    );
-    CREATE TABLE IF NOT EXISTS servant_stage_traits_cn (
-      servant_id INTEGER NOT NULL,
-      stage TEXT NOT NULL,
-      trait TEXT NOT NULL,
-      trait_id INTEGER,
-      PRIMARY KEY (servant_id, stage, trait)
-    );
-    CREATE TABLE IF NOT EXISTS servant_costume_traits_cn (
-      servant_id INTEGER NOT NULL,
-      costume_id INTEGER NOT NULL,
-      trait TEXT NOT NULL,
-      trait_id INTEGER,
-      PRIMARY KEY (servant_id, costume_id, trait)
-    );
-    CREATE TABLE IF NOT EXISTS accounts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      note TEXT DEFAULT '',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS user_exclusions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_id INTEGER NOT NULL DEFAULT 1,
-      target_type TEXT NOT NULL,
-      target_id INTEGER NOT NULL,
-      UNIQUE(account_id, target_type, target_id)
-    );
-    CREATE TABLE IF NOT EXISTS user_crown_servants (
-      account_id INTEGER NOT NULL DEFAULT 1,
-      servant_id INTEGER NOT NULL,
-      PRIMARY KEY (account_id, servant_id)
-    );
-    CREATE TABLE IF NOT EXISTS custom_crafts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      craft_type TEXT NOT NULL DEFAULT 'bond',
-      cost INTEGER NOT NULL DEFAULT 0,
-      rarity INTEGER NOT NULL DEFAULT 0,
-      percent_bonus REAL NOT NULL DEFAULT 0,
-      flat_bonus REAL NOT NULL DEFAULT 0,
-      condition_groups_json TEXT NOT NULL DEFAULT '[]',
-      repeatable INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS user_box (
-      account_id INTEGER NOT NULL DEFAULT 1,
-      servant_id INTEGER NOT NULL,
-      stage TEXT DEFAULT 'fourth',
-      is_max_bond INTEGER DEFAULT 0,
-      bond_switch1 INTEGER DEFAULT 1,
-      bond_switch2 INTEGER DEFAULT 0,
-      personal_bonus REAL DEFAULT 0,
-      aura_bonus REAL DEFAULT 0,
-      bond_rank INTEGER DEFAULT 0,
-      bond_max_rank INTEGER DEFAULT 0,
-      cost_override INTEGER DEFAULT NULL,
-      PRIMARY KEY (account_id, servant_id)
-    );
-    CREATE TABLE IF NOT EXISTS user_teams (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT,
-      fixed_servants TEXT,
-      fixed_crafts TEXT,
-      support_id INTEGER,
-      support_craft_id INTEGER,
-      support_second_craft_id INTEGER,
-      support_position TEXT DEFAULT 'front_right',
-      cost_limit INTEGER DEFAULT 114,
-      strategy TEXT DEFAULT 'total_max',
-      quality_mode TEXT DEFAULT 'balanced',
-      mode TEXT DEFAULT 'normal',
-      crown_class TEXT DEFAULT 'all',
-      crown_positions TEXT,
-      base_bond REAL DEFAULT 0,
-      neighborhood TEXT DEFAULT 'standard',
-      search_order TEXT DEFAULT 'servant',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS saved_results (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      team_id INTEGER,
-      data_revision TEXT,
-      request_json TEXT,
-      result_json TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN quality_mode TEXT DEFAULT 'balanced'");
-  } catch (_) {
-    // 列已存在
+  // 只建个人表（静态表只存在于随包的 game.db，迁移见 main/runtime-db.js）
+  db.exec(PERSONAL_DDL);
+  for (const sqlText of PERSONAL_ALTERS) {
+    try {
+      db.exec(sqlText);
+    } catch (_) {
+      // 列已存在
+    }
   }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN neighborhood TEXT DEFAULT 'standard'");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN search_order TEXT DEFAULT 'servant'");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN support_position TEXT DEFAULT 'front_right'");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN support_second_craft_id INTEGER");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN mode TEXT DEFAULT 'normal'");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN crown_class TEXT DEFAULT 'all'");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN crown_positions TEXT");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_teams ADD COLUMN base_bond REAL DEFAULT 0");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    // 「保存计算结果」：预设挂着的那份结果（saved_results.id）
-    db.exec("ALTER TABLE user_teams ADD COLUMN result_id INTEGER");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_box ADD COLUMN aura_bonus REAL DEFAULT 0");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_box ADD COLUMN bond_rank INTEGER DEFAULT 0");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    db.exec("ALTER TABLE user_box ADD COLUMN bond_max_rank INTEGER DEFAULT 0");
-  } catch (_) {
-    // 列已存在
-  }
-  try {
-    // 玛修的 Cost 可调（0 / 16）：NULL = 用资料库里的值
-    db.exec("ALTER TABLE user_box ADD COLUMN cost_override INTEGER DEFAULT NULL");
-  } catch (_) {
-    // 列已存在
-  }
-  ensurePillarTraits(db);
   ensureAccountSchema(db);
-}
-
-/**
- * 终章柱子战的「冻结特性表」（2026-11-24）：
- * 这张表对应终章那一次限时活动，**内容永久固定**——建成后不再随数据更新变化。
- *
- * 数据来源钉死在**随包种子库**（`db/fgo_data.seed.db`）里那份：构建时烤进去，
- * 之后任何人、任何时间安装都拿到同一份，不会因为「用户本机国服表更新了」而变。
- * 没有种子库（开发环境 / 老种子）时才从本机的国服表复制一份兜底。
- */
-function pillarSeedPath(db) {
-  let file = null;
-  try {
-    if (typeof db.name === "string" && db.name) file = db.name; // better-sqlite3
-  } catch (_) {
-    /* ignore */
-  }
-  if (!file) {
-    try {
-      if (typeof db.location === "function") file = db.location(); // node:sqlite
-    } catch (_) {
-      /* ignore */
-    }
-  }
-  if (!file) return null;
-  const seed = path.join(path.dirname(file), "fgo_data.seed.db");
-  return fs.existsSync(seed) ? seed : null;
-}
-
-function pillarTraitCount(db) {
-  try {
-    return Number(db.prepare("SELECT COUNT(*) AS c FROM pillar_stage_traits").get().c) || 0;
-  } catch (_) {
-    return 0;
-  }
-}
-
-function ensurePillarTraits(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS pillar_stage_traits (
-      servant_id INTEGER NOT NULL,
-      stage TEXT NOT NULL,
-      trait TEXT NOT NULL,
-      trait_id INTEGER,
-      PRIMARY KEY (servant_id, stage, trait)
-    );
-    CREATE TABLE IF NOT EXISTS pillar_costume_traits (
-      servant_id INTEGER NOT NULL,
-      costume_id INTEGER NOT NULL,
-      trait TEXT NOT NULL,
-      trait_id INTEGER,
-      PRIMARY KEY (servant_id, costume_id, trait)
-    );
-  `);
-  if (pillarTraitCount(db) > 0) return;
-
-  // ① 首选：从随包种子库整表搬过来（内容由构建时决定，永远一致）
-  const seed = pillarSeedPath(db);
-  if (seed) {
-    try {
-      db.exec(`ATTACH DATABASE '${seed.replace(/'/g, "''")}' AS pil_seed`);
-      try {
-        db.exec(
-          "INSERT OR IGNORE INTO pillar_stage_traits SELECT servant_id, stage, trait, trait_id FROM pil_seed.pillar_stage_traits",
-        );
-        db.exec(
-          "INSERT OR IGNORE INTO pillar_costume_traits SELECT servant_id, costume_id, trait, trait_id FROM pil_seed.pillar_costume_traits",
-        );
-      } finally {
-        db.exec("DETACH DATABASE pil_seed");
-      }
-    } catch (err) {
-      try {
-        console.warn(`柱子战冻结表：种子库不可用，改用本机国服表兜底（${(err && err.message) || err}）`);
-      } catch (_) {
-        /* ignore */
-      }
-    }
-    if (pillarTraitCount(db) > 0) return;
-  }
-
-  // ② 兜底：开发环境 / 老种子没有这张表 ⇒ 用本机国服表复制一份（国服表里没有的所罗门，从日服表补）
-  try {
-    db.exec(`
-      INSERT OR IGNORE INTO pillar_stage_traits
-        SELECT servant_id, stage, trait, trait_id FROM servant_stage_traits_cn;
-      INSERT OR IGNORE INTO pillar_stage_traits
-        SELECT servant_id, stage, trait, trait_id FROM servant_stage_traits
-        WHERE servant_id NOT IN (SELECT DISTINCT servant_id FROM pillar_stage_traits);
-      INSERT OR IGNORE INTO pillar_costume_traits
-        SELECT servant_id, costume_id, trait, trait_id FROM servant_costume_traits_cn;
-      INSERT OR IGNORE INTO pillar_costume_traits
-        SELECT servant_id, costume_id, trait, trait_id FROM servant_costume_traits
-        WHERE servant_id NOT IN (SELECT DISTINCT servant_id FROM pillar_costume_traits);
-    `);
-  } catch (err) {
-    try {
-      console.warn(`柱子战冻结特性表构建跳过：${(err && err.message) || err}`);
-    } catch (_) {
-      /* ignore */
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------

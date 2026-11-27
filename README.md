@@ -97,7 +97,7 @@ python scripts/fetch_missing_avatars.py --region JP --db db/fgo_data.db
 
 `release/`、`node_modules/`、数据库等运行产物不会进入源码仓库。
 
-打包时静态数据会以 `db/fgo_data.seed.db` 的形式进入发布包，运行库 `db/fgo_data.db`
+打包时静态数据会以 `db/game.db` 的形式进入发布包（v0.3.8 起），个人库 `db/fgo_data.db`
 （账号 / Box / 排除等个人数据）**不会**被打包，因此用户直接解压覆盖升级不会丢数据；
 启动时若检测到种子库更新，会自动以种子库为基底重建运行库并搬移个人数据，
 旧库备份保留在 `db/backup/`。

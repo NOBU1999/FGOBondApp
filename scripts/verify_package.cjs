@@ -4,7 +4,7 @@
 /**
  * 上传前自检：确认发布包（便携目录 / .7z / .zip / .apk）里
  *   1) 没有个人数据（种子库必须是空的用户表）
- *   2) 没有运行库 db/fgo_data.db、没有 db/backup 备份、没有日志
+ *   2) 没有个人库 db/fgo_data.db、没有 db/backup 备份、没有日志（v0.3.8 起个人库压根不进包）
  *   3) 没有开发文件（交接文档、分析脚本、复现系统、测试脚本）
  *   4) 没有安卓/iOS 构建垃圾（node_modules、.class、.swift、.map —— v0.1.11 真实事故）
  *   5) 语言包已精简（只留 zh-CN / en-US）
@@ -156,13 +156,33 @@ function inspectDb(dbPath) {
   return problems;
 }
 
-function checkSeed(label, dbPath) {
+function checkGameDb(label, dbPath) {
   console.log(`--- ${label}：${path.relative(ROOT, dbPath)} ---`);
   const problems = inspectDb(dbPath);
   if (problems.length) {
-    problems.forEach((p) => fail("种子库含个人数据：" + p));
+    problems.forEach((p) => fail("静态库里混进了个人数据：" + p));
   } else {
-    ok("种子库干净（用户表全空、无本机状态键）");
+    ok("静态库干净（个人表不存、无本机状态键）");
+  }
+  // 静态数据本身必须真的在（否则界面上什么都选不出来）
+  try {
+    const probeDir = path.join(TEMP_DIR, "gameprobe");
+    fs.rmSync(probeDir, { recursive: true, force: true });
+    fs.mkdirSync(probeDir, { recursive: true });
+    const probe = path.join(probeDir, path.basename(dbPath));
+    fs.copyFileSync(dbPath, probe);
+    const db = new DatabaseSync(probe, { readOnly: true });
+    try {
+      const servants = Number(db.prepare("SELECT COUNT(*) AS c FROM servants").get().c) || 0;
+      const crafts = Number(db.prepare("SELECT COUNT(*) AS c FROM crafts").get().c) || 0;
+      if (servants > 0 && crafts > 0) ok(`静态数据：从者 ${servants} 行 / 礼装 ${crafts} 行`);
+      else fail(`静态数据不足：从者 ${servants} / 礼装 ${crafts}`);
+    } finally {
+      db.close();
+    }
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  } catch (err) {
+    fail("静态库体检失败：" + err.message);
   }
 }
 
@@ -189,12 +209,12 @@ function verifyAppDir(appDir) {
     "dist/engine-ts/worker.mjs",
     "dist/engine-ts/sql-wasm.wasm",
     "resources/app.asar",
-    "db/fgo_data.seed.db",
+    "db/game.db",
   ]) {
     if (fs.existsSync(path.join(appDir, must))) ok(`存在 ${must}`);
     else fail(`缺少必需文件 ${must}`);
   }
-  checkSeed("种子库", path.join(appDir, "db", "fgo_data.seed.db"));
+  checkGameDb("随包静态库", path.join(appDir, "db", "game.db"));
   // 活动牵绊表随包发布：存在则必须是合法 JSON；缺失只警告（它由「更新数据」生成）
   {
     const bonusPath = path.join(appDir, "db", "event_bond_bonus.json");
@@ -266,21 +286,21 @@ function verifyArchive(archive) {
   const paths = listArchive(archive);
   checkPaths("包内条目", paths);
 
-  // 必须找到并检查种子库
+  // 必须找到并检查随包静态库（桌面 db/game.db；安卓 assets/public/db/game.db）
   const norm = paths.map((p) => p.replace(/\\/g, "/"));
-  const seedInside = paths.find((p, i) => /\/db\/fgo_data\.seed\.db$/.test(norm[i]) || /\/db\/fgo_data\.db$/.test(norm[i]));
-  if (!seedInside) {
-    fail("包内没有找到种子库（db/fgo_data.seed.db 或安卓 assets/public/db/fgo_data.db）");
+  const gameInside = paths.find((p, i) => /\/db\/game\.db$/.test(norm[i]));
+  if (!gameInside) {
+    fail("包内没有找到静态库（db/game.db 或安卓 assets/public/db/game.db）");
     return;
   }
   const destName = path.basename(archive).replace(/[^\w.-]/g, "_");
   const dest = path.join(TEMP_DIR, destName);
-  const got = extract(archive, seedInside, dest);
+  const got = extract(archive, gameInside, dest);
   if (!got.length) {
-    fail(`无法从包内取出种子库: ${seedInside}`);
+    fail(`无法从包内取出静态库: ${gameInside}`);
     return;
   }
-  checkSeed("包内种子库", path.join(dest, got[0]));
+  checkGameDb("包内静态库", path.join(dest, got[0]));
 }
 
 // ------------------------------------------------------------------ main
