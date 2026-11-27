@@ -63,6 +63,8 @@ ASAR_SYNC_FILES = [
     "renderer/manual.js",  # 由 scripts/make_manual_js.mjs 从 使用说明.txt 生成
     "renderer/assets/app-icon.png",  # 窗口图标 / favicon
     "preload.js",
+    # 版本号显示用（app.getVersion() 读 asar 里的 package.json）；不同步的话测试目录会一直显示旧版本
+    "package.json",
 ]
 
 
@@ -76,8 +78,9 @@ def asar_sync_files() -> list:
     """
     files = [rel for rel in ASAR_SYNC_FILES if not rel.startswith("main/")]
     files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "main").glob("*.js"))
-    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "shared" / "domain").glob("*.mjs"))
-    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "shared" / "bridge").glob("*.mjs"))
+    # shared/ 一律递归 glob：v0.3.8 起多了 shared/storage/schema.mjs（两个库的结构定义），
+    # 手写 domain/bridge 两个目录会漏掉它，测试包启动直接 "Cannot find module"
+    files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "shared").rglob("*.mjs"))
     # 礼装卡面用 glob：以后补图不用再改这份清单（手写清单漏项踩过一次，见坑 106）
     files += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "renderer" / "assets" / "craftface").glob("*.png"))
     return files

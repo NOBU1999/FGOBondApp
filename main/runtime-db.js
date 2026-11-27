@@ -61,6 +61,25 @@ function removeSidecars(dbPath) {
   }
 }
 
+/**
+ * 确保某个路径是目录。
+ * 踩过：`db/backup` 位置上有一个同名**文件**（老版本/手工操作留下的），
+ * `mkdirSync(..., {recursive:true})` 会抛 EEXIST，整个迁移就中断了（2026-11-27 测试目录实测）。
+ * 处理：把它改名让位（不删），再建目录。
+ */
+function ensureDir(dir) {
+  try {
+    const st = fs.statSync(dir);
+    if (st.isDirectory()) return;
+    const alt = `${dir}-file-${timestamp()}`;
+    fs.renameSync(dir, alt);
+    log(`目录位置被同名文件占用，已改名让位：${path.basename(alt)}`);
+  } catch (_) {
+    /* 不存在，正常 */
+  }
+  fs.mkdirSync(dir, { recursive: true });
+}
+
 /** 用 SQLite 自己的备份通道复制（会自动把 WAL 合并进去） */
 function copyDatabase(src, dst) {
   fs.rmSync(dst, { force: true });
@@ -106,8 +125,7 @@ function createPersonalDb(personalPath) {
     fs.rmSync(`${personalPath}${suffix}`, { force: true });
   }
   fs.mkdirSync(path.dirname(personalPath), { recursive: true });
-  const db = database.open(personalPath, { attachGame: false });
-  try {
+  const db = database.open(personalPath, { attachGame: false });  try {
     database.ensureSchema(db);
   } finally {
     db.close();
@@ -165,7 +183,7 @@ function extractGameDbFromLegacy(legacySnapshot, gamePath) {
  * 先备份整份老库，再删个人库里的静态表与静态 meta 键（DDL/DML 都在一个事务里）。
  */
 function migrateLegacyLayout({ personalPath, gamePath, backupDir }) {
-  fs.mkdirSync(backupDir, { recursive: true });
+  ensureDir(backupDir);
   const snapshot = path.join(backupDir, `fgo_data-${timestamp()}-before-split.db`);
   copyDatabase(personalPath, snapshot);
   log(`已备份老运行库：${path.basename(snapshot)}`);
@@ -251,7 +269,7 @@ function ensureDatabases(dbDir) {
   } catch (err) {
     log(`个人数据库打不开：${err.message}（已隔离到 backup/，将重建空库）`);
     try {
-      fs.mkdirSync(backupDir, { recursive: true });
+      ensureDir(backupDir);
       fs.renameSync(personalPath, path.join(backupDir, `fgo_data-corrupt-${timestamp()}.db`));
     } catch (_) {
       /* 挪不动就留在原地，下面重建会失败并如实报错 */

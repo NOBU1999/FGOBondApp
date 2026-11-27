@@ -121,6 +121,12 @@ function backupPersonalDbBeforeImport() {
       db.close();
     }
     const dir = path.join(path.dirname(dbPath), "backup");
+    // 备份目录位置被同名文件占住时先改名让位（同 runtime-db 的 ensureDir，踩过 EEXIST）
+    try {
+      if (!fs.statSync(dir).isDirectory()) fs.renameSync(dir, `${dir}-file-${Date.now()}`);
+    } catch (_) {
+      /* 不存在 */
+    }
     fs.mkdirSync(dir, { recursive: true });
     const d = new Date();
     const p = (n) => String(n).padStart(2, "0");
