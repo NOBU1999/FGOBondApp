@@ -416,6 +416,8 @@ const App = {
       settingsMenuOpen: false,
       // 当前打开的是哪一区：all（安卓）/ calc 计算设置 / display 结果显示设置 / diag 诊断日志
       settingsSection: "all",
+    // 个人数据导入中（按钮置灰，避免连点）
+    personalImportBusy: false,
       // 邻域优化档位（v0.1.14 新增）：算完后把靠前队伍互相"换人"再算，捞"混血"更优解。
       // off / standard / deep；跟随队伍预设一起保存与加载。
       neighborhood: "standard",
@@ -914,6 +916,90 @@ const App = {
       this.persistResultSettings();
       this.settingsVisible = false;
       this.settingsSection = "all";
+    },
+    // ---------------- 个人数据导出 / 导入（跨端迁移，v0.3.8） ----------------
+    async exportPersonalData() {
+      try {
+        const data = await window.fgo.exportPersonalData();
+        if (!data || !data.json) throw new Error("没有取到个人数据");
+        const r = await window.fgo.saveTextFile({
+          name: data.filename || "FGO牵绊推荐器-个人数据.json",
+          text: data.json,
+        });
+        if (r && r.canceled) return;
+        if (r && r.ok && r.copied) {
+          alert("文件没能写进存储，已把内容复制到剪贴板：粘贴到任意文本里保存即可");
+          return;
+        }
+        if (!r || !r.ok) throw new Error((r && r.error) || "保存失败");
+        const c = data.counts || {};
+        alert(
+          `已导出个人数据：\n账号 ${c.accounts || 0} 个 ｜ Box ${c.user_box || 0} 人 ｜ ` +
+            `排除 ${c.user_exclusions || 0} 条 ｜ 冠位 ${c.user_crown_servants || 0} 位 ｜ ` +
+            `预设 ${c.user_teams || 0} 套 ｜ 自定义礼装 ${c.custom_crafts || 0} 张`
+        );
+      } catch (err) {
+        alert("导出失败：" + ((err && err.message) || String(err)));
+      }
+    },
+    /** 读文本文件：新版 WebView 用 file.text()，老环境退回 FileReader */
+    readTextFile(file) {
+      return new Promise((resolve, reject) => {
+        if (file && typeof file.text === "function") {
+          file.text().then(resolve, reject);
+          return;
+        }
+        try {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error || new Error("读取失败"));
+          reader.readAsText(file, "utf-8");
+        } catch (err) {
+          reject(err);
+        }
+      });
+    },
+    triggerPersonalImport() {
+      const el = this.$refs.personalImportInput;
+      if (!el) return;
+      el.value = "";
+      el.click();
+    },
+    async onPersonalImportFile(event) {
+      const input = event.target;
+      const file = input && input.files && input.files[0];
+      if (input) input.value = "";
+      if (!file) return;
+      let text = "";
+      try {
+        text = await this.readTextFile(file);
+      } catch (err) {
+        alert("读不了这个文件：" + ((err && err.message) || String(err)));
+        return;
+      }
+      const ok = confirm(
+        "导入个人数据会【整份替换】当前的：账号 / Box / 排除名单 / 冠位名单 / 预设 / 自定义礼装。\n\n" +
+          "程序会先把当前数据备份到 db\\backup\\ 里，导错了还能换回来。\n\n确定继续导入吗？"
+      );
+      if (!ok) return;
+      this.personalImportBusy = true;
+      try {
+        const r = await window.fgo.importPersonalData(text);
+        await this.reloadAllData();
+        this.results = [];
+        this.compareSelectedRanks = [];
+        this.expandedResult = null;
+        const c = (r && r.counts) || {};
+        alert(
+          `导入完成：\n账号 ${c.accounts || 0} 个 ｜ Box ${c.user_box || 0} 人 ｜ ` +
+            `排除 ${c.user_exclusions || 0} 条 ｜ 冠位 ${c.user_crown_servants || 0} 位 ｜ ` +
+            `预设 ${c.user_teams || 0} 套 ｜ 自定义礼装 ${c.custom_crafts || 0} 张`
+        );
+      } catch (err) {
+        alert("导入失败（当前数据没有被改动）：" + ((err && err.message) || String(err)));
+      } finally {
+        this.personalImportBusy = false;
+      }
     },
     openManual() {
       // 应用内阅读（替代原来的"用记事本打开 使用说明.txt"）
@@ -5302,6 +5388,7 @@ const App = {
           <div v-if="settingsMenuOpen" class="settings-menu-list">
             <button @click="openSettings('calc')">计算设置</button>
             <button @click="openSettings('display')">结果显示设置</button>
+            <button @click="openSettings('data')">数据备份与迁移</button>
             <button v-if="diagLogAvailable()" @click="openSettings('diag')">诊断日志</button>
           </div>
         </div>
@@ -6682,7 +6769,7 @@ const App = {
     <div v-if="settingsVisible" class="modal-mask" @click.self="closeSettings">
       <div class="modal-panel small">
         <div class="overlay-head">
-          <h2>{{ settingsSection === 'calc' ? '计算设置' : (settingsSection === 'display' ? '结果显示设置' : (settingsSection === 'diag' ? '诊断日志' : '设置')) }}</h2>
+          <h2>{{ settingsSection === 'calc' ? '计算设置' : (settingsSection === 'display' ? '结果显示设置' : (settingsSection === 'diag' ? '诊断日志' : (settingsSection === 'data' ? '数据备份与迁移' : '设置'))) }}</h2>
           <button class="secondary" @click="closeSettings">✕</button>
         </div>
         <div v-if="settingsSection === 'all'" class="settings-group-title">计算设置（影响怎么算）</div>
@@ -6758,6 +6845,19 @@ const App = {
               <option :value="100">100 条</option>
             </select>
           </label>
+        </div>
+        <div v-if="settingsSection === 'all' || settingsSection === 'data'" class="settings-group-title">数据备份与迁移</div>
+        <div v-if="settingsSection === 'all' || settingsSection === 'data'" class="settings-list">
+          <div class="text-muted">
+            账号 / Box / 排除名单 / 冠位名单 / 预设 / 自定义礼装可以导出成一个文件；
+            换手机或换电脑时，在新机器上导入这个文件即可。游戏数据（从者、礼装）不包含在里面。
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <button class="secondary" @click="exportPersonalData" :disabled="personalImportBusy">导出个人数据</button>
+            <button class="secondary" @click="triggerPersonalImport" :disabled="personalImportBusy">导入个人数据</button>
+          </div>
+          <input ref="personalImportInput" type="file" accept=".json,application/json" style="display:none" @change="onPersonalImportFile" />
+          <div class="text-muted" v-if="personalImportBusy">正在导入，请不要关闭窗口…</div>
         </div>
         <div v-if="diagLogAvailable() && (settingsSection === 'all' || settingsSection === 'diag')" style="margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:12px">
           <h4 style="margin:0 0 8px">诊断日志</h4>

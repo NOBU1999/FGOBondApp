@@ -47,6 +47,9 @@
     "getUserTeamResult",
     "saveUserTeamResult",
     "deleteUserTeamResult",
+    // 个人数据导出 / 导入（跨端迁移）
+    "exportPersonalData",
+    "importPersonalData",
     "getEventBondBonuses",
     "listAccounts",
     "createAccount",
@@ -640,6 +643,8 @@
     "deleteUserTeam",
     "saveUserTeamResult",
     "deleteUserTeamResult",
+    // 导入个人数据 = 整份替换，必须立刻落盘（不防抖）
+    "importPersonalData",
   ]);
 
   function base64ToBytes(b64) {
@@ -908,6 +913,21 @@
     }
   }
 
+  /** 导入个人数据前留一份当前库（同目录，覆盖上一次的） */
+  async function backupPersonalBeforeImport() {
+    const fs = getFilesystem();
+    const db = window.__fgoDb;
+    const schema = window.__fgoSchema;
+    if (!fs || !db || !schema) return;
+    const bytes = personalBytesFrom(db, schema);
+    await fs.writeFile({
+      path: "fgo_data-before-import.db",
+      directory: "DATA",
+      data: bytesToBase64(bytes),
+      recursive: true,
+    });
+  }
+
   function schedulePersist() {
     if (saveTimer) return;
     saveTimer = setTimeout(async () => {
@@ -1008,6 +1028,23 @@
     const wrapped = {};
     for (const key of Object.keys(bridge)) {
       const fn = bridge[key];
+      if (key === "importPersonalData") {
+        // 导入前先留一份当前个人库（导错了还能换回来），导入后立刻落盘
+        wrapped[key] = async (...args) => {
+          try {
+            await backupPersonalBeforeImport();
+          } catch (err) {
+            pushDiag("warn", "导入前备份失败（继续导入）：" + ((err && err.message) || err));
+          }
+          const out = fn(...args);
+          const res = await schedulePersistNow();
+          if (res && res.ok === false) {
+            pushDiag("warn", "导入后保存失败：" + (res.error || "未知原因"));
+          }
+          return out;
+        };
+        continue;
+      }
       wrapped[key] = WRITE_METHODS.has(key)
         ? (...args) => {
             const out = fn(...args);

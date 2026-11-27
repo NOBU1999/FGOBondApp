@@ -22,6 +22,7 @@ import { createCrownDomain } from "./crown.mjs";
 import { createCustomCraftsDomain } from "./custom-crafts.mjs";
 import { createTeamsDomain } from "./teams.mjs";
 import { createStaticDataDomain } from "./static-data.mjs";
+import { createBackupDomain } from "./backup.mjs";
 
 export function createDomain({ sql, codec }) {
   if (!sql) throw new Error("createDomain 需要注入 sql 端口（见 shared/storage/sql-port.md）");
@@ -38,6 +39,8 @@ export function createDomain({ sql, codec }) {
   const customCrafts = createCustomCraftsDomain({ sql });
   const teams = createTeamsDomain({ sql });
   const staticData = createStaticDataDomain({ sql });
+  // 个人数据导出 / 导入（跨端迁移）：只碰个人表 + 个人设置键
+  const backup = createBackupDomain({ sql });
 
-  return { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData };
+  return { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData, backup };
 }

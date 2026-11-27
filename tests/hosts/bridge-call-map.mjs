@@ -62,6 +62,10 @@ export const BRIDGE_CALL_ROUTES = {
   "teams.saveUserTeamResult": (b, a) => b.saveUserTeamResult(a[0]),
   "teams.deleteUserTeamResult": (b, a) => b.deleteUserTeamResult(a[0]),
 
+  // ---------------- 个人数据导出 / 导入（跨端迁移） ----------------
+  "backup.exportPersonalData": (b) => b.exportPersonalData(),
+  "backup.importPersonalData": (b, a) => b.importPersonalData(a[0]),
+
   // ---------------- 平台能力（宿主专属用例） ----------------
   "platform.getAppInfo": (b) => b.getAppInfo(),
   "platform.getEventBondBonuses": (b) => b.getEventBondBonuses(),

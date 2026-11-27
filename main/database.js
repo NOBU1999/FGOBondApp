@@ -291,6 +291,17 @@ function listCrafts(db, bondOnly = false) {
 }
 
 // ---------------------------------------------------------------------------
+// 个人数据导出 / 导入（跨端迁移，v0.3.8）
+// ---------------------------------------------------------------------------
+function exportPersonalData(db, appVersion) {
+  return getDomain(db).backup.exportPersonalData({ appVersion });
+}
+
+function importPersonalData(db, text) {
+  return getDomain(db).backup.importPersonalData(text);
+}
+
+// ---------------------------------------------------------------------------
 // 用户 Box / 排除名单（逻辑在 shared/domain/box.mjs、exclusions.mjs，这里只做转发）
 // ---------------------------------------------------------------------------
 function getUserBox(db, accountId) {
@@ -468,4 +479,6 @@ module.exports = {
   listCustomCrafts,
   saveCustomCrafts,
   getEventBondBonuses,
+  exportPersonalData,
+  importPersonalData,
 };

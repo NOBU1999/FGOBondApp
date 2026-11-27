@@ -9,55 +9,118 @@
       "method": "accounts.listAccounts",
       "args": [],
       "expect": [
-        { "path": "ok", "eq": true },
-        { "path": "result.accounts.length", "eq": 1 },
-        { "path": "result.accounts[0].name", "eq": "默认账号" },
-        { "path": "result.activeId", "gte": 1 }
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.accounts.length",
+          "eq": 1
+        },
+        {
+          "path": "result.accounts[0].name",
+          "eq": "默认账号"
+        },
+        {
+          "path": "result.activeId",
+          "gte": 1
+        }
       ]
     },
     {
       "name": "accounts.create（具名）",
       "method": "accounts.createAccount",
-      "args": ["测试甲"],
+      "args": [
+        "测试甲"
+      ],
       "expect": [
-        { "path": "ok", "eq": true },
-        { "path": "result.accounts.length", "eq": 2 },
-        { "path": "result.accounts[1].name", "eq": "测试甲" },
-        { "path": "result.accounts[1].servantCount", "eq": 0 }
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.accounts.length",
+          "eq": 2
+        },
+        {
+          "path": "result.accounts[1].name",
+          "eq": "测试甲"
+        },
+        {
+          "path": "result.accounts[1].servantCount",
+          "eq": 0
+        }
       ]
     },
     {
       "name": "accounts.create（空白名 → 自动命名「账号 N」）",
       "method": "accounts.createAccount",
-      "args": ["   "],
+      "args": [
+        "   "
+      ],
       "expect": [
-        { "path": "ok", "eq": true },
-        { "path": "result.accounts.length", "eq": 3 },
-        { "path": "result.accounts[2].name", "matches": "^账号 [0-9]+$" }
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.accounts.length",
+          "eq": 3
+        },
+        {
+          "path": "result.accounts[2].name",
+          "matches": "^账号 [0-9]+$"
+        }
       ]
     },
     {
       "name": "accounts.rename（成功）",
       "method": "accounts.renameAccount",
-      "args": [2, "甲改名"],
-      "expect": [{ "path": "result.accounts[1].name", "eq": "甲改名" }]
+      "args": [
+        2,
+        "甲改名"
+      ],
+      "expect": [
+        {
+          "path": "result.accounts[1].name",
+          "eq": "甲改名"
+        }
+      ]
     },
     {
       "name": "accounts.rename（空名报错）",
       "method": "accounts.renameAccount",
-      "args": [2, "   "],
+      "args": [
+        2,
+        "   "
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "eq": "账号名称不能为空" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "eq": "账号名称不能为空"
+        }
       ]
     },
     {
       "name": "accounts.rename（不存在的账号报错）",
       "method": "accounts.renameAccount",
-      "args": [99999, "x"],
+      "args": [
+        99999,
+        "x"
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "eq": "账号不存在" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "eq": "账号不存在"
+        }
       ]
     },
     {
@@ -65,88 +128,225 @@
       "method": "box.saveUserBox",
       "args": [
         [
-          { "servantId": 100100, "isMaxBond": 1, "bondRank": 10, "bondMaxRank": 10 },
-          { "servantId": 100200, "stage": "second", "personalBonus": 0.05, "bondSwitch1": 1 },
-          { "servantId": 100300, "auraBonus": 0.02, "stage": "" }
+          {
+            "servantId": 100100,
+            "isMaxBond": 1,
+            "bondRank": 10,
+            "bondMaxRank": 10
+          },
+          {
+            "servantId": 100200,
+            "stage": "second",
+            "personalBonus": 0.05,
+            "bondSwitch1": 1
+          },
+          {
+            "servantId": 100300,
+            "auraBonus": 0.02,
+            "stage": ""
+          }
         ],
         2
       ],
       "expect": [
-        { "path": "ok", "eq": true },
-        { "path": "result.count", "eq": 3 },
-        { "path": "result.accountId", "eq": 2 }
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.count",
+          "eq": 3
+        },
+        {
+          "path": "result.accountId",
+          "eq": 2
+        }
       ]
     },
     {
       "name": "box.get（字段归一化：空 stage→fourth、布尔转 0/1、数字保留）",
       "method": "box.getUserBox",
-      "args": [2],
+      "args": [
+        2
+      ],
       "expect": [
-        { "path": "result.length", "eq": 3 },
-        { "path": "result[0].servantId", "eq": 100100 },
-        { "path": "result[0].stage", "eq": "fourth" },
-        { "path": "result[0].isMaxBond", "eq": 1 },
-        { "path": "result[1].stage", "eq": "second" },
-        { "path": "result[1].bondSwitch1", "eq": 1 },
-        { "path": "result[1].personalBonus", "eq": 0.05 },
-        { "path": "result[2].auraBonus", "eq": 0.02 },
-        { "path": "result[2].stage", "eq": "fourth" }
+        {
+          "path": "result.length",
+          "eq": 3
+        },
+        {
+          "path": "result[0].servantId",
+          "eq": 100100
+        },
+        {
+          "path": "result[0].stage",
+          "eq": "fourth"
+        },
+        {
+          "path": "result[0].isMaxBond",
+          "eq": 1
+        },
+        {
+          "path": "result[1].stage",
+          "eq": "second"
+        },
+        {
+          "path": "result[1].bondSwitch1",
+          "eq": 1
+        },
+        {
+          "path": "result[1].personalBonus",
+          "eq": 0.05
+        },
+        {
+          "path": "result[2].auraBonus",
+          "eq": 0.02
+        },
+        {
+          "path": "result[2].stage",
+          "eq": "fourth"
+        }
       ]
     },
     {
       "name": "box.save（写入不存在的账号 → 拒绝）",
       "method": "box.saveUserBox",
-      "args": [[{ "servantId": 100100 }], 99999],
+      "args": [
+        [
+          {
+            "servantId": 100100
+          }
+        ],
+        99999
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "eq": "账号不存在或已被删除，请重新选择账号" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "eq": "账号不存在或已被删除，请重新选择账号"
+        }
       ]
     },
     {
       "name": "box.get（账号隔离：账号 3 应为空）",
       "method": "box.getUserBox",
-      "args": [3],
-      "expect": [{ "path": "result.length", "eq": 0 }]
+      "args": [
+        3
+      ],
+      "expect": [
+        {
+          "path": "result.length",
+          "eq": 0
+        }
+      ]
     },
     {
       "name": "box.reset（清空）",
       "method": "box.resetUserBox",
-      "args": [3],
-      "expect": [{ "path": "result.count", "eq": 0 }]
+      "args": [
+        3
+      ],
+      "expect": [
+        {
+          "path": "result.count",
+          "eq": 0
+        }
+      ]
     },
     {
       "name": "exclusions.save（往返 + 账号隔离）",
       "method": "exclusions.saveExclusions",
-      "args": [{ "servants": [1, 2], "crafts": [10] }, 2],
+      "args": [
+        {
+          "servants": [
+            1,
+            2
+          ],
+          "crafts": [
+            10
+          ]
+        },
+        2
+      ],
       "expect": [
-        { "path": "result.servants", "eq": [1, 2] },
-        { "path": "result.crafts", "eq": [10] },
-        { "path": "result.accountId", "eq": 2 }
+        {
+          "path": "result.servants",
+          "eq": [
+            1,
+            2
+          ]
+        },
+        {
+          "path": "result.crafts",
+          "eq": [
+            10
+          ]
+        },
+        {
+          "path": "result.accountId",
+          "eq": 2
+        }
       ]
     },
     {
       "name": "exclusions.get（另一个账号看不到）",
       "method": "exclusions.getExclusions",
-      "args": [1],
+      "args": [
+        1
+      ],
       "expect": [
-        { "path": "result.servants.length", "eq": 0 },
-        { "path": "result.crafts.length", "eq": 0 }
+        {
+          "path": "result.servants.length",
+          "eq": 0
+        },
+        {
+          "path": "result.crafts.length",
+          "eq": 0
+        }
       ]
     },
     {
       "name": "crown.save（往返 + 去重 + 账号隔离）",
       "method": "crown.saveCrownServants",
-      "args": [[100100, 100200, 100100, 0, null], 2],
+      "args": [
+        [
+          100100,
+          100200,
+          100100,
+          0,
+          null
+        ],
+        2
+      ],
       "expect": [
-        { "path": "result.servants", "eq": [100100, 100200] },
-        { "path": "result.accountId", "eq": 2 }
+        {
+          "path": "result.servants",
+          "eq": [
+            100100,
+            100200
+          ]
+        },
+        {
+          "path": "result.accountId",
+          "eq": 2
+        }
       ]
     },
     {
       "name": "crown.get（另一个账号看不到）",
       "method": "crown.getCrownServants",
-      "args": [1],
-      "expect": [{ "path": "result.servants.length", "eq": 0 }]
+      "args": [
+        1
+      ],
+      "expect": [
+        {
+          "path": "result.servants.length",
+          "eq": 0
+        }
+      ]
     },
     {
       "name": "customCrafts.save（字段归一化 + 解析 conditionGroups）",
@@ -159,119 +359,298 @@
             "cost": "12.7",
             "rarity": 5.4,
             "percentBonus": "0.05",
-            "conditionGroups": [["a"], ["b", "c"]],
+            "conditionGroups": [
+              [
+                "a"
+              ],
+              [
+                "b",
+                "c"
+              ]
+            ],
             "repeatable": true,
             "enabled": false
           },
-          { "name": "自定义乙" }
+          {
+            "name": "自定义乙"
+          }
         ]
       ],
       "expect": [
-        { "path": "result.length", "eq": 2 },
-        { "path": "result[0].name", "eq": "自定义甲" },
-        { "path": "result[0].craftType", "eq": "other" },
-        { "path": "result[0].cost", "eq": 13 },
-        { "path": "result[0].rarity", "eq": 5 },
-        { "path": "result[0].percentBonus", "eq": 0.05 },
-        { "path": "result[0].conditionGroups", "eq": [["a"], ["b", "c"]] },
-        { "path": "result[0].repeatable", "eq": true },
-        { "path": "result[0].enabled", "eq": false },
-        { "path": "result[1].craftType", "eq": "bond" },
-        { "path": "result[1].enabled", "eq": true },
-        { "path": "result[1].repeatable", "eq": false }
+        {
+          "path": "result.length",
+          "eq": 2
+        },
+        {
+          "path": "result[0].name",
+          "eq": "自定义甲"
+        },
+        {
+          "path": "result[0].craftType",
+          "eq": "other"
+        },
+        {
+          "path": "result[0].cost",
+          "eq": 13
+        },
+        {
+          "path": "result[0].rarity",
+          "eq": 5
+        },
+        {
+          "path": "result[0].percentBonus",
+          "eq": 0.05
+        },
+        {
+          "path": "result[0].conditionGroups",
+          "eq": [
+            [
+              "a"
+            ],
+            [
+              "b",
+              "c"
+            ]
+          ]
+        },
+        {
+          "path": "result[0].repeatable",
+          "eq": true
+        },
+        {
+          "path": "result[0].enabled",
+          "eq": false
+        },
+        {
+          "path": "result[1].craftType",
+          "eq": "bond"
+        },
+        {
+          "path": "result[1].enabled",
+          "eq": true
+        },
+        {
+          "path": "result[1].repeatable",
+          "eq": false
+        }
       ]
     },
     {
       "name": "customCrafts.save（空数组 → 全清）",
       "method": "customCrafts.saveCustomCrafts",
-      "args": [[]],
-      "expect": [{ "path": "result.length", "eq": 0 }]
+      "args": [
+        []
+      ],
+      "expect": [
+        {
+          "path": "result.length",
+          "eq": 0
+        }
+      ]
     },
     {
       "name": "teams.save（默认值）",
       "method": "teams.saveUserTeam",
-      "args": [{ "name": "队伍甲" }],
-      "expect": [{ "path": "result", "gte": 1 }]
+      "args": [
+        {
+          "name": "队伍甲"
+        }
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "gte": 1
+        }
+      ]
     },
     {
       "name": "teams.list（默认值补齐 + JSON 字段还原）",
       "method": "teams.listUserTeams",
       "args": [],
       "expect": [
-        { "path": "result.length", "eq": 1 },
-        { "path": "result[0].name", "eq": "队伍甲" },
-        { "path": "result[0].costLimit", "eq": 116 },
-        { "path": "result[0].strategy", "eq": "total_max" },
-        { "path": "result[0].qualityMode", "eq": "balanced" },
-        { "path": "result[0].mode", "eq": "normal" },
-        { "path": "result[0].supportPosition", "eq": "front_right" },
-        { "path": "result[0].fixedServants", "eq": [] },
-        { "path": "result[0].crownPositions", "eq": [] }
+        {
+          "path": "result.length",
+          "eq": 1
+        },
+        {
+          "path": "result[0].name",
+          "eq": "队伍甲"
+        },
+        {
+          "path": "result[0].costLimit",
+          "eq": 116
+        },
+        {
+          "path": "result[0].strategy",
+          "eq": "total_max"
+        },
+        {
+          "path": "result[0].qualityMode",
+          "eq": "balanced"
+        },
+        {
+          "path": "result[0].mode",
+          "eq": "normal"
+        },
+        {
+          "path": "result[0].supportPosition",
+          "eq": "front_right"
+        },
+        {
+          "path": "result[0].fixedServants",
+          "eq": []
+        },
+        {
+          "path": "result[0].crownPositions",
+          "eq": []
+        }
       ]
     },
     {
       "name": "teams.rename（只改名字，两边空白会去掉）",
       "method": "teams.renameUserTeam",
-      "args": [1, "  队伍甲·改名  "],
+      "args": [
+        1,
+        "  队伍甲·改名  "
+      ],
       "expect": [
-        { "path": "result.ok", "eq": true },
-        { "path": "result.name", "eq": "队伍甲·改名" }
+        {
+          "path": "result.ok",
+          "eq": true
+        },
+        {
+          "path": "result.name",
+          "eq": "队伍甲·改名"
+        }
       ]
     },
     {
       "name": "teams.rename（空名 → 报错、原名不变）",
       "method": "teams.renameUserTeam",
-      "args": [1, "   "],
-      "expect": [{ "path": "ok", "eq": false }]
+      "args": [
+        1,
+        "   "
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": false
+        }
+      ]
     },
     {
       "name": "teams.rename（不存在的预设 → 报错）",
       "method": "teams.renameUserTeam",
-      "args": [999, "随便"],
-      "expect": [{ "path": "ok", "eq": false }]
+      "args": [
+        999,
+        "随便"
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": false
+        }
+      ]
     },
     {
       "name": "teams.list（改名已生效、配置不受影响）",
       "method": "teams.listUserTeams",
       "args": [],
       "expect": [
-        { "path": "result.length", "eq": 1 },
-        { "path": "result[0].name", "eq": "队伍甲·改名" },
-        { "path": "result[0].costLimit", "eq": 116 },
-        { "path": "result[0].hasResult", "eq": false }
+        {
+          "path": "result.length",
+          "eq": 1
+        },
+        {
+          "path": "result[0].name",
+          "eq": "队伍甲·改名"
+        },
+        {
+          "path": "result[0].costLimit",
+          "eq": 116
+        },
+        {
+          "path": "result[0].hasResult",
+          "eq": false
+        }
       ]
     },
     {
       "name": "teams.save（同时保存计算结果）",
       "method": "teams.saveUserTeam",
-      "args": [{
-        "name": "队伍乙",
-        "result": { "status": "success", "top20": [{ "rank": 1, "totalMultiplier": 10.92 }] },
-        "request": { "costLimit": 116, "mode": "normal" },
-        "dataRevision": "rev-A"
-      }],
-      "expect": [{ "path": "result", "gte": 2 }]
+      "args": [
+        {
+          "name": "队伍乙",
+          "result": {
+            "status": "success",
+            "top20": [
+              {
+                "rank": 1,
+                "totalMultiplier": 10.92
+              }
+            ]
+          },
+          "request": {
+            "costLimit": 116,
+            "mode": "normal"
+          },
+          "dataRevision": "rev-A"
+        }
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "gte": 2
+        }
+      ]
     },
     {
       "name": "teams.list（带结果的预设只给摘要，不吐正文）",
       "method": "teams.listUserTeams",
       "args": [],
       "expect": [
-        { "path": "result.length", "eq": 2 },
-        { "path": "result[0].name", "eq": "队伍乙" },
-        { "path": "result[0].hasResult", "eq": true },
-        { "path": "result[0].resultDataRevision", "eq": "rev-A" },
-        { "path": "result[1].name", "eq": "队伍甲·改名" },
-        { "path": "result[1].hasResult", "eq": false }
+        {
+          "path": "result.length",
+          "eq": 2
+        },
+        {
+          "path": "result[0].name",
+          "eq": "队伍乙"
+        },
+        {
+          "path": "result[0].hasResult",
+          "eq": true
+        },
+        {
+          "path": "result[0].resultDataRevision",
+          "eq": "rev-A"
+        },
+        {
+          "path": "result[1].name",
+          "eq": "队伍甲·改名"
+        },
+        {
+          "path": "result[1].hasResult",
+          "eq": false
+        }
       ]
     },
     {
       "name": "teams.rename（带结果的预设改名，结果还挂着）",
       "method": "teams.renameUserTeam",
-      "args": [2, "队伍乙·改名"],
+      "args": [
+        2,
+        "队伍乙·改名"
+      ],
       "expect": [
-        { "path": "result.ok", "eq": true },
-        { "path": "result.name", "eq": "队伍乙·改名" }
+        {
+          "path": "result.ok",
+          "eq": true
+        },
+        {
+          "path": "result.name",
+          "eq": "队伍乙·改名"
+        }
       ]
     },
     {
@@ -279,231 +658,609 @@
       "method": "teams.listUserTeams",
       "args": [],
       "expect": [
-        { "path": "result[0].name", "eq": "队伍乙·改名" },
-        { "path": "result[0].hasResult", "eq": true },
-        { "path": "result[0].resultDataRevision", "eq": "rev-A" }
+        {
+          "path": "result[0].name",
+          "eq": "队伍乙·改名"
+        },
+        {
+          "path": "result[0].hasResult",
+          "eq": true
+        },
+        {
+          "path": "result[0].resultDataRevision",
+          "eq": "rev-A"
+        }
       ]
     },
     {
       "name": "teams.getResult（取回挂着的计算结果）",
       "method": "teams.getUserTeamResult",
-      "args": [2],
+      "args": [
+        2
+      ],
       "expect": [
-        { "path": "result.dataRevision", "eq": "rev-A" },
-        { "path": "result.request.costLimit", "eq": 116 },
-        { "path": "result.result.status", "eq": "success" },
-        { "path": "result.result.top20[0].totalMultiplier", "eq": 10.92 }
+        {
+          "path": "result.dataRevision",
+          "eq": "rev-A"
+        },
+        {
+          "path": "result.request.costLimit",
+          "eq": 116
+        },
+        {
+          "path": "result.result.status",
+          "eq": "success"
+        },
+        {
+          "path": "result.result.top20[0].totalMultiplier",
+          "eq": 10.92
+        }
       ]
     },
     {
       "name": "teams.getResult（没挂结果的预设 → null）",
       "method": "teams.getUserTeamResult",
-      "args": [1],
-      "expect": [{ "path": "result", "eq": null }]
+      "args": [
+        1
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "eq": null
+        }
+      ]
     },
     {
       "name": "teams.saveResult（给已有预设补挂一份结果）",
       "method": "teams.saveUserTeamResult",
-      "args": [{ "teamId": 1, "result": { "status": "success", "top20": [] }, "dataRevision": "rev-B" }],
+      "args": [
+        {
+          "teamId": 1,
+          "result": {
+            "status": "success",
+            "top20": []
+          },
+          "dataRevision": "rev-B"
+        }
+      ],
       "expect": [
-        { "path": "result.ok", "eq": true },
-        { "path": "result.resultId", "gte": 1 }
+        {
+          "path": "result.ok",
+          "eq": true
+        },
+        {
+          "path": "result.resultId",
+          "gte": 1
+        }
       ]
     },
     {
       "name": "teams.saveResult（同一预设只留最新一份）",
       "method": "teams.getUserTeamResult",
-      "args": [1],
-      "expect": [{ "path": "result.dataRevision", "eq": "rev-B" }]
+      "args": [
+        1
+      ],
+      "expect": [
+        {
+          "path": "result.dataRevision",
+          "eq": "rev-B"
+        }
+      ]
     },
     {
       "name": "teams.deleteResult（清掉结果、预设本身还在）",
       "method": "teams.deleteUserTeamResult",
-      "args": [1],
-      "expect": [{ "path": "result.ok", "eq": true }]
+      "args": [
+        1
+      ],
+      "expect": [
+        {
+          "path": "result.ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "teams.delete（带结果的预设一起删干净）",
       "method": "teams.deleteUserTeam",
-      "args": [2],
-      "expect": [{ "path": "result.ok", "eq": true }]
+      "args": [
+        2
+      ],
+      "expect": [
+        {
+          "path": "result.ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "teams.list（删完只剩改过名的队伍甲，且没有结果）",
       "method": "teams.listUserTeams",
       "args": [],
       "expect": [
-        { "path": "result.length", "eq": 1 },
-        { "path": "result[0].name", "eq": "队伍甲·改名" },
-        { "path": "result[0].hasResult", "eq": false }
+        {
+          "path": "result.length",
+          "eq": 1
+        },
+        {
+          "path": "result[0].name",
+          "eq": "队伍甲·改名"
+        },
+        {
+          "path": "result[0].hasResult",
+          "eq": false
+        }
       ]
     },
     {
       "name": "teams.delete（存在 / 不存在）",
       "method": "teams.deleteUserTeam",
-      "args": [1],
-      "expect": [{ "path": "result.ok", "eq": true }]
+      "args": [
+        1
+      ],
+      "expect": [
+        {
+          "path": "result.ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "teams.delete（不存在 → ok=false）",
       "method": "teams.deleteUserTeam",
-      "args": [999],
+      "args": [
+        999
+      ],
       "expect": [
-        { "path": "result.ok", "eq": false },
-        { "path": "result.changes", "eq": 0 }
+        {
+          "path": "result.ok",
+          "eq": false
+        },
+        {
+          "path": "result.changes",
+          "eq": 0
+        }
       ]
     },
     {
       "name": "meta.region（非法值回落 jp）",
       "method": "meta.setServerRegion",
-      "args": ["cn"],
-      "expect": [{ "path": "result", "eq": null }]
+      "args": [
+        "cn"
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "eq": null
+        }
+      ]
     },
     {
       "name": "meta.region（读回 cn）",
       "method": "meta.getServerRegion",
       "args": [],
-      "expect": [{ "path": "result", "eq": "cn" }]
+      "expect": [
+        {
+          "path": "result",
+          "eq": "cn"
+        }
+      ]
     },
     {
       "name": "meta.region（非法值 → jp）",
       "method": "meta.setServerRegion",
-      "args": ["xx"],
-      "expect": [{ "path": "result", "eq": null }]
+      "args": [
+        "xx"
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "eq": null
+        }
+      ]
     },
     {
       "name": "meta.region（确认回落）",
       "method": "meta.getServerRegion",
       "args": [],
-      "expect": [{ "path": "result", "eq": "jp" }]
+      "expect": [
+        {
+          "path": "result",
+          "eq": "jp"
+        }
+      ]
     },
     {
       "name": "meta.generic（去重 + 过滤非法值）",
       "method": "meta.setGenericBondParticipation",
-      "args": [[1, 1, 2, "x", 3]],
-      "expect": [{ "path": "result", "eq": [1, 2, 3] }]
+      "args": [
+        [
+          1,
+          1,
+          2,
+          "x",
+          3
+        ]
+      ],
+      "expect": [
+        {
+          "path": "result",
+          "eq": [
+            1,
+            2,
+            3
+          ]
+        }
+      ]
     },
     {
       "name": "staticData.getServant（真实数据可读）",
       "method": "staticData.getServant",
-      "args": ["$firstServantId"],
+      "args": [
+        "$firstServantId"
+      ],
       "expect": [
-        { "path": "result.id", "eq": "$firstServantId" },
-        { "path": "result.name", "matches": ".+" }
+        {
+          "path": "result.id",
+          "eq": "$firstServantId"
+        },
+        {
+          "path": "result.name",
+          "matches": ".+"
+        }
       ]
     },
     {
       "name": "staticData.listCrafts（牵绊礼装可读）",
       "method": "staticData.listCrafts",
-      "args": [true],
+      "args": [
+        true
+      ],
       "expect": [
-        { "path": "result.length", "gte": 10 },
-        { "path": "result[0].craftType", "eq": "bond" }
+        {
+          "path": "result.length",
+          "gte": 10
+        },
+        {
+          "path": "result[0].craftType",
+          "eq": "bond"
+        }
       ]
     },
     {
       "name": "staticData.getStageTraits（真实特性可读）",
       "method": "staticData.getStageTraits",
-      "args": ["$servantWithTraits", "fourth", "jp"],
-      "expect": [{ "path": "result.length", "gte": 1 }]
+      "args": [
+        "$servantWithTraits",
+        "fourth",
+        "jp"
+      ],
+      "expect": [
+        {
+          "path": "result.length",
+          "gte": 1
+        }
+      ]
     },
     {
       "name": "box.importCaptureContent（抓包 → Box：满绊按「当前上限」判定）",
       "method": "box.importCaptureContent",
-      "args": ["$captureJson", 2],
+      "args": [
+        "$captureJson",
+        2
+      ],
       "expect": [
-        { "path": "result.servants", "eq": 3 },
-        { "path": "result.maxBond", "eq": 3 }
+        {
+          "path": "result.servants",
+          "eq": 3
+        },
+        {
+          "path": "result.maxBond",
+          "eq": 3
+        }
       ]
     },
     {
       "name": "box.importCaptureContent（选错文件：读不出内容 → 报错，不写库）",
       "method": "box.importCaptureContent",
-      "args": ["<html>这不是抓包文件</html>", 2],
+      "args": [
+        "<html>这不是抓包文件</html>",
+        2
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "matches": "读不出抓包数据" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "matches": "读不出抓包数据"
+        }
       ]
     },
     {
       "name": "box.importCaptureContent（选错文件：是 JSON 但没有从者数据 → 报错，不写库）",
       "method": "box.importCaptureContent",
-      "args": ["{\"hello\":\"world\"}", 2],
+      "args": [
+        "{\"hello\":\"world\"}",
+        2
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "matches": "没有找到从者数据" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "matches": "没有找到从者数据"
+        }
       ]
     },
     {
       "name": "box.importCaptureContent（抓包「导出响应」带 HTTP 头也能导入：正文同样是 base64）",
       "method": "box.importCaptureContent",
-      "args": ["$captureHttpDump", 2],
+      "args": [
+        "$captureHttpDump",
+        2
+      ],
       "expect": [
-        { "path": "result.servants", "eq": 3 },
-        { "path": "result.maxBond", "eq": 3 }
+        {
+          "path": "result.servants",
+          "eq": 3
+        },
+        {
+          "path": "result.maxBond",
+          "eq": 3
+        }
       ]
     },
     {
       "name": "box.importCaptureContent（带 HTTP 头但正文里没有从者数据 → 照样报错）",
       "method": "box.importCaptureContent",
-      "args": ["$captureHttpDumpNoData", 2],
+      "args": [
+        "$captureHttpDumpNoData",
+        2
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "matches": "没有找到从者数据" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "matches": "没有找到从者数据"
+        }
       ]
     },
     {
       "name": "box.importCaptureContent（正文被 URL 转义 + 折行也能导入：%2B/%2F/%3D）",
       "method": "box.importCaptureContent",
-      "args": ["$captureUrlEncoded", 2],
+      "args": [
+        "$captureUrlEncoded",
+        2
+      ],
       "expect": [
-        { "path": "result.servants", "eq": 3 },
-        { "path": "result.maxBond", "eq": 3 }
+        {
+          "path": "result.servants",
+          "eq": 3
+        },
+        {
+          "path": "result.maxBond",
+          "eq": 3
+        }
       ]
     },
     {
       "name": "box.getUserBox（选错文件后 Box 必须保持原样，不能被清空）",
       "method": "box.getUserBox",
-      "args": [2],
+      "args": [
+        2
+      ],
       "expect": [
-        { "path": "result.length", "eq": 3 }
+        {
+          "path": "result.length",
+          "eq": 3
+        }
       ]
     },
     {
       "name": "accounts.copy（复制账号带走 Box + 排除）",
       "method": "accounts.createAccount",
-      "args": ["复制自甲", { "copyFromId": 2 }],
+      "args": [
+        "复制自甲",
+        {
+          "copyFromId": 2
+        }
+      ],
       "expect": [
-        { "path": "result.accounts.length", "eq": 4 },
-        { "path": "result.accounts[3].servantCount", "eq": 3 },
-        { "path": "result.accounts[3].exclusionCount", "eq": 3 }
+        {
+          "path": "result.accounts.length",
+          "eq": 4
+        },
+        {
+          "path": "result.accounts[3].servantCount",
+          "eq": 3
+        },
+        {
+          "path": "result.accounts[3].exclusionCount",
+          "eq": 3
+        }
       ]
     },
     {
       "name": "accounts.delete（删到只剩一个 → 报错）",
       "method": "accounts.deleteAccount",
-      "args": [2],
-      "expect": [{ "path": "ok", "eq": true }]
+      "args": [
+        2
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "accounts.delete（继续删 3）",
       "method": "accounts.deleteAccount",
-      "args": [3],
-      "expect": [{ "path": "ok", "eq": true }]
+      "args": [
+        3
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "accounts.delete（继续删 4）",
       "method": "accounts.deleteAccount",
-      "args": [4],
-      "expect": [{ "path": "ok", "eq": true }]
+      "args": [
+        4
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        }
+      ]
     },
     {
       "name": "accounts.delete（最后一个不可删）",
       "method": "accounts.deleteAccount",
-      "args": [1],
+      "args": [
+        1
+      ],
       "expect": [
-        { "path": "ok", "eq": false },
-        { "path": "error", "eq": "至少保留一个账号" }
+        {
+          "path": "ok",
+          "eq": false
+        },
+        {
+          "path": "error",
+          "eq": "至少保留一个账号"
+        }
+      ]
+    },
+    {
+      "name": "backup.export（返回可保存的 JSON 与行数）",
+      "method": "backup.exportPersonalData",
+      "args": [],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.kind",
+          "eq": "personal-data"
+        },
+        {
+          "path": "result.formatVersion",
+          "eq": 1
+        },
+        {
+          "path": "result.counts.accounts",
+          "gte": 1
+        },
+        {
+          "path": "result.filename",
+          "matches": "\\.json$"
+        }
+      ]
+    },
+    {
+      "name": "backup.import（不是本程序的文件 → 拒绝，数据不变）",
+      "method": "backup.importPersonalData",
+      "args": [
+        "{ 这不是个人数据 }"
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": false
+        }
+      ]
+    },
+    {
+      "name": "backup.import（整份替换：账号 / Box / 区服 / 活跃账号）",
+      "method": "backup.importPersonalData",
+      "args": [
+        "{\"kind\":\"personal-data\",\"formatVersion\":1,\"tables\":{\"accounts\":[{\"id\":7,\"name\":\"迁移账号\"}],\"user_box\":[{\"account_id\":7,\"servant_id\":100100,\"stage\":\"fourth\",\"is_max_bond\":0,\"bond_switch1\":1,\"bond_switch2\":0}]},\"meta\":{\"server_region\":\"cn\",\"active_account_id\":\"7\"}}"
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.counts.accounts",
+          "eq": 1
+        },
+        {
+          "path": "result.counts.user_box",
+          "eq": 1
+        }
+      ]
+    },
+    {
+      "name": "导入后 accounts.list 看到新账号",
+      "method": "accounts.listAccounts",
+      "args": [],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.accounts.length",
+          "eq": 1
+        },
+        {
+          "path": "result.accounts[0].id",
+          "eq": 7
+        },
+        {
+          "path": "result.accounts[0].name",
+          "eq": "迁移账号"
+        },
+        {
+          "path": "result.activeId",
+          "eq": 7
+        }
+      ]
+    },
+    {
+      "name": "导入后区服跟着变",
+      "method": "meta.getServerRegion",
+      "args": [],
+      "expect": [
+        {
+          "path": "result",
+          "eq": "cn"
+        }
+      ]
+    },
+    {
+      "name": "导入后 Box 属于新账号",
+      "method": "box.getUserBox",
+      "args": [
+        7
+      ],
+      "expect": [
+        {
+          "path": "ok",
+          "eq": true
+        },
+        {
+          "path": "result.length",
+          "eq": 1
+        },
+        {
+          "path": "result[0].servantId",
+          "eq": 100100
+        }
       ]
     }
   ]

@@ -106,8 +106,36 @@ const SKIP_SCHEMA_METHODS = new Set([
   "getEventBondBonuses",
 ]);
 
+/**
+ * 导入个人数据前先备份当前个人库（db/backup/personal-before-import-*.db）。
+ * 失败只记日志：导入本身有事务保护，不会写一半。
+ */
+function backupPersonalDbBeforeImport() {
+  const dbPath = getDbPath();
+  try {
+    const db = database.open(dbPath, { attachGame: false });
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } finally {
+      db.close();
+    }
+    const dir = path.join(path.dirname(dbPath), "backup");
+    fs.mkdirSync(dir, { recursive: true });
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    const stamp =
+      `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+      `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    fs.copyFileSync(dbPath, path.join(dir, `personal-before-import-${stamp}.db`));
+  } catch (err) {
+    console.warn("[ipc] 导入前备份个人库失败（继续导入）：", (err && err.message) || err);
+  }
+}
+
 /** 每次调用开一次库（与重构前一致）：打开 → 建表 → 跑桥接方法 → 关库 */
 async function withDataBridge(name, run) {
+  // 导入个人数据是「整份替换」：调用前先留一份当前库，导错了还能换回来
+  if (name === "importPersonalData") backupPersonalDbBeforeImport();
   const db = database.open(getDbPath());
   try {
     if (!SKIP_SCHEMA_METHODS.has(name)) database.ensureSchema(db);

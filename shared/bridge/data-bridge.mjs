@@ -14,7 +14,7 @@
  */
 
 export function createDataBridge({ domain, platform = {} }) {
-  const { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData } = domain;
+  const { meta, accounts, box, exclusions, crown, customCrafts, teams, staticData, backup } = domain;
 
   const P = {
     appRoot: platform.appRoot ?? null,
@@ -103,6 +103,12 @@ export function createDataBridge({ domain, platform = {} }) {
     getUserTeamResult: (teamId) => teams.getUserTeamResult(teamId),
     saveUserTeamResult: (payload) => teams.saveUserTeamResult(payload || {}),
     deleteUserTeamResult: (teamId) => teams.deleteUserTeamResult(teamId),
+
+    // ---------------- 个人数据导出 / 导入（跨端迁移，v0.3.8） ----------------
+    // 导出只读：返回 JSON 文本 + 各表行数 + 建议文件名，界面自己用 saveTextFile 落盘
+    exportPersonalData: () => backup.exportPersonalData({ appVersion: P.version }),
+    // 导入是**整份替换**：宿主在调用前备份当前个人库（桌面 ipc-handlers / 安卓 boot.js）
+    importPersonalData: (text) => backup.importPersonalData(text),
   };
 }
 
@@ -127,6 +133,8 @@ export const WRITE_METHODS = new Set([
   "deleteUserTeam",
   "saveUserTeamResult",
   "deleteUserTeamResult",
+  // 整份替换个人数据（导入后必须落盘）
+  "importPersonalData",
 ]);
 
 /**
@@ -144,6 +152,7 @@ const STUB_DOMAIN = {
   customCrafts: {},
   teams: {},
   staticData: {},
+  backup: {},
 };
 export const BRIDGE_METHOD_NAMES = Object.freeze(
   Object.keys(createDataBridge({ domain: STUB_DOMAIN }))
