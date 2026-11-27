@@ -2101,7 +2101,8 @@ label.team-config-check {
   cursor: pointer;
 }
 .craft-alt-item:hover { background: rgba(255, 255, 255, 0.07); }
-.craft-alt-reset { padding: 2px 8px; }
+/* 「⟲ 恢复」与旁边的「详情 / 导出JSON」同款按钮，只保证不换行 */
+.result-reset { white-space: nowrap; }
 
 /* 同分礼装（2026-11-24）：礼装格内下方标注「可换 N」，点格子弹下拉选替换 */
 .mini-craft-wrap { position: relative; }
@@ -2144,6 +2145,20 @@ label.team-config-check {
   cursor: pointer;
 }
 .mini-craft-alt-item:hover { background: rgba(255, 255, 255, 0.08); }
+/* 原礼装 / 队内已有：下拉里给个小标签，说明这一项是怎么回事 */
+.mini-craft-alt-item.is-original,
+.craft-alt-item.is-original { outline: 1px dashed rgba(255, 255, 255, 0.25); }
+.mini-craft-alt-badge,
+.craft-alt-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: var(--muted);
+  white-space: nowrap;
+}
 .mini-craft-alt-img { width: 72px; height: 33px; object-fit: cover; border-radius: 3px; }
 .mini-craft-alt-name { font-size: 12px; line-height: 1.25; }
 .mini-craft-alt-cost {
