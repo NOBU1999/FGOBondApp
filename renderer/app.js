@@ -459,6 +459,9 @@ const App = {
         rememberTeamByMode: true,
         // 切模式时清空当前结果（v0.3.8，默认开 = 老行为；关掉则保留，方便两种模式对照着看）
         clearResultsOnModeSwitch: true,
+        // 同分礼装替换（v0.3.8，默认关）：结果卡里标出"这一格换成别的礼装也同分"。
+        // 只在最终输出行上算一次，约 +1 秒；关着时引擎整段跳过。
+        craftAlternatives: false,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -470,6 +473,9 @@ const App = {
       sameScoreExpanded: {},
       // 当前展开了"同分"下拉的方案序号
       expandedSameScore: null,
+      // 同分礼装（单格替换）：rank → { "位置#0/1": 礼装 id }；以及当前展开的礼装下拉
+      craftOverride: {},
+      craftAltOpen: null,
       simpleExcludedServants: [],
       currentPage: 1,
       pageSize: 50,
@@ -1426,6 +1432,7 @@ const App = {
     chooseSameScore(result, index) {
       const rank = Number(result && result.rank);
       if (!rank) return;
+      this.craftAltOpen = null; // 换阵容时收起礼装下拉（它只对本行原阵容有意义）
       // -1 = 本行原阵容（点「本行原阵容」那一条时把选择清掉）
       if (Number(index) < 0) {
         this.sameScoreChoice = { ...(this.sameScoreChoice || {}), [rank]: -1 };
@@ -1745,9 +1752,9 @@ const App = {
       const team = (result && result.team) || [];
       // 用**过滤后**的替补列表：本行头部被简易排除时，这里会自动换成第一支干净的
       const list = this.sameScoreListFiltered(result);
-      if (!list.length) return team;
+      if (!list.length) return this.applyCraftOverride(result, team);
       const idx = this.sameScoreChoiceIndex(result);
-      if (idx < 0) return team; // -1 = 本行原阵容
+      if (idx < 0) return this.applyCraftOverride(result, team); // -1 = 本行原阵容
       const alt = list[idx] || {};
       const slots = this.altSlots(result, alt);
       const players = team.filter((m) => !m.isSupport);
@@ -1799,6 +1806,127 @@ const App = {
         return { ...m, stage: bonus.stage, bonusDetail: { ...(m.bonusDetail || {}), ...bonus.detail } };
       });
       // 形态数据还没取到 ⇒ 后台取回来（取到后界面自动重算，不是每帧都请求）
+      if (need.some((sid) => !(this.servantForms || {})[sid])) this.ensureServantForms(need);
+      // ⚠️ 这里**不套**单格礼装替换：换上的那张是按"本行原阵容"整队验过的同分，
+      //    同样的礼装挪到另一批人身上未必还同分（用户 2026-11-24 定：切到同分队伍就用那支自己的原装礼装）。
+      return out;
+    },
+    // ---------------- 同分礼装（单格替换，2026-11-24）----------------
+    // 引擎在每行给出 `craftAlternatives: [{position, slot, craftIds}]`：换成这些礼装，本行分数不变
+    // （判定是引擎整队重算的）。界面负责：单格替换、显示随动、可回退。
+    /** 只有本行原阵容才提供「可换」入口：替补阵容的人不同，引擎那张同分表对它们不成立。 */
+    craftAltAvailable(result) {
+      return this.sameScoreChoiceIndex(result) < 0;
+    },
+    craftAltFor(result, position, slot) {
+      // 先看这一行有没有可换项（模板每格都会问，绝大多数行是空的）——省掉下面那次列表过滤
+      const list = result && Array.isArray(result.craftAlternatives) ? result.craftAlternatives : [];
+      if (!list.length) return [];
+      if (!this.craftAltAvailable(result)) return [];
+      const hit = list.find((a) => String(a.position) === String(position) && Number(a.slot) === Number(slot));
+      if (!hit || !Array.isArray(hit.craftIds)) return [];
+      const current = this.overriddenCraftId(result, position, slot);
+      return hit.craftIds.filter((cid) => Number(cid) !== Number(current));
+    },
+    craftOverrideFor(result, position, slot) {
+      const rank = Number(result && result.rank);
+      const row = (this.craftOverride || {})[rank] || {};
+      const key = `${position}#${slot}`;
+      return Object.prototype.hasOwnProperty.call(row, key) ? Number(row[key]) : null;
+    },
+    /** 这一格"现在挂着"的礼装：有替换就用替换的，否则用结果里的 */
+    overriddenCraftId(result, position, slot) {
+      const over = this.craftOverrideFor(result, position, slot);
+      if (over !== null) return over;
+      const team = (result && result.team) || [];
+      const m = team.find((x) => String(x.position) === String(position));
+      if (!m) return null;
+      return slot === 1 ? (m.secondCraftId ?? null) : (m.craftId ?? null);
+    },
+    hasCraftOverride(result) {
+      const rank = Number(result && result.rank);
+      const row = (this.craftOverride || {})[rank];
+      return Boolean(row && Object.keys(row).length);
+    },
+    craftAltOpenHere(result, position, slot) {
+      const cur = this.craftAltOpen;
+      return Boolean(cur)
+        && Number(cur.rank) === Number(result && result.rank)
+        && String(cur.position) === String(position)
+        && Number(cur.slot) === Number(slot);
+    },
+    toggleCraftAlt(result, position, slot) {
+      this.craftAltOpen = this.craftAltOpenHere(result, position, slot)
+        ? null
+        : { rank: Number(result && result.rank), position: String(position), slot: Number(slot) };
+    },
+    chooseCraftAlt(result, position, slot, craftId) {
+      const rank = Number(result && result.rank);
+      if (!rank) return;
+      const all = { ...(this.craftOverride || {}) };
+      const row = { ...(all[rank] || {}) };
+      row[`${position}#${slot}`] = Number(craftId);
+      all[rank] = row;
+      this.craftOverride = all;
+      this.craftAltOpen = null;
+    },
+    resetCraftAlts(result) {
+      const rank = Number(result && result.rank);
+      if (!rank) return;
+      const all = { ...(this.craftOverride || {}) };
+      delete all[rank];
+      this.craftOverride = all;
+      this.craftAltOpen = null;
+    },
+    /**
+     * 把"这一行已选的同分礼装替换"应用到显示的队伍上：
+     * 换礼装后要按新礼装重算队伍级上下文与每位成员的加成（否则详情、Cost、导出全不对）。
+     */
+    applyCraftOverride(result, team) {
+      const rank = Number(result && result.rank);
+      const row = (this.craftOverride || {})[rank];
+      if (!row || !Object.keys(row).length || !Array.isArray(team) || !team.length) return team;
+      const applied = team.map((m) => {
+        const c0 = row[`${m.position}#0`];
+        const c1 = row[`${m.position}#1`];
+        if (c0 === undefined && c1 === undefined) return m;
+        const next = {
+          ...m,
+          craftId: c0 !== undefined ? Number(c0) : m.craftId,
+          secondCraftId: c1 !== undefined ? Number(c1) : m.secondCraftId,
+        };
+        const c = this.craftById(next.craftId);
+        if (c) {
+          next.craftName = c.name || "";
+          next.craftType = c.craftType;
+        }
+        const c2 = this.craftById(next.secondCraftId);
+        if (c2) {
+          next.secondCraftName = c2.name || "";
+          next.secondCraftType = c2.craftType;
+        }
+        return next;
+      });
+      const players = applied.filter((m) => !m.isSupport);
+      const sup = applied.find((m) => m.isSupport) || {};
+      const altLike = {
+        craftIds: players.map((m) => m.craftId),
+        secondCraftIds: players.map((m) => m.secondCraftId),
+        supportCraftId: sup.craftId ?? null,
+        supportSecondCraftId: sup.secondCraftId ?? null,
+      };
+      const ctxInfo = this.teamBonusContext(result, altLike, applied);
+      const need = [];
+      const out = applied.map((m) => {
+        if (m.isSupport) return m;
+        const c0 = row[`${m.position}#0`];
+        const c1 = row[`${m.position}#1`];
+        if (c0 === undefined && c1 === undefined) return m;
+        need.push(Number(m.servantId));
+        const bonus = this.recomputeMemberBonus(m, ctxInfo);
+        if (!bonus) return m;
+        return { ...m, stage: bonus.stage, bonusDetail: { ...(m.bonusDetail || {}), ...bonus.detail } };
+      });
       if (need.some((sid) => !(this.servantForms || {})[sid])) this.ensureServantForms(need);
       return out;
     },
@@ -3811,7 +3939,7 @@ const App = {
       e.preventDefault();
       this.contextMenu = { visible: true, x: e.clientX, y: e.clientY, slotIndex, target, craftIndex };
     },
-    closeContextMenu() { this.contextMenu.visible = false; this.settingsMenuOpen = false; },
+    closeContextMenu() { this.contextMenu.visible = false; this.settingsMenuOpen = false; this.craftAltOpen = null; },
     ctxSupport() {
       const i = this.contextMenu.slotIndex;
       if (i !== null) this.toggleSupport(i);
@@ -4344,6 +4472,8 @@ const App = {
       this.expandedSameScore = null;
       this.sameScoreChoice = {};
       this.sameScoreExpanded = {};
+      this.craftOverride = {};
+      this.craftAltOpen = null;
       this.compareSelectedRanks = [];
       this.compareVisible = false;
       this.currentPage = 1;
@@ -4676,6 +4806,8 @@ const App = {
         crownAutoServants: !!(this.crownModeOn && this.crownAutoServants),
         // 柱子战：+20% 由引擎按「队里有没有玛修」逐队判定（助战借来的不算），界面不再让用户选
         mainStoryBondBonus: this.mode === "pillar" ? 0.2 : 0,
+        // 同分礼装替换（默认关；只在最终输出行上算，约 +1 秒）
+        craftAlternatives: this.resultSettings.craftAlternatives === true,
         baseBond: Number(this.baseBond || 0),
         sortMode: this.sortMode === "points" && Number(this.baseBond || 0) > 0 ? "points" : "multiplier",
         fixedServants,
@@ -4889,6 +5021,8 @@ const App = {
           }
         }
         this.results = this.mergeRankResults(allResults);
+        this.craftOverride = {};
+        this.craftAltOpen = null;
         this.totalCandidates = result.totalCandidates || this.results.length;
         this.lastSearchStats = {
           elapsed: result._elapsed,
@@ -5528,8 +5662,8 @@ const App = {
         <button v-if="!isAndroidPlatform()" class="secondary" @click.stop="openUpdateModal">更新数据</button>
         <!-- 设置必须能从界面进：安卓没有系统菜单，只能靠这个按钮（PC 端已挪到左上角「设置 ▾」） -->
         <button v-if="isAndroidPlatform()" class="secondary" @click.stop="openSettings()">设置</button>
-        <!-- 使用说明：PC 走菜单「帮助 → 使用说明」(F1)，安卓没有菜单所以给按钮 -->
-        <button v-if="isAndroidPlatform()" class="secondary" @click.stop="openManual">使用说明</button>
+        <!-- 使用说明：0.3.8 起两条平台都在工具栏给一级入口（桌面原来只有菜单 F1，新人找不到） -->
+        <button class="secondary" @click.stop="openManual">使用说明</button>
       </div>
     </div>
 
@@ -5915,8 +6049,14 @@ const App = {
               :title="'本行另有 ' + sameScoreCount(r) + ' 支「同分可替换」阵容（分数完全相同）；点开可看全部，点其中一支即可让它在本行显示，点「本行原阵容」换回不换人的那一支'"
               @click="expandedSameScore = (expandedSameScore === r.rank ? null : r.rank)"
             >
-              {{ expandedSameScore === r.rank ? '▴' : '▾' }} 同分 {{ sameScoreCount(r) }} 支
+              {{ expandedSameScore === r.rank ? '▴' : '▾' }} 同分队伍 {{ sameScoreCount(r) }} 支
             </button>
+            <button
+              v-if="craftAltAvailable(r) && hasCraftOverride(r)"
+              class="secondary craft-alt-reset"
+              title="恢复本行原始礼装"
+              @click="resetCraftAlts(r)"
+            >⟲</button>
             <button class="secondary" @click="expandedResult = (expandedResult === r ? null : r)">详情</button>
             <button class="secondary" @click="exportJson(r)">导出JSON</button>
           </div>
@@ -6024,11 +6164,27 @@ const App = {
               <div v-for="(cm, ci) in visibleResultCraftItems(m)" :key="'craft-' + cm.index" class="mini-craft-wrap">
                 <div
                   class="mini-cell mini-craft"
-                  :class="{ second: cm.index === 1, 'no-img': !cm.hasImage }"
+                  :class="{ second: cm.index === 1, 'no-img': !cm.hasImage, 'has-alt': craftAltFor(r, m.position, cm.index).length > 0 }"
+                  :title="craftAltFor(r, m.position, cm.index).length ? '点一下可换成同分的其他礼装' : ''"
                   @contextmenu="openResultContext($event, r, m, 'craft', cm.index)"
+                  @click.stop="craftAltFor(r, m.position, cm.index).length && toggleCraftAlt(r, m.position, cm.index)"
                 >
                   <img v-if="cm.hasImage" :src="craftImagePathId(cm.craftId)" class="mini-craft-img" alt="" />
                   <span v-else class="mini-craft-name">{{ cm.craftName || '无礼装' }}</span>
+                  <span v-if="craftAltFor(r, m.position, cm.index).length" class="mini-craft-alt-hint">可换 {{ craftAltFor(r, m.position, cm.index).length }}</span>
+                </div>
+                <div v-if="craftAltOpenHere(r, m.position, cm.index)" class="mini-craft-alt-list">
+                  <div
+                    v-for="cid in craftAltFor(r, m.position, cm.index)"
+                    :key="'alt-' + cid"
+                    class="mini-craft-alt-item"
+                    :title="((craftById(cid) || {}).name || cid) + '（cost ' + craftCostById(cid) + '）'"
+                    @click.stop="chooseCraftAlt(r, m.position, cm.index, cid)"
+                  >
+                    <img v-if="hasCraftImageId(cid)" :src="craftImagePathId(cid)" class="mini-craft-alt-img" alt="" />
+                    <span v-else class="mini-craft-alt-name">{{ (craftById(cid) || {}).name || cid }}</span>
+                    <span class="mini-craft-alt-cost">{{ craftCostById(cid) }}</span>
+                  </div>
                 </div>
                 <!-- 加成/牵绊文本移到格子外面单独一行；冠位从者有两个礼装格，只在**最后一个格子**下面显示一次
                      （格子是正方形且 overflow:hidden，塞在格内会被裁掉） -->
@@ -6082,6 +6238,24 @@ const App = {
                     <div v-for="cm in resultCraftItems(m)" :key="cm.index" class="detail-craft-detail">
                       <span class="detail-craft-name">{{ cm.craftName || '无礼装' }}</span>
                       <span v-if="cm.index === 1" class="detail-tag">第二礼装</span>
+                      <span
+                        v-if="craftAltFor(r, m.position, cm.index).length"
+                        class="craft-alt-tag"
+                        :class="{ active: craftAltOpenHere(r, m.position, cm.index) }"
+                        :title="'同分礼装：换成它本行分数不变（' + craftAltFor(r, m.position, cm.index).length + ' 张）'"
+                        @click.stop="toggleCraftAlt(r, m.position, cm.index)"
+                      >同分 {{ craftAltFor(r, m.position, cm.index).length }}</span>
+                      <div v-if="craftAltOpenHere(r, m.position, cm.index)" class="craft-alt-list">
+                        <div
+                          v-for="cid in craftAltFor(r, m.position, cm.index)"
+                          :key="cid"
+                          class="craft-alt-item"
+                          @click.stop="chooseCraftAlt(r, m.position, cm.index, cid)"
+                        >
+                          <span>{{ (craftById(cid) || {}).name || cid }}</span>
+                          <span class="text-muted">cost {{ craftCostById(cid) }}</span>
+                        </div>
+                      </div>
                     </div>
                     <div v-if="resultSettings.showCostBreakdown && !m.isSupport" class="text-muted detail-extra-line">{{ resultCostBreakdown(m) }}</div>
                   </td>
@@ -6930,6 +7104,13 @@ const App = {
             <input type="checkbox" v-model="resultSettings.clearResultsOnModeSwitch" @change="persistResultSettings" />
             <span>切换模式时清空当前计算结果</span>
           </label>
+          <label class="settings-row" title="打开后，结果卡里每个礼装格下方会标「可换 N」：列出换成它这一行分数不变的其他 20% 特性礼装，点开就能替换（右上角 ⟲ 恢复）。只在最终结果上算一次，每次计算大约多花 1 秒。">
+            <input type="checkbox" v-model="resultSettings.craftAlternatives" @change="persistResultSettings" />
+            <span>列出可替换的同分礼装（每次计算约多 1 秒）</span>
+          </label>
+          <div class="text-muted" style="margin:-4px 0 4px">
+            只换礼装、不换人：同分判定是拿整队重算的，所以只在这个模式下才有意义。改完下次计算生效。
+          </div>
         </div>
         <div v-if="!isAndroidPlatform() && (settingsSection === 'all' || settingsSection === 'advanced')" class="settings-group-title">高级（仅桌面）</div>
         <div v-if="!isAndroidPlatform() && (settingsSection === 'all' || settingsSection === 'advanced')" class="settings-list">

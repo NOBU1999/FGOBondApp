@@ -64,6 +64,7 @@ import {
   traitCraftIds,
   traitShareWeight,
 } from "./teamBuild.ts";
+import { attachCraftAlternatives } from "./craftAlternatives.ts";
 import { prepareBlueprint } from "./blueprint.ts";
 import {
   autoSupportCraftOptions,
@@ -3146,6 +3147,15 @@ export async function searchTopTeams(
       return Number(b.totalMultiplier ?? 0) - Number(a.totalMultiplier ?? 0);
     });
     for (let i = 0; i < mergedItems.length; i++) mergedItems[i].rank = i + 1;
+  }
+
+  // 同分礼装：给每行的每个礼装格算出"换成它总分不变"的 20% 特性礼装（见 craftAlternatives.ts）。
+  // 只在最终输出行上做一次，不进搜索主流程；界面开关关着就整段跳过（省约 1 秒）。
+  const craftAltStats = req.craft_alternatives
+    ? attachCraftAlternatives(ctx, req, mergedItems)
+    : { rows: 0, slots: 0, evals: 0 };
+  if (craftAltStats.slots > 0) {
+    report(`同分礼装：${craftAltStats.rows} 行、${craftAltStats.slots} 个格子有可换礼装（${craftAltStats.evals} 次校验）`);
   }
 
   return {

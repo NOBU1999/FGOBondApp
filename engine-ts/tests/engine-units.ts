@@ -1070,6 +1070,87 @@ check(
   require_(ubDelta >= expectDelta - 1e-9, "上界必须 ≥ 实际增量（否则会误剪带玛修的队）");
 });
 
+check(
+  "craft_alternatives_same_score",
+  "同分礼装：结果里列出的每个可换礼装，换完总倍率必须不变；且玩家格之间不重复同一张、Cost 不超上限",
+  { needsCtx: true },
+)(async () => {
+  const ctx = await loadCtx();
+  const allIds = [...ctx.servants.values()].map((s) => s.id).sort((a, b) => a - b);
+  const rng = makeRng(20261124);
+  const boxIds = rng.sample(allIds, 14);
+  const reqData = {
+    box: boxIds.map((sid) => ({ id: sid, stage: "fourth", maxBond: false })),
+    costLimit: 116,
+    topN: 6,
+    timeoutMs: 2500,
+    craftPoolSize: 60,
+    sortMode: "multiplier",
+    strategy: "total_max",
+    baseBond: 0,
+    // v0.3.8：同分礼装替换默认关（界面开关），这条断言要显式打开
+    craftAlternatives: true,
+  };
+  const res = await searchTopTeams(ctx, parseRequest(reqData), null, null);
+  const rows = (res.top20 ?? []).filter((r: any) => Array.isArray(r.craftAlternatives) && r.craftAlternatives.length > 0);
+  if (rows.length === 0) throw new Skip("这次搜索没有产生可换礼装（预算太小或没有等价礼装）");
+
+  const box = new Map(boxIds.map((sid) => [sid, { stage: "fourth" }]));
+  const build = (row: any, swap: { position: string; slot: number; craftId: number } | null) => {
+    const players: PlacedMember[] = [];
+    let sup: any = null;
+    for (const m of row.team ?? []) {
+      if (m.isSupport) {
+        sup = m;
+        continue;
+      }
+      const useFirst = swap !== null && swap.position === m.position && swap.slot === 0;
+      const useSecond = swap !== null && swap.position === m.position && swap.slot === 1;
+      players.push(
+        new PlacedMember({
+          position: m.position,
+          servant_id: Number(m.servantId),
+          stage: m.stage ?? "fourth",
+          personal_bonus: m.personalBonus ?? 0,
+          aura_bonus: m.auraBonus ?? 0,
+          max_bond: m.isMaxBond ?? false,
+          bond_switch1: m.bondSwitch1 ?? false,
+          bond_switch2: m.bondSwitch2 ?? false,
+          craft_id: useFirst ? swap.craftId : (m.craftId ?? null),
+          second_craft_id: useSecond ? swap.craftId : (m.secondCraftId ?? null),
+          is_crown: Boolean(m.isCrown),
+        }),
+      );
+    }
+    return new TeamConfig({
+      players,
+      support_position: sup ? sup.position : null,
+      support_servant_id: sup ? Number(sup.servantId) : null,
+      support_craft_id: sup ? (sup.craftId ?? null) : null,
+      support_second_craft_id: sup ? (sup.secondCraftId ?? null) : null,
+      crown_positions: new Set(players.filter((p) => p.is_crown).map((p) => p.position)),
+      base_bond: 0,
+    });
+  };
+
+  let checked = 0;
+  for (const row of rows) {
+    const baseMult = Number(evaluateTeam(ctx, build(row, null)).totalMultiplier);
+    for (const alt of row.craftAlternatives) {
+      for (const cid of alt.craftIds) {
+        const ev = evaluateTeam(ctx, build(row, { position: alt.position, slot: alt.slot, craftId: cid }));
+        require_(
+          Math.abs(Number(ev.totalMultiplier) - baseMult) < 1e-9,
+          `#${row.rank} ${alt.position}#${alt.slot} 换成 ${cid} 后倍率变了：${baseMult} → ${ev.totalMultiplier}`,
+        );
+        require_(Number(ev.costUsed) <= 116, `#${row.rank} 换成 ${cid} 后 Cost 超上限：${ev.costUsed}`);
+        checked += 1;
+      }
+    }
+  }
+  require_(checked > 0, "可换礼装列表全为空");
+});
+
 // ---------------- 确定性 RNG（**不是** Python 的 MT19937：形状序列与 Python 不同，
 // 判据是性质本身 —— 0 反例 + 可比组数下限） ----------------
 function makeRng(seed: number) {

@@ -170,6 +170,11 @@ export class CalculationRequest {
   crown_auto_servants = false;
   base_bond = 0;
   sort_mode = SORT_MULTIPLIER;
+  /**
+   * 同分礼装替换（v0.3.8，设置里默认关）：只在最终输出行上算一次，
+   * 每个礼装格给出"换成它总分不变"的其他 20% 特性礼装。约 +1 秒。
+   */
+  craft_alternatives = false;
   candidate_pool_size = 30;
   craft_pool_size = 50;
   top_n = 20;
@@ -314,6 +319,8 @@ export function parseRequest(data: AnyRec): CalculationRequest {
   req.timeout_ms = asInt(data["timeoutMs"] ?? 10000, 10000) || 10000;
   req.candidate_pool_size = asInt(data["candidatePoolSize"] ?? 30, 30) || 30;
   req.craft_pool_size = asInt(data["craftPoolSize"] ?? 10, 10) || 10;
+  // 同分礼装替换（默认关；界面「计算设置」里的开关）
+  req.craft_alternatives = asBool(data["craftAlternatives"], false);
 
   let neighborhood = String(data["neighborhood"] ?? "standard").trim().toLowerCase() || "standard";
   if (!["off", "standard", "deep"].includes(neighborhood)) neighborhood = "standard";

@@ -1691,8 +1691,7 @@ label.team-config-check {
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
-}
-.same-score-item:hover { background: rgba(255, 255, 255, 0.06); }
+}.same-score-item:hover { background: rgba(255, 255, 255, 0.06); }
 .same-score-item.active { background: rgba(110, 168, 254, 0.14); }
 .same-score-badge {
   flex: 0 0 auto;
@@ -2068,4 +2067,87 @@ label.team-config-check {
   .manual-toc { scrollbar-width: none; }
   .manual-toc::-webkit-scrollbar { display: none; }
   .manual-content { padding-right: 0; }
+}
+
+/* 同分礼装（单格替换，2026-11-24）：详情里每格的「同分 N」小标 + 下拉 */
+.craft-alt-tag {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.craft-alt-tag:hover { color: var(--text); border-color: var(--text); }
+.craft-alt-tag.active { color: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe); }
+.craft-alt-list {
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.craft-alt-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.craft-alt-item:hover { background: rgba(255, 255, 255, 0.07); }
+.craft-alt-reset { padding: 2px 8px; }
+
+/* 同分礼装（2026-11-24）：礼装格内下方标注「可换 N」，点格子弹下拉选替换 */
+.mini-craft-wrap { position: relative; }
+.mini-craft.has-alt { cursor: pointer; }
+.mini-craft.has-alt:hover { outline: 1px solid rgba(110, 168, 254, 0.7); }
+.mini-craft-alt-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+  color: #cfe0ff;
+  background: rgba(24, 42, 74, 0.88);
+  border-top: 1px solid rgba(110, 168, 254, 0.5);
+  pointer-events: none;
+}
+.mini-craft-alt-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 150px;
+  max-width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel, #1b2333);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.mini-craft-alt-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.mini-craft-alt-item:hover { background: rgba(255, 255, 255, 0.08); }
+.mini-craft-alt-img { width: 72px; height: 33px; object-fit: cover; border-radius: 3px; }
+.mini-craft-alt-name { font-size: 12px; line-height: 1.25; }
+.mini-craft-alt-cost {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
 }

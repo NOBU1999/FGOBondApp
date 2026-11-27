@@ -129,7 +129,17 @@ JSON 键名为 **camelCase**（`models.parse_request` 负责转换），字段�
 | `verificationToken` | 复现模式验证串（`FGOBONDV3.` 开头，PPMd + Base64URL） |
 | `verificationTokenFull` | 完整模式验证串（含全部游戏数据，体积约为复现模式的 1.5 倍） |
 
-`TeamSolution`：`{rank, totalMultiplier, costUsed, baseBond, totalBondPoints, team[], maxBondStats, traitCoverage, sameScoreTeams[], sameScoreTotal}`
+`TeamSolution`：`{rank, totalMultiplier, costUsed, baseBond, totalBondPoints, team[], maxBondStats, traitCoverage, sameScoreTeams[], sameScoreTotal, craftAlternatives[]}`
+
+> **同分礼装**（`craftAlternatives`，可选字段，2026-11-24 新增）：
+> 给每个礼装格列出"换成它之后本行分数不变"的**20% 特性礼装**（只这一档：0.1 通用/可重复礼装没有替代意义）。
+>
+> - 每项 `{position, slot, craftIds[]}`：`slot=0` 主礼装位、`slot=1` 第二礼装位（冠位）；`craftIds` 最多 6 张；
+> - 判定是**整队重算**：换完这一格后，总倍率（点数档为取整后的总点数）必须与本行相同——礼装对全队生效，
+>   所以不能按"持有者能不能吃"或"命中人数相同"来判（同一个 +20% 落在前排和后排收益不同）；
+> - 候选用"队伍特性并集"缩：队里没有任何真正计分的玩家满足条件的礼装不列；满绊且开关②未开的成员不计入；
+> - 校验：换完整队 Cost 不得超上限；玩家格之间不重复同一张，**助战格可重复**（助战礼装规则）；
+> - 兼容：老引擎没有这个字段 ⇒ 界面不显示"可换礼装"入口。
 
 > **同分可替换阵容**（`sameScoreTeams` / `sameScoreTotal`，可选字段，2026-10-10 新增）：
 > 为了算得快，引擎会把"等价阵容"合并后只评估代表（支配剪枝）。这两个字段把**被合并掉、且分数完全相同**的那些阵容补给界面，
