@@ -50,6 +50,8 @@
     // 个人数据导出 / 导入（跨端迁移）
     "exportPersonalData",
     "importPersonalData",
+    "getTeamMemory",
+    "saveTeamMemory",
     "getEventBondBonuses",
     "listAccounts",
     "createAccount",
@@ -643,6 +645,8 @@
     "deleteUserTeam",
     "saveUserTeamResult",
     "deleteUserTeamResult",
+    // 编队记忆（写库 + 落盘）
+    "saveTeamMemory",
     // 导入个人数据 = 整份替换，必须立刻落盘（不防抖）
     "importPersonalData",
   ]);

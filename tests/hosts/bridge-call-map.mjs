@@ -61,6 +61,9 @@ export const BRIDGE_CALL_ROUTES = {
   "teams.getUserTeamResult": (b, a) => b.getUserTeamResult(a[0]),
   "teams.saveUserTeamResult": (b, a) => b.saveUserTeamResult(a[0]),
   "teams.deleteUserTeamResult": (b, a) => b.deleteUserTeamResult(a[0]),
+  // 编队记忆（按账号 × 模式）
+  "teams.getTeamMemory": (b, a) => b.getTeamMemory(a[0], a[1]),
+  "teams.saveTeamMemory": (b, a) => b.saveTeamMemory(a[0]),
 
   // ---------------- 个人数据导出 / 导入（跨端迁移） ----------------
   "backup.exportPersonalData": (b) => b.exportPersonalData(),

@@ -74,6 +74,8 @@ export const USER_TABLES = [
   "user_teams",
   "saved_results",
   "custom_crafts",
+  // 编队记忆（按账号 × 模式）：换机器/换手机时一起带走
+  "user_team_memory",
 ];
 
 /** 个人设置：保存在个人库的 app_meta 里 */
@@ -163,6 +165,14 @@ export const PERSONAL_DDL = `
     request_json TEXT,
     result_json TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  -- 编队记忆（v0.3.8）：按「账号 × 模式」记住当前编成，切模式/切账号/重启后自动恢复
+  CREATE TABLE IF NOT EXISTS user_team_memory (
+    account_id INTEGER NOT NULL DEFAULT 1,
+    mode TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (account_id, mode)
   );
 `;
 

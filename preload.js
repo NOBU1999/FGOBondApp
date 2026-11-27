@@ -45,6 +45,8 @@ const DATA_METHODS = [
   "deleteUserTeamResult",
   "exportPersonalData",
   "importPersonalData",
+  "getTeamMemory",
+  "saveTeamMemory",
   "getEventBondBonuses",
   "listAccounts",
   "createAccount",

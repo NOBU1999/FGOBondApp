@@ -449,6 +449,9 @@ const App = {
         // 打开后所有从者都按"还能继续涨"算（= 引擎的「自身参与收益」一律为真）；
         // 「15 级以上的全队 +25%」按等级照常给，**不受这个开关影响**。
         ignoreMaxBond: false,
+        // 编队记忆（v0.3.8）：按「账号 × 模式」记住当前编成，切模式 / 切账号 / 重启后自动恢复。
+        // 存在数据库里（user_team_memory），不是 localStorage —— 换机器时能跟着个人数据一起导出。
+        rememberTeamByMode: true,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -866,6 +869,12 @@ const App = {
         if (data && data.channel === "menu:update-data") this.runUpdate();
         if (data && data.channel === "menu:reset-database") this.runDatabaseReset();
       });
+      // 编队记忆：启动时恢复「当前账号 × 当前模式」上次的编成（v0.3.8）
+      try {
+        await this.restoreTeamMemory();
+      } catch (_) {
+        // 读不到记忆不影响使用
+      }
     } catch (e) {
       this.error = e.message || String(e);
     } finally {
@@ -1000,6 +1009,66 @@ const App = {
       } finally {
         this.personalImportBusy = false;
       }
+    },
+    // ---------------- 编队记忆（按账号 × 模式，v0.3.8） ----------------
+    teamMemoryEnabled() {
+      return this.resultSettings.rememberTeamByMode !== false;
+    },
+    /** 把「当前编成 + 队伍配置」做成一份可存库的快照 */
+    captureTeamConfig() {
+      return {
+        mode: this.mode,
+        slots: (this.slots || []).map((s) => Object.assign({}, s)),
+        costLimit: Number(this.costLimit),
+        strategy: this.strategy,
+        targetServantId: this.targetServantId || null,
+        qualityMode: this.qualityMode,
+        baseBond: Number(this.baseBond || 0),
+        sortMode: this.sortMode,
+        neighborhood: this.neighborhood,
+        crownClass: this.crownClass,
+        crownAutoServants: !!this.crownAutoServants,
+      };
+    },
+    /** 恢复一份快照；结构对不上（老版本存的）就只恢复能认的字段 */
+    applyTeamConfig(cfg) {
+      if (!cfg || typeof cfg !== "object") return false;
+      if (Array.isArray(cfg.slots) && cfg.slots.length === (this.slots || []).length) {
+        this.slots = cfg.slots.map((s) => Object.assign({}, s));
+      }
+      const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+      this.costLimit = num(cfg.costLimit, this.costLimit);
+      if (cfg.strategy) this.strategy = String(cfg.strategy);
+      this.targetServantId = cfg.targetServantId || null;
+      if (cfg.qualityMode) this.qualityMode = String(cfg.qualityMode);
+      this.baseBond = num(cfg.baseBond, this.baseBond);
+      if (cfg.sortMode) this.sortMode = String(cfg.sortMode);
+      if (cfg.neighborhood) this.neighborhood = String(cfg.neighborhood);
+      if (cfg.crownClass) this.crownClass = String(cfg.crownClass);
+      if (cfg.crownAutoServants !== undefined) this.crownAutoServants = !!cfg.crownAutoServants;
+      return true;
+    },
+    async saveTeamMemoryForCurrentMode() {
+      if (!this.teamMemoryEnabled() || !this.activeAccountId) return;
+      try {
+        await window.fgo.saveTeamMemory({
+          accountId: this.activeAccountId,
+          mode: this.mode,
+          config: plainClone(this.captureTeamConfig()),
+        });
+      } catch (_) {
+        // 记不住不影响使用，静默
+      }
+    },
+    async restoreTeamMemory(mode) {
+      if (!this.teamMemoryEnabled() || !this.activeAccountId) return false;
+      try {
+        const m = await window.fgo.getTeamMemory(this.activeAccountId, mode || this.mode);
+        if (m && m.config) return this.applyTeamConfig(m.config);
+      } catch (_) {
+        // 读不到就当没有记忆
+      }
+      return false;
     },
     openManual() {
       // 应用内阅读（替代原来的"用记事本打开 使用说明.txt"）
@@ -2819,6 +2888,8 @@ const App = {
     /** 真正执行切换（无并发锁，供内部复用） */
     async activateAccount(id) {
       this.accountError = "";
+      // 切账号前先记住旧账号当前的编队（v0.3.8 编队记忆：按账号 × 模式各存一份）
+      await this.saveTeamMemoryForCurrentMode();
       const res = await window.fgo.setActiveAccount(id);
       this.applyAccountResult(res);
       await this.loadActiveAccountData();
@@ -2829,6 +2900,8 @@ const App = {
       this.expandedResult = null;
       this.lastSearchStats = null;
       this.currentPage = 1;
+      // 新账号在同一模式下记住过的编队
+      await this.restoreTeamMemory();
     },
     async switchAccount(id) {
       const target = Number(id);
@@ -3441,8 +3514,10 @@ const App = {
       slot.isCrown = !slot.isCrown;
       if (!slot.isCrown) slot.secondCraftId = null;
     },
-    switchMode(mode) {
+    async switchMode(mode) {
       if (this.mode === mode) return;
+      // 先把当前模式的编队记下来（v0.3.8 编队记忆），再切到目标模式
+      await this.saveTeamMemoryForCurrentMode();
       this.mode = mode;
       this.results = [];
       this.currentPage = 1;
@@ -3452,6 +3527,8 @@ const App = {
       if (mode === "crown") this.crownClass = this.crownClass || "all";
       // 冠位类模式：名单里的从者按位置补默认冠位（右键已取消的会被重新勾上，属预期——切模式即重置一次）
       if (this.crownModeOn) this.applyRosterCrowns();
+      // 恢复目标模式上次记住的编队（没存过就保持现状）
+      await this.restoreTeamMemory(mode);
     },
     /** 柱子战：把编成里晚于「所罗门」的从者清掉（含助战位，位置结构不变） */
     dropOutOfPillarSlots() {
@@ -4737,6 +4814,8 @@ const App = {
         return;
       }
       this.calculating = true;
+      // 点计算时顺手把当前编队记下来：不切模式/账号，下次启动也能恢复（v0.3.8 编队记忆）
+      this.saveTeamMemoryForCurrentMode();
       try {
         const payload = this.buildPayload();
         const result = await window.fgo.calculate(plainClone(payload));
@@ -6790,6 +6869,14 @@ const App = {
             <input type="checkbox" v-model="resultSettings.ignoreMaxBond" @change="persistResultSettings" />
             <span>把 Box 里全部从者视为「非满绊」</span>
           </label>
+          <label class="settings-row" title="按「账号 × 模式」各存一份编队：切模式、切账号、重启程序后自动恢复上次的编成与队伍配置。关掉则每次都从当前界面继续，不记忆。">
+            <input type="checkbox" v-model="resultSettings.rememberTeamByMode" @change="persistResultSettings" />
+            <span>记住每个账号 / 每个模式上次的编队</span>
+          </label>
+          <div class="text-muted" style="margin:-4px 0 4px">
+            「普通 / 戴冠战 / 终章柱子战」各记各的，不同账号也各记各的；编队存在你自己的数据文件里，
+            换机器导出个人数据时会一起带走。
+          </div>
         </div>
         <div v-if="settingsSection === 'all'" class="settings-group-title">结果显示设置（只影响显示）</div>
         <div v-if="settingsSection === 'all' || settingsSection === 'display'" class="settings-list">

@@ -7,6 +7,39 @@
 
 export function createTeamsDomain({ sql }) {
   /**
+   * 编队记忆（v0.3.8）：按「账号 × 模式」记住界面当前的编成 / 队伍配置。
+   * 存数据库（不用 localStorage）：换机器能跟着个人数据一起导出，安卓也不受 WebView 存储清理影响。
+   */
+  function getTeamMemory(accountId, mode) {
+    const row = sql.get(
+      "SELECT config_json AS json, updated_at AS updatedAt FROM user_team_memory WHERE account_id = ? AND mode = ?",
+      [Number(accountId) || 1, String(mode || "normal")]
+    );
+    if (!row) return null;
+    try {
+      return { config: JSON.parse(row.json), updatedAt: row.updatedAt };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveTeamMemory(payload = {}) {
+    const accountId = Number(payload.accountId) || 1;
+    const mode = String(payload.mode || "normal");
+    if (!payload.config || typeof payload.config !== "object") {
+      throw new Error("没有可保存的编队");
+    }
+    const json = JSON.stringify(payload.config);
+    sql.run(
+      `INSERT INTO user_team_memory (account_id, mode, config_json, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(account_id, mode) DO UPDATE SET config_json = excluded.config_json, updated_at = CURRENT_TIMESTAMP`,
+      [accountId, mode, json]
+    );
+    return { accountId, mode, saved: true };
+  }
+
+  /**
    * 把一次计算结果挂到某个预设上（同一个预设只保留**最新一份**结果）。
    * 返回 { resultId, savedAt }。
    */
@@ -193,5 +226,15 @@ export function createTeamsDomain({ sql }) {
     return { ok: info.changes > 0, changes: info.changes };
   }
 
-  return { saveUserTeam, listUserTeams, renameUserTeam, deleteUserTeam, getUserTeamResult, saveUserTeamResult, deleteUserTeamResult };
+  return {
+    saveUserTeam,
+    listUserTeams,
+    renameUserTeam,
+    deleteUserTeam,
+    getUserTeamResult,
+    saveUserTeamResult,
+    deleteUserTeamResult,
+    getTeamMemory,
+    saveTeamMemory,
+  };
 }

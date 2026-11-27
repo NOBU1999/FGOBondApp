@@ -103,6 +103,9 @@ export function createDataBridge({ domain, platform = {} }) {
     getUserTeamResult: (teamId) => teams.getUserTeamResult(teamId),
     saveUserTeamResult: (payload) => teams.saveUserTeamResult(payload || {}),
     deleteUserTeamResult: (teamId) => teams.deleteUserTeamResult(teamId),
+    // 编队记忆（v0.3.8）：按「账号 × 模式」自动记住当前编成，切模式 / 切账号 / 重启后恢复
+    getTeamMemory: (accountId, mode) => teams.getTeamMemory(accountId, mode),
+    saveTeamMemory: (payload) => teams.saveTeamMemory(payload || {}),
 
     // ---------------- 个人数据导出 / 导入（跨端迁移，v0.3.8） ----------------
     // 导出只读：返回 JSON 文本 + 各表行数 + 建议文件名，界面自己用 saveTextFile 落盘
@@ -135,6 +138,8 @@ export const WRITE_METHODS = new Set([
   "deleteUserTeamResult",
   // 整份替换个人数据（导入后必须落盘）
   "importPersonalData",
+  // 编队记忆
+  "saveTeamMemory",
 ]);
 
 /**

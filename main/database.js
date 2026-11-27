@@ -418,6 +418,15 @@ function deleteUserTeamResult(db, teamId) {
   return getDomain(db).teams.deleteUserTeamResult(teamId);
 }
 
+// 编队记忆（按账号 × 模式）
+function getTeamMemory(db, accountId, mode) {
+  return getDomain(db).teams.getTeamMemory(accountId, mode);
+}
+
+function saveTeamMemory(db, payload) {
+  return getDomain(db).teams.saveTeamMemory(payload);
+}
+
 function getEventBondBonuses(dbPath) {
   const dir = path.dirname(dbPath || getDbPath());
   const file = path.join(dir, "event_bond_bonus.json");
@@ -481,4 +490,6 @@ module.exports = {
   getEventBondBonuses,
   exportPersonalData,
   importPersonalData,
+  getTeamMemory,
+  saveTeamMemory,
 };
