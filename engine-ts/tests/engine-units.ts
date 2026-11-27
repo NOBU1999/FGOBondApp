@@ -1167,6 +1167,29 @@ async function main(): Promise<number> {
   return 0;
 }
 
+// ---------------- 加载失败重试 + 分阶段日志（v0.3.8 第 5 项） ----------------
+check(
+  "load_context_retries_once",
+  "静态数据加载失败会重试一次，并把每次尝试/每个阶段写进日志（玩家报过 WASM 越界，本机复现不出来）",
+)(async () => {
+  const lines: string[] = [];
+  let threw = "";
+  try {
+    await loadContext(
+      path.join(APP_ROOT, "db", "__definitely_missing__.db"),
+      "jp",
+      false,
+      (m: string) => lines.push(m),
+    );
+  } catch (err) {
+    threw = String((err as any)?.message ?? err);
+  }
+  require_(threw.length > 0, "缺库时应抛错");
+  const attempts = lines.filter((l) => l.includes("加载阶段：读取静态数据")).length;
+  require_(attempts === 2, `应尝试 2 次，实际 ${attempts} 次：${JSON.stringify(lines)}`);
+  require_(lines.some((l) => l.includes("加载失败（第 1 次）")), "应有第 1 次失败日志");
+});
+
 // ---------------- 终章柱子战：特性读冻结表（2026-11-24） ----------------
 check(
   "pillar_traits_frozen",

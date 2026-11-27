@@ -6,6 +6,7 @@ const path = require("path");
 const database = require("./database");
 const appUpdate = require("./app-update-check");
 const { createEngine } = require("./engine-factory");
+const engineConfig = require("./engine-config");
 const { getAppRoot, getDbPath, getGameDbPath } = require("./paths");
 const { resetStaticData } = require("./db-reset");
 const { diagLog, tailOf, readDiagLog, clearDiagLog } = require("./diag-log");
@@ -172,6 +173,12 @@ function registerIpcHandlers() {
   // ---------------- 平台能力：诊断日志（界面「诊断日志」面板） ----------------
   ipcMain.handle("log:read", () => readDiagLog());
   ipcMain.handle("log:clear", () => clearDiagLog());
+
+  // ---------------- 引擎外壳（高级设置，需重启生效） ----------------
+  ipcMain.handle("engine:isolation-get", () => engineConfig.getEngineIsolation());
+  ipcMain.handle("engine:isolation-set", (_event, enabled) =>
+    engineConfig.setEngineIsolated(Boolean(enabled))
+  );
 
   // ---------------- 检查软件更新（只查版本号，不下载、不安装） ----------------
   ipcMain.handle("app:check-update", async () => {

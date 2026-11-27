@@ -47,7 +47,7 @@ async function runCalculate(payload: Record<string, any>): Promise<Record<string
         }
       : null;
   progress("正在加载本地数据...");
-  const baseCtx = await loadContext(job.dbPath, req.server_region, req.mode === "pillar");
+  const baseCtx = await loadContext(job.dbPath, req.server_region, req.mode === "pillar", progress);
   // 玛修那类"可调 Cost"的请求级覆盖（0/16）——必须作用在整趟搜索与验证串上
   const ctx = withServantCostOverrides(baseCtx, costOverridesOf(req.box));
 

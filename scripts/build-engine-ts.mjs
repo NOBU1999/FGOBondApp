@@ -67,6 +67,14 @@ if (web) {
     target: "node22",
     format: "esm",
   });
+  // 独立子进程外壳（v0.3.8 第 2 项：引擎移出主进程，高级设置里可切换）
+  await build({
+    entry: "engine-ts/entry/child.ts",
+    outfile: path.join(outDir, "child.mjs"),
+    platform: "node",
+    target: "node22",
+    format: "esm",
+  });
   // sql.js 的 JS + wasm 跟 bundle 放一起（platformNode 第一顺位就是这里）
   for (const name of ["sql-wasm.js", "sql-wasm.wasm"]) {
     const src = requireHere.resolve(`sql.js/dist/${name}`);

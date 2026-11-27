@@ -606,6 +606,13 @@
   };
   api.onMenuAction = () => () => {}; // 安卓没有系统菜单
 
+  // 引擎外壳设置：手机端本来就把计算放在独立 Web Worker 里，没有可切换的选项
+  api.getEngineIsolation = async () => ({ ok: true, isolated: false, supported: false, restartRequired: false });
+  api.setEngineIsolation = async () => ({
+    ok: false,
+    error: "手机端的计算本来就跑在独立的 Worker 里，不需要这个选项",
+  });
+
   window.fgo = api;
 
   // ---- 异步初始化 ----

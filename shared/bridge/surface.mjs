@@ -25,6 +25,10 @@ export const PLATFORM_METHODS = Object.freeze([
   "clearDiagnosticLog",
   "checkAppUpdate",
   "openExternal",
+  // 引擎外壳（v0.3.8 第 2 项）：桌面端可在「设置 → 高级」切换到独立子进程（需重启）；
+  // 安卓端的引擎本来就在独立 Worker 里，返回 supported=false 即可。
+  "getEngineIsolation",
+  "setEngineIsolation",
   // 把界面生成的文本存成文件（导出 JSON / 反馈摘要）。
   // ⚠️ 安卓 WebView 不处理 <a download>，所以不能靠浏览器下载，必须走平台能力。
   "saveTextFile",

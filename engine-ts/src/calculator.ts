@@ -432,14 +432,54 @@ const SYNTHETIC_OTHER: Synthetic[] = [
  * 服务器可用性（`serverRegion`）仍按请求来 —— 柱子战由界面传 `jp`，
  * 这样国服「未实装」名单里的所罗门不会被剔掉。
  */
-export async function loadContext(dbPath: string, region = "jp", pillarMode = false): Promise<DataContext> {
+export async function loadContext(
+  dbPath: string,
+  region = "jp",
+  pillarMode = false,
+  log?: (message: string) => void,
+): Promise<DataContext> {
+  const note = (message: string): void => {
+    try {
+      log?.(message);
+    } catch {
+      /* 日志失败绝不影响计算 */
+    }
+  };
+  let lastError: unknown = null;
+  // 加载失败重试一次（玩家报过 sqlite WASM「memory access out of bounds」，本机复现不出来）：
+  // 一次失败多半是瞬时问题，重试一次就能把这次计算救回来；每次尝试都留一行日志。
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    note(`加载阶段：读取静态数据${attempt > 1 ? "（重试）" : ""}…`);
+    try {
+      return await loadContextOnce(dbPath, region, pillarMode, note);
+    } catch (err) {
+      lastError = err;
+      const message = String((err as any)?.message ?? err);
+      note(`加载失败（第 ${attempt} 次）：${message}`);
+      if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+  throw lastError;
+}
+
+/** 真正读库的那一趟（loadContext 负责重试与日志） */
+async function loadContextOnce(
+  dbPath: string,
+  region = "jp",
+  pillarMode = false,
+  note: (message: string) => void = () => {},
+): Promise<DataContext> {
   const db = await openDatabase(dbPath);
   try {
+    note("加载阶段：读取从者…");
     const servants = loadAllServants(db);
+    note("加载阶段：读取特性表…");
     const traits = loadAllTraits(db, region, pillarMode);
     for (const [sid, info] of servants) info.traits = traits.get(sid) ?? {};
+    note("加载阶段：读取礼装…");
     const crafts = loadAllCrafts(db);
     const unavailable = loadUnavailableServantIds(db, region);
+    note(`加载完成：从者 ${servants.size} 人 / 礼装 ${crafts.size} 张`);
 
     for (const [cid, cost, name] of SYNTHETIC_OTHER) {
       crafts.set(

@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld("fgo", {
   getDiagnosticLog: () => ipcRenderer.invoke("log:read"),
   clearDiagnosticLog: () => ipcRenderer.invoke("log:clear"),
   checkAppUpdate: () => ipcRenderer.invoke("app:check-update"),
+  // 引擎外壳（高级设置，需重启）
+  getEngineIsolation: () => ipcRenderer.invoke("engine:isolation-get"),
+  setEngineIsolation: (enabled) => ipcRenderer.invoke("engine:isolation-set", Boolean(enabled)),
   openExternal: (url) => ipcRenderer.invoke("app:open-external", toPlain(url)),
   /** 导出文本文件（保存对话框）→ { ok, path } / { ok:false, canceled } */
   saveTextFile: (payload) => ipcRenderer.invoke("file:save-text", toPlain(payload)),

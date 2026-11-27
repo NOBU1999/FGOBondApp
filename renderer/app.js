@@ -418,6 +418,11 @@ const App = {
       settingsSection: "all",
     // 个人数据导入中（按钮置灰，避免连点）
     personalImportBusy: false,
+    // 引擎外壳（高级设置，仅桌面）：需重启生效
+    engineIsolation: false,
+    engineIsolationActive: false,
+    engineIsolationBusy: false,
+    engineIsolationNote: "",
       // 邻域优化档位（v0.1.14 新增）：算完后把靠前队伍互相"换人"再算，捞"混血"更优解。
       // off / standard / deep；跟随队伍预设一起保存与加载。
       neighborhood: "standard",
@@ -452,6 +457,8 @@ const App = {
         // 编队记忆（v0.3.8）：按「账号 × 模式」记住当前编成，切模式 / 切账号 / 重启后自动恢复。
         // 存在数据库里（user_team_memory），不是 localStorage —— 换机器时能跟着个人数据一起导出。
         rememberTeamByMode: true,
+        // 切模式时清空当前结果（v0.3.8，默认开 = 老行为；关掉则保留，方便两种模式对照着看）
+        clearResultsOnModeSwitch: true,
       },
       compareSelectedRanks: [],
       compareVisible: false,
@@ -875,6 +882,19 @@ const App = {
       } catch (_) {
         // 读不到记忆不影响使用
       }
+      // 引擎外壳状态（仅桌面有）
+      if (!this.isAndroidPlatform() && typeof window.fgo.getEngineIsolation === "function") {
+        try {
+          const iso = await window.fgo.getEngineIsolation();
+          if (iso && iso.ok) {
+            this.engineIsolation = !!iso.saved;
+            this.engineIsolationActive = !!iso.isolated;
+            if (iso.restartRequired) this.engineIsolationNote = "已保存，重启程序后生效";
+          }
+        } catch (_) {
+          // 老宿主没有这个方法，按默认（主进程内）处理
+        }
+      }
     } catch (e) {
       this.error = e.message || String(e);
     } finally {
@@ -1069,6 +1089,31 @@ const App = {
         // 读不到就当没有记忆
       }
       return false;
+    },
+    // ---------------- 引擎外壳（高级，仅桌面，需重启） ----------------
+    async toggleEngineIsolation() {
+      if (this.engineIsolationBusy) return;
+      this.engineIsolationBusy = true;
+      this.engineIsolationNote = "";
+      const wanted = !!this.engineIsolation;
+      try {
+        const r = await window.fgo.setEngineIsolation(wanted);
+        if (r && r.ok) {
+          this.engineIsolation = !!r.saved;
+          this.engineIsolationActive = !!r.isolated;
+          this.engineIsolationNote = r.restartRequired
+            ? "已保存，重启程序后生效"
+            : "已保存（当前就在用这套）";
+        } else {
+          this.engineIsolation = !wanted;
+          this.engineIsolationNote = (r && r.error) || "设置失败";
+        }
+      } catch (err) {
+        this.engineIsolation = !wanted;
+        this.engineIsolationNote = "设置失败：" + ((err && err.message) || String(err));
+      } finally {
+        this.engineIsolationBusy = false;
+      }
     },
     openManual() {
       // 应用内阅读（替代原来的"用记事本打开 使用说明.txt"）
@@ -3519,8 +3564,11 @@ const App = {
       // 先把当前模式的编队记下来（v0.3.8 编队记忆），再切到目标模式
       await this.saveTeamMemoryForCurrentMode();
       this.mode = mode;
-      this.results = [];
-      this.currentPage = 1;
+      // 切模式清空结果（设置里可关；默认开 = 老行为）
+      if (this.resultSettings.clearResultsOnModeSwitch !== false) {
+        this.results = [];
+        this.currentPage = 1;
+      }
       // 柱子战资源固定到「所罗门」为止：编成里已经放着的更晚从者要清掉，
       // 否则它们会以固定位的形式被送进计算（换模式本来就重置结果，这里顺带收拾）。
       if (mode === "pillar") this.dropOutOfPillarSlots();
@@ -5468,6 +5516,7 @@ const App = {
             <button @click="openSettings('calc')">计算设置</button>
             <button @click="openSettings('display')">结果显示设置</button>
             <button @click="openSettings('data')">数据备份与迁移</button>
+            <button @click="openSettings('advanced')">高级</button>
             <button v-if="diagLogAvailable()" @click="openSettings('diag')">诊断日志</button>
           </div>
         </div>
@@ -6848,7 +6897,7 @@ const App = {
     <div v-if="settingsVisible" class="modal-mask" @click.self="closeSettings">
       <div class="modal-panel small">
         <div class="overlay-head">
-          <h2>{{ settingsSection === 'calc' ? '计算设置' : (settingsSection === 'display' ? '结果显示设置' : (settingsSection === 'diag' ? '诊断日志' : (settingsSection === 'data' ? '数据备份与迁移' : '设置'))) }}</h2>
+          <h2>{{ settingsSection === 'calc' ? '计算设置' : (settingsSection === 'display' ? '结果显示设置' : (settingsSection === 'diag' ? '诊断日志' : (settingsSection === 'data' ? '数据备份与迁移' : (settingsSection === 'advanced' ? '高级' : '设置')))) }}</h2>
           <button class="secondary" @click="closeSettings">✕</button>
         </div>
         <div v-if="settingsSection === 'all'" class="settings-group-title">计算设置（影响怎么算）</div>
@@ -6877,6 +6926,24 @@ const App = {
             「普通 / 戴冠战 / 终章柱子战」各记各的，不同账号也各记各的；编队存在你自己的数据文件里，
             换机器导出个人数据时会一起带走。
           </div>
+          <label class="settings-row" title="关掉后切换模式时保留当前计算结果，方便两种模式对照着看；打开则按老规矩清空（结果本来就是按模式算的）。">
+            <input type="checkbox" v-model="resultSettings.clearResultsOnModeSwitch" @change="persistResultSettings" />
+            <span>切换模式时清空当前计算结果</span>
+          </label>
+        </div>
+        <div v-if="!isAndroidPlatform() && (settingsSection === 'all' || settingsSection === 'advanced')" class="settings-group-title">高级（仅桌面）</div>
+        <div v-if="!isAndroidPlatform() && (settingsSection === 'all' || settingsSection === 'advanced')" class="settings-list">
+          <label class="settings-row" title="打开后计算放到独立进程里跑：算得极端大时引擎自己崩掉也不会把界面带走，重试就行。代价是每次计算多几十毫秒启动时间。改完需要重启程序。">
+            <input type="checkbox" v-model="engineIsolation" :disabled="engineIsolationBusy" @change="toggleEngineIsolation" />
+            <span>计算引擎在独立进程中运行（改完需重启）</span>
+          </label>
+          <div class="text-muted" style="margin:-4px 0 4px">
+            默认关闭 = 与程序共用内存（老行为）。如果计算规模很大、曾经整个程序闪退过，建议打开这一项。
+          </div>
+          <div class="text-muted">
+            当前正在使用：{{ engineIsolationActive ? '独立进程' : '主进程内（默认）' }}
+          </div>
+          <div class="text-muted" v-if="engineIsolationNote">{{ engineIsolationNote }}</div>
         </div>
         <div v-if="settingsSection === 'all'" class="settings-group-title">结果显示设置（只影响显示）</div>
         <div v-if="settingsSection === 'all' || settingsSection === 'display'" class="settings-list">
